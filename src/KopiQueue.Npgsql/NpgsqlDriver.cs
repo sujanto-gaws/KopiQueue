@@ -23,6 +23,22 @@ public sealed class NpgsqlDriverOptions
     /// </summary>
     /// <remarks>1-32 lower-case letters, digits or underscores, not starting with a digit.</remarks>
     public string TablePrefix { get; init; } = NpgsqlMigrationDriver.DefaultTablePrefix;
+
+    /// <summary>
+    /// The connection string of the notifier's LISTEN connection, when it must bypass the data source: for example when
+    /// the data source goes through PgBouncer in transaction mode or a proxy, which drop LISTEN (spike 0.7 D7).
+    /// Default: <c>null</c>, which derives the connection from the data source, credentials included.
+    /// </summary>
+    /// <remarks>KopiQueue always turns pooling off on this connection and sets <see cref="NotifierKeepAlive"/>.</remarks>
+    public string? NotifierConnectionString { get; init; }
+
+    /// <summary>
+    /// Npgsql's TCP keep-alive on the notifier connection, which is how a silently dead connection is found: in about
+    /// twice this time (NFR-REL-04a, spike 0.7). Default: 5 s. Rounded up to whole seconds.
+    /// </summary>
+    public TimeSpan NotifierKeepAlive { get; init; } = DefaultNotifierKeepAlive;
+
+    internal static TimeSpan DefaultNotifierKeepAlive { get; } = TimeSpan.FromSeconds(5);
 }
 
 /// <summary>The PostgreSQL driver for KopiQueue, on Npgsql (FR-DB-01). The schema is River-compatible.</summary>
@@ -45,11 +61,13 @@ public sealed class NpgsqlDriver : IKopiDriver
     private readonly NpgsqlDataSource _dataSource;
     private readonly NpgsqlMigrationDriver _migrationDriver;
     private readonly NpgsqlStatements _statements;
+    private readonly NpgsqlListener _listener;
 
     /// <summary>Creates a driver for <paramref name="dataSource"/>.</summary>
     /// <param name="dataSource">The database. KopiQueue borrows pooled connections from it.</param>
     /// <param name="options">Schema and table prefix. <c>null</c> uses the defaults.</param>
     /// <exception cref="ArgumentException">The schema name or table prefix is not allowed.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><see cref="NpgsqlDriverOptions.NotifierKeepAlive"/> is shorter than 1 s or longer than a day.</exception>
     public NpgsqlDriver(NpgsqlDataSource dataSource, NpgsqlDriverOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(dataSource);
@@ -59,6 +77,12 @@ public sealed class NpgsqlDriver : IKopiDriver
         _statements = new NpgsqlStatements(options.Schema, _migrationDriver.SchemaQualifier, _migrationDriver.TablePrefix);
         Schema = options.Schema;
         TablePrefix = options.TablePrefix;
+        if (options.NotifierKeepAlive < TimeSpan.FromSeconds(1) || options.NotifierKeepAlive > TimeSpan.FromDays(1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), options.NotifierKeepAlive, "NotifierKeepAlive must be from 1 s to 1 day.");
+        }
+
+        _listener = new NpgsqlListener(dataSource, options.Schema, options.NotifierConnectionString, options.NotifierKeepAlive);
     }
 
     /// <summary>The schema, or <c>null</c> for the connection's <c>search_path</c>.</summary>
@@ -75,6 +99,8 @@ public sealed class NpgsqlDriver : IKopiDriver
         new(_migrationDriver, NpgsqlMigrationDriver.MainLineName, NpgsqlMigrationDriver.MainLine, loggerFactory);
 
     DriverCapabilities IKopiDriver.Capabilities => PostgresCapabilities;
+
+    IKopiListener? IKopiDriver.CreateListener() => _listener;
 
     IKopiExecutor IKopiDriver.GetExecutor() => new NpgsqlExecutor(_statements, _dataSource, transaction: null);
 

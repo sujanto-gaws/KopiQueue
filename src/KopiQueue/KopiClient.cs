@@ -1,6 +1,7 @@
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using KopiQueue.Drivers;
+using KopiQueue.Execution;
 using KopiQueue.Serialization;
 
 namespace KopiQueue;
@@ -182,18 +183,24 @@ public sealed class KopiClient : IKopiClient
         _timeProvider = options?.TimeProvider ?? TimeProvider.System;
     }
 
+    /// <summary>
+    /// Wakes this client's producers after its own pooled inserts, whose commit it knows about (design §3, FR-DB-04).
+    /// Inserts in a caller's transaction are not announced here: the client cannot see their commit.
+    /// </summary>
+    internal LocalWaker LocalWaker { get; } = new();
+
 #pragma warning disable RS0026 // See IKopiClient.
     /// <inheritdoc />
     public Task<InsertResult<TArgs>> InsertAsync<TArgs>(TArgs args, InsertOptions? options = null, CancellationToken cancellationToken = default)
         where TArgs : IJobArgs =>
-        InsertAsync(_driver.GetExecutor(), args, options, cancellationToken);
+        InsertAsync(_driver.GetExecutor(), pooled: true, args, options, cancellationToken);
 
     /// <inheritdoc />
     public Task<InsertResult<TArgs>> InsertAsync<TArgs>(TArgs args, DbTransaction transaction, InsertOptions? options = null, CancellationToken cancellationToken = default)
         where TArgs : IJobArgs
     {
         ArgumentNullException.ThrowIfNull(transaction);
-        return InsertAsync(_driver.GetExecutor(transaction), args, options, cancellationToken);
+        return InsertAsync(_driver.GetExecutor(transaction), pooled: false, args, options, cancellationToken);
     }
 #pragma warning restore RS0026
 
@@ -212,6 +219,7 @@ public sealed class KopiClient : IKopiClient
             throw new InvalidOperationException($"The driver returned {results.Count} rows for {inserts.Length} inserts.");
         }
 
+        WakeIfPooled(transaction, inserts);
         return [.. results.Select(r => new InsertResult(r.Job, r.UniqueSkippedAsDuplicate))];
     }
 
@@ -219,9 +227,22 @@ public sealed class KopiClient : IKopiClient
     public async Task<long> InsertManyFastAsync(IEnumerable<InsertRequest> jobs, DbTransaction? transaction = null, CancellationToken cancellationToken = default)
     {
         var inserts = Prepare(jobs);
-        return inserts.Length == 0
-            ? 0
-            : await Executor(transaction).JobInsertFastAsync(inserts, cancellationToken).ConfigureAwait(false);
+        if (inserts.Length == 0)
+        {
+            return 0;
+        }
+
+        var count = await Executor(transaction).JobInsertFastAsync(inserts, cancellationToken).ConfigureAwait(false);
+        WakeIfPooled(transaction, inserts);
+        return count;
+    }
+
+    private void WakeIfPooled(DbTransaction? transaction, IEnumerable<JobInsertParams> inserts)
+    {
+        if (transaction is null)
+        {
+            LocalWaker.Wake(inserts.Where(i => i.State == JobState.Available).Select(i => i.Queue));
+        }
     }
 
     private IKopiExecutor Executor(DbTransaction? transaction) =>
@@ -245,7 +266,7 @@ public sealed class KopiClient : IKopiClient
         return inserts;
     }
 
-    private async Task<InsertResult<TArgs>> InsertAsync<TArgs>(IKopiExecutor executor, TArgs args, InsertOptions? options, CancellationToken cancellationToken)
+    private async Task<InsertResult<TArgs>> InsertAsync<TArgs>(IKopiExecutor executor, bool pooled, TArgs args, InsertOptions? options, CancellationToken cancellationToken)
         where TArgs : IJobArgs
     {
         ArgumentNullException.ThrowIfNull(args);
@@ -256,6 +277,11 @@ public sealed class KopiClient : IKopiClient
         var result = results.Count == 1
             ? results[0]
             : throw new InvalidOperationException($"The driver returned {results.Count} rows for one insert.");
+        if (pooled && result.Job.State == JobState.Available && !result.UniqueSkippedAsDuplicate)
+        {
+            LocalWaker.Wake([result.Job.Queue]);
+        }
+
         return new InsertResult<TArgs>(result.Job, result.UniqueSkippedAsDuplicate, args);
     }
 }
