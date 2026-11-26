@@ -47,8 +47,59 @@ public interface IKopiClient
     /// <exception cref="KopiQueueConfigurationException"><typeparamref name="TArgs"/> has no valid <see cref="JobKindAttribute"/>.</exception>
     Task<InsertResult<TArgs>> InsertAsync<TArgs>(TArgs args, DbTransaction transaction, InsertOptions? options = null, CancellationToken cancellationToken = default)
         where TArgs : IJobArgs;
+
+    /// <summary>
+    /// Inserts several jobs and returns them as stored, in the order given (FR-INS-04). All are inserted or none: in
+    /// <paramref name="transaction"/> when given, otherwise in a transaction of the client's own. Listening producers
+    /// are notified once per queue when it commits.
+    /// </summary>
+    /// <param name="jobs">The jobs. Each one's kind is read from its args' runtime type.</param>
+    /// <param name="transaction">The caller's transaction, or <c>null</c> to use a pooled connection.</param>
+    /// <param name="cancellationToken">Cancels the insert.</param>
+    /// <returns>One result per job, in input order. An empty input returns an empty list without touching the database.</returns>
+    /// <exception cref="ArgumentException">A job or its options are not valid; the message names the job's index. Nothing is inserted.</exception>
+    /// <exception cref="KopiQueueConfigurationException">An args type has no valid <see cref="JobKindAttribute"/>.</exception>
+    Task<IReadOnlyList<InsertResult>> InsertManyAsync(IEnumerable<InsertRequest> jobs, DbTransaction? transaction = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Inserts several jobs on the database's fastest path and returns how many were inserted, without reading them back
+    /// (FR-INS-04): binary <c>COPY</c> on PostgreSQL. Atomicity, validation and notifications are as for
+    /// <see cref="InsertManyAsync"/>.
+    /// </summary>
+    /// <param name="jobs">The jobs. Each one's kind is read from its args' runtime type.</param>
+    /// <param name="transaction">The caller's transaction, or <c>null</c> to use a pooled connection.</param>
+    /// <param name="cancellationToken">Cancels the insert.</param>
+    /// <returns>The number of jobs inserted.</returns>
+    /// <exception cref="ArgumentException">A job or its options are not valid; the message names the job's index. Nothing is inserted.</exception>
+    /// <exception cref="KopiQueueConfigurationException">An args type has no valid <see cref="JobKindAttribute"/>.</exception>
+    Task<long> InsertManyFastAsync(IEnumerable<InsertRequest> jobs, DbTransaction? transaction = null, CancellationToken cancellationToken = default);
 }
 #pragma warning restore RS0026
+
+/// <summary>One job of a bulk insert (<see cref="IKopiClient.InsertManyAsync"/>).</summary>
+/// <example>
+/// <code>
+/// await client.InsertManyAsync([new(new SendEmailArgs("a@example.com", "welcome")), new(new ResizeImageArgs(42), new() { Queue = "images" })]);
+/// </code>
+/// </example>
+public sealed class InsertRequest
+{
+    /// <summary>Creates a request.</summary>
+    /// <param name="args">The job's arguments. The kind comes from its runtime type's <see cref="JobKindAttribute"/>.</param>
+    /// <param name="options">Insert options. <c>null</c> uses the defaults (<see cref="InsertDefaults"/>).</param>
+    public InsertRequest(IJobArgs args, InsertOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        Args = args;
+        Options = options;
+    }
+
+    /// <summary>The job's arguments.</summary>
+    public IJobArgs Args { get; }
+
+    /// <summary>The job's insert options, or <c>null</c> for the defaults.</summary>
+    public InsertOptions? Options { get; }
+}
 
 /// <summary>The outcome of inserting one job (FR-INS-06).</summary>
 public class InsertResult
@@ -122,6 +173,54 @@ public sealed class KopiClient : IKopiClient
     }
 #pragma warning restore RS0026
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<InsertResult>> InsertManyAsync(IEnumerable<InsertRequest> jobs, DbTransaction? transaction = null, CancellationToken cancellationToken = default)
+    {
+        var inserts = Prepare(jobs);
+        if (inserts.Length == 0)
+        {
+            return [];
+        }
+
+        var results = await Executor(transaction).JobInsertManyAsync(inserts, cancellationToken).ConfigureAwait(false);
+        if (results.Count != inserts.Length)
+        {
+            throw new InvalidOperationException($"The driver returned {results.Count} rows for {inserts.Length} inserts.");
+        }
+
+        return [.. results.Select(r => new InsertResult(r.Job, r.UniqueSkippedAsDuplicate))];
+    }
+
+    /// <inheritdoc />
+    public async Task<long> InsertManyFastAsync(IEnumerable<InsertRequest> jobs, DbTransaction? transaction = null, CancellationToken cancellationToken = default)
+    {
+        var inserts = Prepare(jobs);
+        return inserts.Length == 0
+            ? 0
+            : await Executor(transaction).JobInsertFastAsync(inserts, cancellationToken).ConfigureAwait(false);
+    }
+
+    private IKopiExecutor Executor(DbTransaction? transaction) =>
+        transaction is null ? _driver.GetExecutor() : _driver.GetExecutor(transaction);
+
+    /// <summary>Validates and resolves every request before any SQL runs, so an invalid job inserts nothing.</summary>
+    private JobInsertParams[] Prepare(IEnumerable<InsertRequest> jobs)
+    {
+        ArgumentNullException.ThrowIfNull(jobs);
+        var requests = jobs as IReadOnlyList<InsertRequest> ?? [.. jobs];
+        var now = _timeProvider.GetUtcNow();
+        var inserts = new JobInsertParams[requests.Count];
+        for (var i = 0; i < inserts.Length; i++)
+        {
+            var request = requests[i] ?? throw new ArgumentException($"Job {i} is null.", nameof(jobs));
+            var type = request.Args.GetType();
+            inserts[i] = JobValidation.ToInsertParams(
+                JobKindRegistry.GetKind(type), JobArgsSerializer.Serialize(request.Args, type), request.Options, now, $"Job {i}: ", nameof(jobs));
+        }
+
+        return inserts;
+    }
+
     private async Task<InsertResult<TArgs>> InsertAsync<TArgs>(IKopiExecutor executor, TArgs args, InsertOptions? options, CancellationToken cancellationToken)
         where TArgs : IJobArgs
     {
@@ -151,6 +250,15 @@ internal static class JobArgsSerializer
 #pragma warning disable CA2263 // GetTypeInfo<T>() exists only from .NET 11; this also builds for .NET 10.
         return JsonSerializer.Serialize(args, (JsonTypeInfo<TArgs>)options.GetTypeInfo(typeof(TArgs)));
 #pragma warning restore CA2263
+    }
+
+    /// <summary>Serialises <paramref name="args"/> as its runtime type <paramref name="type"/>, for bulk inserts.</summary>
+    /// <exception cref="NotSupportedException">Reflection-based JSON is disabled, as in an AOT app.</exception>
+    public static string Serialize(object args, Type type)
+    {
+        var options = ReflectionOptions ?? throw new NotSupportedException(
+            $"Cannot serialise {type.FullName}: reflection-based JSON is disabled (for example in a trimmed or AOT app). JsonSerializerContext support arrives with plan task 1.10.");
+        return JsonSerializer.Serialize(args, options.GetTypeInfo(type));
     }
 
     [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",

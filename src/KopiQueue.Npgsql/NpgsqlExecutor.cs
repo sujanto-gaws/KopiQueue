@@ -29,6 +29,7 @@ internal sealed class NpgsqlStatements
         JobInsertMany = Load("job_insert_many.sql");
         JobGetById = Load("job_get_by_id.sql");
         JobInsertNotify = Load("job_insert_notify.sql");
+        JobInsertFast = Load("job_insert_fast.sql").Trim();
     }
 
     /// <summary>The configured schema, unquoted, or <c>null</c> for the connection's current schema.</summary>
@@ -39,6 +40,9 @@ internal sealed class NpgsqlStatements
     public string JobGetById { get; }
 
     public string JobInsertNotify { get; }
+
+    /// <summary>The binary <c>COPY</c> command of the fast insert path. Its columns match <see cref="NpgsqlExecutor.JobInsertFastAsync"/>.</summary>
+    public string JobInsertFast { get; }
 }
 
 /// <summary>
@@ -71,12 +75,7 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
 
         for (var i = 0; i < count; i++)
         {
-            var job = jobs[i] ?? throw new ArgumentException($"Job {i} is null.", nameof(jobs));
-            if (job.UniqueKey is not null)
-            {
-                throw new NotSupportedException("Unique jobs are not supported yet.");
-            }
-
+            var job = CheckSupported(jobs, i);
             args[i] = job.ArgsJson;
             kinds[i] = job.Kind;
             maxAttempts[i] = checked((short)job.MaxAttempts);
@@ -85,19 +84,18 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
             queues[i] = job.Queue;
             scheduledAt[i] = job.ScheduledAt?.UtcDateTime;
             states[i] = ToDatabase(job.State);
-            tags[i] = JoinTags(job.Tags, i);
+            tags[i] = string.Join(',', job.Tags);
             uniqueKeys[i] = job.UniqueKey;
             uniqueStates[i] = job.UniqueStates;
         }
 
-        // Notify each queue that received available jobs, once (design §4.3). Scheduled jobs are announced by the scheduler.
-        var notifyQueues = jobs.Where(j => j.State == JobState.Available).Select(j => j.Queue).Distinct(StringComparer.Ordinal).ToArray();
-        var notify = notifyQueues.Length == 0
-            ? null
-            : new NpgsqlBatchCommand(statements.JobInsertNotify)
-            {
-                Parameters = { new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)statements.Schema ?? DBNull.Value }, Array(NpgsqlDbType.Text, notifyQueues) },
-            };
+        var notifyQueues = NotifyQueues(jobs);
+        NpgsqlBatchCommand? notify = null;
+        if (notifyQueues.Length > 0)
+        {
+            notify = new NpgsqlBatchCommand(statements.JobInsertNotify);
+            notify.Parameters.AddRange(NotifyParameters(notifyQueues));
+        }
 
         var rows = await QueryAsync(
             statements.JobInsertMany,
@@ -114,6 +112,103 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
         return [.. rows.OrderBy(r => r.Id).Select(r => new JobInsertResult(r, UniqueSkippedAsDuplicate: false))];
     }
 
+    /// <summary>
+    /// Inserts with binary <c>COPY</c> and notifies, in the caller's transaction or in one of its own (FR-INS-04).
+    /// Jobs without <see cref="JobInsertParams.ScheduledAt"/> get the transaction's <c>now()</c>, as the batch insert does.
+    /// </summary>
+    public async Task<long> JobInsertFastAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(jobs);
+        for (var i = 0; i < jobs.Count; i++)
+        {
+            CheckSupported(jobs, i);
+        }
+
+        if (jobs.Count == 0)
+        {
+            return 0;
+        }
+
+        var connection = transaction?.Connection;
+        var ownConnection = connection is null;
+        if (ownConnection)
+        {
+            connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        NpgsqlTransaction? ownTransaction = null;
+        try
+        {
+            ownTransaction = ownConnection ? await connection!.BeginTransactionAsync(cancellationToken).ConfigureAwait(false) : null;
+            var tx = transaction ?? ownTransaction;
+
+            DateTime now = default;
+            if (jobs.Any(j => j.ScheduledAt is null))
+            {
+                var nowCommand = new NpgsqlCommand("SELECT now()", connection, tx);
+                await using (nowCommand.ConfigureAwait(false))
+                {
+                    now = (DateTime)(await nowCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+                }
+            }
+
+            ulong copied;
+            var importer = await connection!.BeginBinaryImportAsync(statements.JobInsertFast, cancellationToken).ConfigureAwait(false);
+            await using (importer.ConfigureAwait(false))
+            {
+                foreach (var job in jobs)
+                {
+                    await importer.StartRowAsync(cancellationToken).ConfigureAwait(false);
+                    await importer.WriteAsync(job.ArgsJson, NpgsqlDbType.Jsonb, cancellationToken).ConfigureAwait(false);
+                    await importer.WriteAsync(job.Kind, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
+                    await importer.WriteAsync(checked((short)job.MaxAttempts), NpgsqlDbType.Smallint, cancellationToken).ConfigureAwait(false);
+                    await importer.WriteAsync(job.MetadataJson, NpgsqlDbType.Jsonb, cancellationToken).ConfigureAwait(false);
+                    await importer.WriteAsync(checked((short)job.Priority), NpgsqlDbType.Smallint, cancellationToken).ConfigureAwait(false);
+                    await importer.WriteAsync(job.Queue, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
+                    await importer.WriteAsync(job.ScheduledAt?.UtcDateTime ?? now, NpgsqlDbType.TimestampTz, cancellationToken).ConfigureAwait(false);
+
+                    // An enum's binary form is its label's text, so the state is written as text.
+                    await importer.WriteAsync(ToDatabase(job.State), NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
+
+                    // tags is varchar(255)[], and binary COPY checks the array's element type.
+                    await importer.WriteAsync(job.Tags.ToArray(), NpgsqlDbType.Array | NpgsqlDbType.Varchar, cancellationToken).ConfigureAwait(false);
+                }
+
+                copied = await importer.CompleteAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            var notifyQueues = NotifyQueues(jobs);
+            if (notifyQueues.Length > 0)
+            {
+                var notify = new NpgsqlCommand(statements.JobInsertNotify, connection, tx);
+                await using (notify.ConfigureAwait(false))
+                {
+                    notify.Parameters.AddRange(NotifyParameters(notifyQueues));
+                    await notify.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            if (ownTransaction is not null)
+            {
+                await ownTransaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            return checked((long)copied);
+        }
+        finally
+        {
+            if (ownTransaction is not null)
+            {
+                await ownTransaction.DisposeAsync().ConfigureAwait(false);
+            }
+
+            if (ownConnection)
+            {
+                await connection!.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+    }
+
     public async Task<JobRow?> JobGetByIdAsync(long id, CancellationToken cancellationToken)
     {
         var rows = await QueryAsync(statements.JobGetById, [new NpgsqlParameter { Value = id }], then: null, cancellationToken).ConfigureAwait(false);
@@ -123,18 +218,36 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
     private static NpgsqlParameter Array<T>(NpgsqlDbType elementType, T[] values) =>
         new() { NpgsqlDbType = NpgsqlDbType.Array | elementType, Value = values };
 
-    private static string JoinTags(IReadOnlyList<string> tags, int index)
+    /// <summary>Rejects what the driver cannot insert yet, before any SQL runs.</summary>
+    private static JobInsertParams CheckSupported(IReadOnlyList<JobInsertParams> jobs, int index)
     {
-        foreach (var tag in tags)
+        var job = jobs[index] ?? throw new ArgumentException($"Job {index} is null.", nameof(jobs));
+        if (job.UniqueKey is not null)
         {
+            throw new NotSupportedException("Unique jobs are not supported yet.");
+        }
+
+        foreach (var tag in job.Tags)
+        {
+            // The batch insert passes tags comma-joined; the core's tag rule never allows a comma.
             if (tag is null || tag.Contains(',', StringComparison.Ordinal))
             {
-                throw new ArgumentException($"Job {index} has a tag that is null or contains a comma.", nameof(tags));
+                throw new ArgumentException($"Job {index} has a tag that is null or contains a comma.", nameof(jobs));
             }
         }
 
-        return string.Join(',', tags);
+        return job;
     }
+
+    /// <summary>Each queue that receives available jobs, once (design §4.3). Scheduled jobs are announced by the scheduler.</summary>
+    private static string[] NotifyQueues(IReadOnlyList<JobInsertParams> jobs) =>
+        [.. jobs.Where(j => j.State == JobState.Available).Select(j => j.Queue).Distinct(StringComparer.Ordinal)];
+
+    private NpgsqlParameter[] NotifyParameters(string[] queues) =>
+    [
+        new() { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)statements.Schema ?? DBNull.Value },
+        Array(NpgsqlDbType.Text, queues),
+    ];
 
     /// <summary>
     /// Runs <paramref name="sql"/>, which returns job rows, and then <paramref name="then"/> if given, as one batch. Without a

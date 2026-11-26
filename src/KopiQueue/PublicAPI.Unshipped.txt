@@ -17,6 +17,8 @@ KopiQueue.IJobArgs
 KopiQueue.IKopiClient
 KopiQueue.IKopiClient.InsertAsync<TArgs>(TArgs args, KopiQueue.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.InsertResult<TArgs>!>!
 KopiQueue.IKopiClient.InsertAsync<TArgs>(TArgs args, System.Data.Common.DbTransaction! transaction, KopiQueue.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.InsertResult<TArgs>!>!
+KopiQueue.IKopiClient.InsertManyAsync(System.Collections.Generic.IEnumerable<KopiQueue.InsertRequest!>! jobs, System.Data.Common.DbTransaction? transaction = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.InsertResult!>!>!
+KopiQueue.IKopiClient.InsertManyFastAsync(System.Collections.Generic.IEnumerable<KopiQueue.InsertRequest!>! jobs, System.Data.Common.DbTransaction? transaction = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!
 KopiQueue.InsertDefaults
 KopiQueue.InsertOptions
 KopiQueue.InsertOptions.InsertOptions() -> void
@@ -32,6 +34,10 @@ KopiQueue.InsertOptions.ScheduledAt.get -> System.DateTimeOffset?
 KopiQueue.InsertOptions.ScheduledAt.init -> void
 KopiQueue.InsertOptions.Tags.get -> System.Collections.Generic.IReadOnlyList<string!>?
 KopiQueue.InsertOptions.Tags.init -> void
+KopiQueue.InsertRequest
+KopiQueue.InsertRequest.Args.get -> KopiQueue.IJobArgs!
+KopiQueue.InsertRequest.InsertRequest(KopiQueue.IJobArgs! args, KopiQueue.InsertOptions? options = null) -> void
+KopiQueue.InsertRequest.Options.get -> KopiQueue.InsertOptions?
 KopiQueue.InsertResult
 KopiQueue.InsertResult.Job.get -> KopiQueue.JobRow!
 KopiQueue.InsertResult.UniqueSkippedAsDuplicate.get -> bool
@@ -92,6 +98,8 @@ KopiQueue.JobState.Scheduled = 7 -> KopiQueue.JobState
 KopiQueue.KopiClient
 KopiQueue.KopiClient.InsertAsync<TArgs>(TArgs args, KopiQueue.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.InsertResult<TArgs>!>!
 KopiQueue.KopiClient.InsertAsync<TArgs>(TArgs args, System.Data.Common.DbTransaction! transaction, KopiQueue.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.InsertResult<TArgs>!>!
+KopiQueue.KopiClient.InsertManyAsync(System.Collections.Generic.IEnumerable<KopiQueue.InsertRequest!>! jobs, System.Data.Common.DbTransaction? transaction = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.InsertResult!>!>!
+KopiQueue.KopiClient.InsertManyFastAsync(System.Collections.Generic.IEnumerable<KopiQueue.InsertRequest!>! jobs, System.Data.Common.DbTransaction? transaction = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!
 KopiQueue.KopiClient.KopiClient(KopiQueue.Drivers.IKopiDriver! driver, System.TimeProvider? timeProvider = null) -> void
 KopiQueue.KopiQueueConfigurationException
 KopiQueue.KopiQueueConfigurationException.KopiQueueConfigurationException() -> void
@@ -161,6 +169,7 @@ KopiQueue.Migrations.MigrationVersion.Version.get -> int
 [KQ0001]KopiQueue.Drivers.IKopiDriver.GetExecutor(System.Data.Common.DbTransaction! transaction) -> KopiQueue.Drivers.IKopiExecutor!
 [KQ0001]KopiQueue.Drivers.IKopiExecutor
 [KQ0001]KopiQueue.Drivers.IKopiExecutor.JobGetByIdAsync(long id, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<KopiQueue.JobRow?>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobInsertFastAsync(System.Collections.Generic.IReadOnlyList<KopiQueue.Drivers.JobInsertParams!>! jobs, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<long>!
 [KQ0001]KopiQueue.Drivers.IKopiExecutor.JobInsertManyAsync(System.Collections.Generic.IReadOnlyList<KopiQueue.Drivers.JobInsertParams!>! jobs, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.Drivers.JobInsertResult!>!>!
 [KQ0001]KopiQueue.Drivers.JobInsertParams
 [KQ0001]KopiQueue.Drivers.JobInsertParams.ArgsJson.get -> string!

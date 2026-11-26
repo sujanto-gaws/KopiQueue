@@ -278,6 +278,72 @@ public sealed class NpgsqlDriverTests(PostgresFixture db) : IClassFixture<Postgr
         Assert.Equal(127, results[2].Job.Queue.Length);
     }
 
+    [Fact]
+    public async Task The_fast_path_stores_the_same_rows_as_the_batch_insert()
+    {
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var driver = await MigratedDriverAsync(ds);
+        var later = new DateTimeOffset(2030, 1, 2, 3, 4, 5, 678, TimeSpan.FromHours(7));
+        JobInsertParams[] jobs =
+        [
+            Job("a"),
+            new()
+            {
+                Kind = "b", ArgsJson = "{\"z\": [1, 2], \"a\": null}", Queue = "reports", State = JobState.Scheduled, Priority = 4,
+                MaxAttempts = 3, ScheduledAt = later, MetadataJson = "{\"k\": \"v\"}", Tags = ["nightly", "batch-1"],
+            },
+            new() { Kind = "c", ArgsJson = "{}", Queue = "q", State = JobState.Pending, Priority = 1, MaxAttempts = 1 },
+        ];
+
+        var batch = (await driver.GetExecutor().JobInsertManyAsync(jobs, Ct)).Select(r => r.Job).ToList();
+        Assert.Equal(3, await driver.GetExecutor().JobInsertFastAsync(jobs, Ct));
+        var fast = new List<JobRow>();
+        for (var id = batch[^1].Id + 1; id <= batch[^1].Id + 3; id++)
+        {
+            fast.Add((await driver.GetExecutor().JobGetByIdAsync(id, Ct))!);
+        }
+
+        static object Shape(JobRow j) => (j.Kind, j.Queue, j.State, j.Priority, j.MaxAttempts, j.ArgsJson, j.MetadataJson, string.Join('|', j.Tags), j.Attempt, j.AttemptedAt, j.FinalizedAt);
+        Assert.Equal(batch.Select(Shape), fast.Select(Shape));
+        Assert.Equal(later, fast[1].ScheduledAt);
+        Assert.Equal(fast[0].CreatedAt, fast[0].ScheduledAt); // the transaction's now(), as the batch insert's default gives
+        Assert.Equal(fast[0].CreatedAt, fast[2].CreatedAt);
+    }
+
+    [Fact]
+    public async Task The_fast_path_runs_in_a_caller_transaction_and_with_a_custom_prefix()
+    {
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var schema = await CreateSchemaAsync(ds);
+        var kopi = new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = schema, TablePrefix = "kopi_" });
+        await kopi.CreateMigrator().MigrateAsync(MigrationDirection.Up, cancellationToken: Ct);
+        IKopiDriver driver = kopi;
+        await using var connection = await ds.OpenConnectionAsync(Ct);
+
+        await using (var tx = await connection.BeginTransactionAsync(Ct))
+        {
+            Assert.Equal(2, await driver.GetExecutor(tx).JobInsertFastAsync([Job("x"), Job("y")], Ct));
+            await tx.CommitAsync(Ct);
+        }
+
+        await using var cmd = ds.CreateCommand($"SELECT string_agg(kind, ',' ORDER BY id) FROM {schema}.kopi_job");
+        Assert.Equal("x,y", await cmd.ExecuteScalarAsync(Ct));
+    }
+
+    [Fact]
+    public async Task The_fast_path_rejects_unsupported_jobs_before_reaching_the_database()
+    {
+        await using var ds = NpgsqlDataSource.Create("Host=unused.invalid");
+        var executor = ((IKopiDriver)new NpgsqlDriver(ds)).GetExecutor();
+
+        Assert.Equal(0, await executor.JobInsertFastAsync([], Ct));
+        await Assert.ThrowsAsync<NotSupportedException>(() => executor.JobInsertFastAsync(
+            [new JobInsertParams { Kind = "k", ArgsJson = "{}", Queue = "q", State = JobState.Available, Priority = 1, MaxAttempts = 1, UniqueKey = [1] }], Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => executor.JobInsertFastAsync([null!], Ct));
+    }
+
     private static JobInsertParams Job(string kind) => new()
     {
         Kind = kind,

@@ -94,8 +94,82 @@ public sealed class KopiClientTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => client.InsertAsync(new SendEmailArgs("f", "t", []), cancellationToken: Ct));
     }
 
+    [Fact]
+    public async Task Insert_many_reads_each_kind_from_the_runtime_type_and_keeps_the_order()
+    {
+        var driver = new RecordingDriver();
+        var client = new KopiClient(driver, new FakeTimeProvider(Now));
+        IJobArgs[] args = [new SendEmailArgs("a", "t", []), new ResizeArgs(7), new SendEmailArgs("b", "t", [3])];
+
+        var results = await client.InsertManyAsync(
+            [new(args[0]), new(args[1], new InsertOptions { Queue = "images", Priority = 3 }), new(args[2])], cancellationToken: Ct);
+
+        Assert.Equal(["send_email", "resize_image", "send_email"], driver.Inserts.Select(i => i.Kind));
+        Assert.Equal(["""{"to":"a","templateId":"t","ids":[]}""", """{"width":7}""", """{"to":"b","templateId":"t","ids":[3]}"""], driver.Inserts.Select(i => i.ArgsJson));
+        Assert.Equal(("images", 3), (driver.Inserts[1].Queue, driver.Inserts[1].Priority));
+        Assert.Equal([1L, 2L, 3L], results.Select(r => r.Job.Id));
+        Assert.Equal(1, driver.Calls);
+        Assert.Null(driver.Transaction);
+    }
+
+    [Fact]
+    public async Task Insert_many_validates_every_job_before_touching_the_database()
+    {
+        var driver = new RecordingDriver();
+        var client = new KopiClient(driver);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => client.InsertManyAsync(
+            [new(new ResizeArgs(1)), new(new ResizeArgs(2), new InsertOptions { Tags = ["no"] })], cancellationToken: Ct));
+        await Assert.ThrowsAsync<KopiQueueConfigurationException>(() => client.InsertManyFastAsync([new(new ResizeArgs(1)), new(new NoKindArgs())], cancellationToken: Ct));
+        var nullJob = await Assert.ThrowsAsync<ArgumentException>(() => client.InsertManyAsync([new(new ResizeArgs(1)), null!], cancellationToken: Ct));
+
+        Assert.StartsWith("Job 1: Invalid insert option Tags", ex.Message, StringComparison.Ordinal);
+        Assert.Equal("jobs", ex.ParamName);
+        Assert.Equal("Job 1 is null. (Parameter 'jobs')", nullJob.Message);
+        Assert.Equal(0, driver.Calls);
+        await Assert.ThrowsAsync<ArgumentNullException>(() => client.InsertManyAsync(null!, cancellationToken: Ct));
+        Assert.Throws<ArgumentNullException>(() => new InsertRequest(null!));
+    }
+
+    [Fact]
+    public async Task An_empty_batch_does_not_touch_the_database()
+    {
+        var driver = new RecordingDriver();
+        var client = new KopiClient(driver);
+
+        Assert.Empty(await client.InsertManyAsync([], cancellationToken: Ct));
+        Assert.Equal(0, await client.InsertManyFastAsync(Enumerable.Empty<InsertRequest>(), cancellationToken: Ct));
+        Assert.Equal(0, driver.Calls);
+    }
+
+    [Fact]
+    public async Task Insert_many_fast_returns_the_drivers_count_and_uses_the_transaction()
+    {
+        var driver = new RecordingDriver();
+        var client = new KopiClient(driver, new FakeTimeProvider(Now));
+        var tx = new FakeTransaction();
+
+        var count = await client.InsertManyFastAsync(Enumerable.Range(1, 3).Select(i => new InsertRequest(new ResizeArgs(i))), tx, Ct);
+
+        Assert.Equal(3, count);
+        Assert.Same(tx, driver.Transaction);
+        Assert.Equal(1, driver.FastCalls);
+        Assert.Equal(["""{"width":1}""", """{"width":2}""", """{"width":3}"""], driver.Inserts.Select(i => i.ArgsJson));
+    }
+
+    [Fact]
+    public async Task Insert_many_rejects_a_driver_returning_the_wrong_row_count()
+    {
+        var client = new KopiClient(new RecordingDriver { ReturnNothing = true });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.InsertManyAsync([new(new ResizeArgs(1))], cancellationToken: Ct));
+    }
+
     [JobKind("send_email")]
     private sealed record SendEmailArgs(string To, string TemplateId, int[] Ids) : IJobArgs;
+
+    [JobKind("resize_image")]
+    private sealed record ResizeArgs(int Width) : IJobArgs;
 
     private sealed record NoKindArgs : IJobArgs;
 
@@ -108,6 +182,10 @@ public sealed class KopiClientTests
         public bool SkipAsDuplicate { get; init; }
 
         public bool ReturnNothing { get; init; }
+
+        public int Calls { get; private set; }
+
+        public int FastCalls { get; private set; }
 
         public DriverCapabilities Capabilities { get; } = new() { ListenNotify = false, BulkCopy = false };
 
@@ -122,8 +200,18 @@ public sealed class KopiClientTests
         public KopiQueue.Migrations.KopiMigrator CreateMigrator(Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null) =>
             throw new NotSupportedException();
 
+        public Task<long> JobInsertFastAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken)
+        {
+            Calls++;
+            FastCalls++;
+            Inserts.AddRange(jobs);
+            return Task.FromResult((long)jobs.Count);
+        }
+
         public Task<IReadOnlyList<JobInsertResult>> JobInsertManyAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken)
         {
+            Calls++;
+            var first = Inserts.Count;
             Inserts.AddRange(jobs);
             if (ReturnNothing)
             {
@@ -131,10 +219,10 @@ public sealed class KopiClientTests
             }
 
             return Task.FromResult<IReadOnlyList<JobInsertResult>>(
-                [.. jobs.Select(j => new JobInsertResult(
+                [.. jobs.Select((j, i) => new JobInsertResult(
                     new JobRow
                     {
-                        Id = Inserts.Count, Kind = j.Kind, Queue = j.Queue, State = j.State, Priority = j.Priority,
+                        Id = first + i + 1, Kind = j.Kind, Queue = j.Queue, State = j.State, Priority = j.Priority,
                         ArgsJson = j.ArgsJson, MetadataJson = j.MetadataJson, Tags = j.Tags, Attempt = 0, MaxAttempts = j.MaxAttempts,
                         CreatedAt = Now, ScheduledAt = j.ScheduledAt ?? Now,
                     },
