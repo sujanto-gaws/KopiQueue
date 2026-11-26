@@ -679,6 +679,14 @@ await kopi.InsertAsync(new SendEmailArgs(...), db, ct: ct);   // uses db's curre
 await tx.CommitAsync(ct);
 ```
 
+**Bulk insert (plan task 1.7, FR-INS-04).** `InsertManyAsync` and `InsertManyFastAsync` take `InsertRequest(args, options?)` items. Each item's kind comes from its args' runtime type, so one batch can mix job types.
+
+- Every request is validated and serialised before any SQL runs. An invalid one throws `ArgumentException` naming its index (`Job 3: Invalid insert option Tags: ...`), and nothing is inserted.
+- A batch is all-or-nothing: in the caller's transaction, or in one the driver opens. Notifications follow the single-insert rules: one per queue with available jobs, delivered on commit.
+- An empty batch returns at once without touching the database.
+- **PostgreSQL:** `InsertManyAsync` is the `unnest` batch insert. `InsertManyFastAsync` is a binary `COPY` of the nine insertable columns, plus `SELECT now()` for jobs without `ScheduledAt` and the notify statement, in one transaction. The binary format writes an enum as its label's text and checks array element types, so the state goes as text and the tags as `varchar[]`.
+- **Measured locally (PostgreSQL 18, 50,000 jobs, one client):** `COPY` about 32,000 jobs/s and the `unnest` insert about 20,000 jobs/s. Preparing the jobs on the client takes about 2 µs each. With River's secondary indexes dropped, `COPY` reaches 100,000–140,000 jobs/s. Index maintenance in the River-compatible schema, not the client, keeps a single COPY below NFR-PERF-02's 50,000 jobs/s. Task 7.1 re-measures on CI hardware and decides between accepting the gap and options that keep the schema, such as parallel COPY on several connections (which gives up all-or-nothing).
+
 `KopiClient` (plan task 1.6) implements `InsertAsync`: `new KopiClient(driver, timeProvider?)`. It reads the kind, serialises the args (`System.Text.Json` web defaults until task 1.10 makes this configurable), validates and resolves the options, and makes one `JobInsertManyAsync` call on the pooled or the transaction executor. The two `InsertAsync` overloads both have optional parameters (analyzer rule RS0026 is suppressed): they differ by a required `DbTransaction`, so a call can't be ambiguous. Where reflection-based JSON is disabled (trimmed and AOT apps), inserting throws `NotSupportedException` until task 1.10.
 
 `InsertAsync` with a transaction requires the transaction type of the configured driver at runtime: `NpgsqlTransaction` or `SqlTransaction`. Any other type throws `ArgumentException`. We accept `DbTransaction` in the signature so the core takes no dependency on either database client.
@@ -740,8 +748,9 @@ public interface IKopiDriver
 public interface IKopiExecutor   // typed operations; no SQL leaks to the core
 {
     Task<IReadOnlyList<JobInsertResult>> JobInsertManyAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken ct);
+    Task<long> JobInsertFastAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken ct);   // COPY; no rows read back
     Task<JobRow?> JobGetByIdAsync(long id, CancellationToken ct);
-    // Later: JobInsertFastAsync (1.7), JobFetchAsync, JobSetStateManyAsync, JobScheduleAsync, LeaderAttemptElectAsync,
+    // Later: JobFetchAsync, JobSetStateManyAsync, JobScheduleAsync, LeaderAttemptElectAsync,
     // NotifyAsync, ... about 35 operations in total, mirroring the needs of the components above
 }
 
@@ -758,7 +767,7 @@ public sealed record JobInsertResult(JobRow Job, bool UniqueSkippedAsDuplicate);
 
 | Finding | Effect on the interface |
 |---------|-------------------------|
-| No statement may touch more than 2,000 rows (0.9 D4); batched inserts use ≤ 1,000 rows per statement (0.10 D3) | `DriverCapabilities.MaxRowsPerStatement`: the core splits batches before calling the executor. PostgreSQL reports `null`, SQL Server 1,000 |
+| No statement may touch more than 2,000 rows (0.9 D4); batched inserts use ≤ 1,000 rows per statement (0.10 D3) | `DriverCapabilities.MaxRowsPerStatement`. Executors split larger batches themselves, in one transaction, so a bulk insert stays all-or-nothing even on a pooled connection (revised in task 1.7: the core cannot open a transaction around several executor calls). The core uses the value to cap its own batch sizes, such as `FetchBatchMax`. PostgreSQL reports `null`, SQL Server 1,000 |
 | `SqlBulkCopy` dropped; the fast path uses batched inserts (0.10 D3, ADR-014) | `DriverCapabilities.BulkCopy`: `true` for PostgreSQL (`COPY`), `false` for SQL Server, whose fast path is the batched insert |
 | No LISTEN/NOTIFY; poll-only across processes (FR-DB-04) | `DriverCapabilities.ListenNotify`, and `CreateListener` returning `null` when it arrives in M2 |
 | A failed statement must not detect duplicates, because with `XACT_ABORT ON` it dooms the caller's transaction; unique inserts return the existing job (0.10 D1, D2) | Inserts return `JobInsertResult` with `UniqueSkippedAsDuplicate` instead of throwing on a duplicate |

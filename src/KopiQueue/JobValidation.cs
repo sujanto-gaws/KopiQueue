@@ -70,7 +70,10 @@ internal static class JobValidation
     /// <param name="options">The caller's options, or <c>null</c> for all defaults.</param>
     /// <param name="now">The client's current time, used only to tell a future <see cref="InsertOptions.ScheduledAt"/>.</param>
     /// <exception cref="ArgumentException">An option is not valid. The message names it.</exception>
-    public static JobInsertParams ToInsertParams(string kind, string argsJson, InsertOptions? options, DateTimeOffset now)
+    /// <param name="subject">Prefixed to error messages, for example <c>"Job 3: "</c> in a batch.</param>
+    /// <param name="paramName">The parameter named by an <see cref="ArgumentException"/>.</param>
+    public static JobInsertParams ToInsertParams(
+        string kind, string argsJson, InsertOptions? options, DateTimeOffset now, string subject = "", string paramName = "options")
     {
         ArgumentNullException.ThrowIfNull(kind);
         ArgumentNullException.ThrowIfNull(argsJson);
@@ -81,16 +84,16 @@ internal static class JobValidation
         var tags = options?.Tags ?? [];
         var scheduledAt = options?.ScheduledAt;
 
-        Check(QueueError(queue), nameof(InsertOptions.Queue), nameof(options));
+        Check(QueueError(queue), nameof(InsertOptions.Queue), subject, paramName);
         Check(
             priority is >= MinPriority and <= MaxPriority ? null : $"the priority must be {MinPriority}-{MaxPriority}, but is {Format(priority)}.",
-            nameof(InsertOptions.Priority), nameof(options));
+            nameof(InsertOptions.Priority), subject, paramName);
         Check(
             maxAttempts is >= 1 and <= short.MaxValue ? null : $"max attempts must be 1-{Format(short.MaxValue)}, but is {Format(maxAttempts)}.",
-            nameof(InsertOptions.MaxAttempts), nameof(options));
+            nameof(InsertOptions.MaxAttempts), subject, paramName);
         foreach (var tag in tags)
         {
-            Check(TagError(tag), nameof(InsertOptions.Tags), nameof(options));
+            Check(TagError(tag), nameof(InsertOptions.Tags), subject, paramName);
         }
 
         return new JobInsertParams
@@ -107,11 +110,11 @@ internal static class JobValidation
         };
     }
 
-    private static void Check(string? error, string option, string paramName)
+    private static void Check(string? error, string option, string subject, string paramName)
     {
         if (error is not null)
         {
-            throw new ArgumentException($"Invalid insert option {option}: {error}", paramName);
+            throw new ArgumentException($"{subject}Invalid insert option {option}: {error}", paramName);
         }
     }
 

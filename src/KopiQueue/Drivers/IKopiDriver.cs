@@ -44,8 +44,9 @@ public interface IKopiDriver
 public interface IKopiExecutor
 {
     /// <summary>
-    /// Inserts jobs in one statement and returns them as stored, in the order given.
-    /// The core splits larger batches using <see cref="DriverCapabilities.MaxRowsPerStatement"/>.
+    /// Inserts jobs and returns them as stored, in the order given. All jobs are inserted or none: in the caller's
+    /// transaction, or in the driver's own (FR-INS-04). A driver with <see cref="DriverCapabilities.MaxRowsPerStatement"/>
+    /// splits larger batches into several statements itself.
     /// </summary>
     /// <remarks>
     /// On a driver with <see cref="DriverCapabilities.ListenNotify"/>, the insert also notifies each queue that received
@@ -55,6 +56,15 @@ public interface IKopiExecutor
     /// <exception cref="ArgumentException">A job is malformed in a way the database cannot represent, for example a tag containing a comma.</exception>
     /// <exception cref="NotSupportedException">A job has a unique key: unique jobs are not supported yet.</exception>
     Task<IReadOnlyList<JobInsertResult>> JobInsertManyAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Inserts jobs on the fastest path the database has and returns how many were inserted, without reading them back
+    /// (FR-INS-04): binary <c>COPY</c> when <see cref="DriverCapabilities.BulkCopy"/> is set, batched inserts otherwise.
+    /// All jobs are inserted or none, and notifications follow the same rules as <see cref="JobInsertManyAsync"/>.
+    /// </summary>
+    /// <exception cref="ArgumentException">A job is malformed in a way the database cannot represent.</exception>
+    /// <exception cref="NotSupportedException">A job has a unique key: unique jobs are not supported yet.</exception>
+    Task<long> JobInsertFastAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken);
 
     /// <summary>Reads a job by ID, or returns <c>null</c> if there is none.</summary>
     Task<JobRow?> JobGetByIdAsync(long id, CancellationToken cancellationToken);
@@ -78,9 +88,10 @@ public sealed class DriverCapabilities
     public required bool BulkCopy { get; init; }
 
     /// <summary>
-    /// The most jobs the core passes to one batched executor call, such as <see cref="IKopiExecutor.JobInsertManyAsync"/>,
-    /// or <c>null</c> for no limit. The core splits larger batches. SQL Server uses 1,000: its batched insert
-    /// statement size (spike 0.10), safely below the 2,000-row lock-escalation cap (spike 0.9).
+    /// The most rows one statement may touch, or <c>null</c> for no limit. Executors split larger batches themselves, in
+    /// one transaction, so a batch stays all-or-nothing; the core uses the value to cap its own batch sizes, such as
+    /// <c>FetchBatchMax</c>. SQL Server uses 1,000: its batched insert statement size (spike 0.10), safely below the
+    /// 2,000-row lock-escalation cap (spike 0.9).
     /// </summary>
     public int? MaxRowsPerStatement { get; init; }
 }

@@ -175,6 +175,122 @@ public sealed class KopiClientInsertTests(PostgresFixture db) : IClassFixture<Po
         Assert.NotNull(await StoredAsync(ds, schema, result.Job.Id));
     }
 
+    [Fact]
+    public async Task Insert_many_stores_every_job_in_order_and_notifies_each_queue_once()
+    {
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var (client, schema) = await ClientAsync(ds);
+        await using var listener = await Listener.StartAsync(db.ConnectionString, schema);
+
+        var results = await client.InsertManyAsync(
+            [
+                new(new EmailArgs("1"), new InsertOptions { Queue = "a" }),
+                new(new ResizeArgs(2), new InsertOptions { Queue = "b", Tags = ["big"] }),
+                new(new EmailArgs("3"), new InsertOptions { Queue = "a" }),
+            ],
+            cancellationToken: Ct);
+        await client.InsertAsync(new EmailArgs("sentinel"), new InsertOptions { Queue = "sentinel" }, Ct);
+
+        Assert.Equal(["email_send", "resize_image", "email_send"], results.Select(r => r.Job.Kind));
+        Assert.Equal(["a", "b", "a"], results.Select(r => r.Job.Queue));
+        Assert.Equal(["big"], results[1].Job.Tags);
+        Assert.True(results[0].Job.Id < results[1].Job.Id && results[1].Job.Id < results[2].Job.Id);
+        var queues = new[] { Queue(await listener.NextAsync()), Queue(await listener.NextAsync()) };
+        Assert.Equal(["a", "b"], queues.Order(StringComparer.Ordinal));
+        Assert.Equal("sentinel", Queue(await listener.NextAsync()));
+    }
+
+    [Fact]
+    public async Task Insert_many_fast_copies_every_job_and_notifies_each_queue_once()
+    {
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var (client, schema) = await ClientAsync(ds);
+        await using var listener = await Listener.StartAsync(db.ConnectionString, schema);
+
+        var count = await client.InsertManyFastAsync(
+            Enumerable.Range(0, 30).Select(i => new InsertRequest(new ResizeArgs(i), new InsertOptions { Queue = i % 2 == 0 ? "even" : "odd" })),
+            cancellationToken: Ct);
+        await client.InsertAsync(new EmailArgs("sentinel"), new InsertOptions { Queue = "sentinel" }, Ct);
+
+        Assert.Equal(30, count);
+        Assert.Equal(30L, await CountAsync(ds, schema, "kind = 'resize_image'"));
+        var queues = new[] { Queue(await listener.NextAsync()), Queue(await listener.NextAsync()) };
+        Assert.Equal(["even", "odd"], queues.Order(StringComparer.Ordinal));
+        Assert.Equal("sentinel", Queue(await listener.NextAsync()));
+    }
+
+    [Fact]
+    public async Task Bulk_inserts_in_a_rolled_back_transaction_leave_nothing()
+    {
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var (client, schema) = await ClientAsync(ds);
+        await using var listener = await Listener.StartAsync(db.ConnectionString, schema);
+
+        await using (var connection = await ds.OpenConnectionAsync(Ct))
+        await using (var tx = await connection.BeginTransactionAsync(Ct))
+        {
+            await client.InsertManyAsync([new(new EmailArgs("1"), new InsertOptions { Queue = "gone" })], tx, Ct);
+            Assert.Equal(25, await client.InsertManyFastAsync(Enumerable.Range(0, 25).Select(i => new InsertRequest(new ResizeArgs(i))), tx, Ct));
+            await tx.RollbackAsync(Ct);
+        }
+
+        await client.InsertAsync(new EmailArgs("sentinel"), new InsertOptions { Queue = "sentinel" }, Ct);
+
+        Assert.Equal("sentinel", Queue(await listener.NextAsync()));
+        Assert.Equal(1L, await CountAsync(ds, schema, "true"));
+    }
+
+    [Fact]
+    public async Task A_failed_fast_insert_inserts_nothing_and_does_not_notify()
+    {
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var (client, schema) = await ClientAsync(ds);
+        IKopiDriver driver = new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = schema });
+        await using var listener = await Listener.StartAsync(db.ConnectionString, schema);
+        var now = DateTimeOffset.UtcNow;
+
+        // The last row passes the driver but fails the table's CHECK, so the whole COPY must roll back.
+        await Assert.ThrowsAsync<PostgresException>(() => driver.GetExecutor().JobInsertFastAsync(
+            [
+                JobValidation.ToInsertParams("k", "{}", new InsertOptions { Queue = "fine" }, now),
+                new JobInsertParams { Kind = "k", ArgsJson = "{}", Queue = "bad", State = JobState.Available, Priority = 9, MaxAttempts = 1 },
+            ],
+            Ct));
+        await client.InsertAsync(new EmailArgs("sentinel"), new InsertOptions { Queue = "sentinel" }, Ct);
+
+        Assert.Equal("sentinel", Queue(await listener.NextAsync()));
+        Assert.Equal(1L, await CountAsync(ds, schema, "true"));
+    }
+
+    [Fact]
+    public async Task Insert_many_fast_handles_a_large_batch()
+    {
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var (client, schema) = await ClientAsync(ds);
+
+        var requests = Enumerable.Range(0, 50_000).Select(i => new InsertRequest(new ResizeArgs(i))).ToList();
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var count = await client.InsertManyFastAsync(requests, cancellationToken: Ct);
+        watch.Stop();
+
+        // Reported, not asserted: NFR-PERF-02 (>= 50,000 jobs/s) is measured on CI hardware in M5.
+        TestContext.Current.TestOutputHelper?.WriteLine($"COPY: {count:N0} jobs in {watch.ElapsedMilliseconds:N0} ms = {count / watch.Elapsed.TotalSeconds:N0} jobs/s");
+        Assert.Equal(50_000, count);
+        Assert.Equal(50_000L, await CountAsync(ds, schema, "true"));
+    }
+
+    private static async Task<long> CountAsync(NpgsqlDataSource ds, string schema, string where)
+    {
+        await using var cmd = ds.CreateCommand($"SELECT count(*) FROM {schema}.river_job WHERE {where}");
+        return (long)(await cmd.ExecuteScalarAsync(Ct))!;
+    }
+
     private static string Queue(NpgsqlNotificationEventArgs notification)
     {
         using var payload = JsonDocument.Parse(notification.Payload);
@@ -202,6 +318,9 @@ public sealed class KopiClientInsertTests(PostgresFixture db) : IClassFixture<Po
 
     [JobKind("email_send")]
     private sealed record EmailArgs(string To) : IJobArgs;
+
+    [JobKind("resize_image")]
+    private sealed record ResizeArgs(int Width) : IJobArgs;
 
     /// <summary>A dedicated connection listening on a schema's insert channel.</summary>
     private sealed class Listener : IAsyncDisposable
