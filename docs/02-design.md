@@ -122,6 +122,16 @@ It stops them in reverse order. The completer is stopped last among the executio
 - **Failures:** a failed fetch is logged and tried again at the next wake-up or poll; the loop never ends on an error. A run function that throws is logged and its slot freed.
 - **Stop** (§5.9 steps 1–3 for one queue): unsubscribe and stop fetching; a fetch in progress completes, since the database already marked its jobs running. Then wait for the running jobs (soft stop). If the stop token fires first, cancel every job's token and wait at most `HardStopGrace` (default 5 s); jobs still running stay `running` and are rescued later.
 
+### 3.5 Executor (plan task 2.4)
+
+- **Run function:** `JobExecutor.ExecuteAsync(row, hardStop)` is what the producer runs for each job. It returns once the completer (`IJobCompleter`, task 2.6) has *accepted* the outcome, which frees the slot.
+- **Scope and worker:** a new DI scope per job (FR-DEF-03), in which the args are deserialised and the worker is resolved or created. A client without DI gets an empty service provider, so workers with public constructors still work. Bad args or a worker that cannot be built fail the attempt without running it.
+- **Timeout** (FR-EXE-05): the worker's `Timeout(job)`, else the client's `JobTimeout` (default 1 min). Zero means the client's; `Timeout.InfiniteTimeSpan` (any negative value) means none. The worker's token is cancelled by the timeout or by the client's hard stop.
+- **Outcomes** (FR-EXE-08): returning completes the job. Any exception, cancellation included, is an error recorded as `{at, attempt, error, trace}`: the message, and `Exception.ToString()` as the trace. A timeout records "The job did not finish within its timeout of …", a hard stop "The client stopped before the job finished.". An error retries after the worker's `NextRetry(job)` (ignored if it throws or is negative), else the default backoff (§5.4), until `attempt ≥ max_attempts` discards the job.
+- **Unknown kinds** follow DQ-3: an error like any other.
+- **Job context** (FR-EXE-07): `Job<TArgs>` carries the ID, attempt, metadata and the rest of the row. Reaching the client from a worker comes with the client lifecycle and DI registration (tasks 2.7, 2.8).
+- `JobControl.Cancel`/`Snooze` and the public `IRetryPolicy` arrive in task 2.5; until then the backoff is internal.
+
 ## 4. Data model
 
 > **PostgreSQL (River-compatible, OQ-1 decided):** the table names and columns below MUST match River's schema at the pinned version: **migration line `main`, version 8, as created by River v0.51.2**.
@@ -1008,7 +1018,7 @@ SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'de
 |----|----------|
 | DQ-1 | ~~Should `IWorker<TArgs>` also allow `ValueTask` for very hot workers?~~ **Closed (`Task` only, decided 2026-11-26 in task 2.1):** a synchronous worker returns the cached `Task.CompletedTask`, which allocates nothing, so `ValueTask` would only save an allocation for workers that complete asynchronously, next to a fetch, a completion write, a DI scope and JSON deserialisation per job. `ValueTask` would also restrict the worker-middleware pipeline (task 6.1) to awaiting each result exactly once. Reopen only if a benchmark (task 7.1) shows the `Task` allocation matters |
 | DQ-2 | ~~Should insert accept `NpgsqlBatch` so a job insert can be pipelined with the user's other commands in one round trip?~~ **Closed (not for 1.0, decided 2026-11-26):** an insert in a caller's transaction is already one round trip (the `INSERT` and its `pg_notify` go out as one Npgsql batch, §4.3), which meets NFR-PERF-01. Accepting the caller's batch would save only the round trip between their statements and the insert. The cost: a PostgreSQL-only API (against FR-DB-03), handing inserted rows back out of the caller's data reader, and more result-shape cases for unique inserts (M4). Reopen after 1.0 if users measure that round trip as a bottleneck; it would then be an opt-in `KopiQueue.Npgsql` extension |
-| DQ-3 | Should "unknown kind" rows be discarded or left for other deployments? A rolling-deploy scenario needs a decision on the default |
+| DQ-3 | ~~Should "unknown kind" rows be discarded or left for other deployments?~~ **Closed (task 2.4):** neither. As in River, a fetched job whose kind has no worker on this client fails the attempt with "No worker is registered for kind …" and is retried with the normal backoff, so in a rolling deploy a client that has the worker takes it on a later attempt. A kind no client ever learns is discarded once its attempts run out. Snoozing without using an attempt was rejected: an unknown kind would then cycle forever |
 | DQ-4 | ~~Should KQ use the `river_client` and `river_client_queue` tables?~~ **Closed (spike 0.8):** they are not part of the pinned schema (main v8) |
 | DQ-5 | Cron library: write our own small parser, or depend on `Cronos` (MIT)? Leaning towards Cronos |
 | DQ-6 | SQL Server batch parameters: OPENJSON (no schema objects) or table-valued parameters (faster, but need a user-defined table type and `EXECUTE` permission on it)? Benchmark in M5 |
