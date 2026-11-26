@@ -79,7 +79,10 @@ internal sealed partial class Elector : IStartStopService, IAsyncDisposable
         _params = new LeaderElectParams { LeaderId = options.ClientId, Ttl = options.LeaderTtl };
     }
 
-    /// <summary>Whether this client holds the lease, as far as it knows.</summary>
+    /// <summary>
+    /// Whether this client holds the lease, as far as it knows. It turns <c>false</c> only after the leadership callback
+    /// has returned, so nothing runs as leader once it is <c>false</c>.
+    /// </summary>
     public bool IsLeader => Volatile.Read(ref _isLeader) == 1;
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -261,9 +264,10 @@ internal sealed partial class Elector : IStartStopService, IAsyncDisposable
 
     private async Task StepDownAsync(string reason, CancellationToken cancellationToken)
     {
-        Volatile.Write(ref _isLeader, 0);
+        // Stop maintenance first, so that IsLeader is false only once nothing runs as leader any more.
         LogSteppedDown(_options.ClientId, reason);
         await ReportAsync(false, cancellationToken).ConfigureAwait(false);
+        Volatile.Write(ref _isLeader, 0);
     }
 
     private async Task ReportAsync(bool isLeader, CancellationToken cancellationToken)
