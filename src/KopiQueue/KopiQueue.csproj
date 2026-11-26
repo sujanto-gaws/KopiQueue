@@ -5,6 +5,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Driver contracts stay internal until the driver interface review (plan task 1.4) decides what becomes public. -->
+    <InternalsVisibleTo Include="KopiQueue.Npgsql" />
+    <InternalsVisibleTo Include="KopiQueue.SqlServer" />
+    <InternalsVisibleTo Include="KopiQueue.Npgsql.Tests" />
+    <InternalsVisibleTo Include="KopiQueue.SqlServer.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />

@@ -1,1 +1,5 @@
 #nullable enable
+KopiQueue.KopiQueueMigrationException
+KopiQueue.KopiQueueMigrationException.KopiQueueMigrationException() -> void
+KopiQueue.KopiQueueMigrationException.KopiQueueMigrationException(string? message) -> void
+KopiQueue.KopiQueueMigrationException.KopiQueueMigrationException(string? message, System.Exception? innerException) -> void
