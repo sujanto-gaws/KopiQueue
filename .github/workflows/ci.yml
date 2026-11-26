@@ -60,6 +60,10 @@ jobs:
       # A River client driven through its public API, for the interop suite (task 2.10, tests/compat/go).
       KOPI_RIVER_COMPAT: ${{ github.workspace }}/.river/kopi-river-compat
       KOPI_REQUIRE_RIVER_CLI: "1"
+      # PgBouncer in front of the same PostgreSQL (task 2.11, tests/pgbouncer/start.sh).
+      KOPI_TEST_PGBOUNCER_TX: Host=127.0.0.1;Port=6542;Username=postgres;Password=kopi;Database=postgres
+      KOPI_TEST_PGBOUNCER_SESSION: Host=127.0.0.1;Port=6543;Username=postgres;Password=kopi;Database=postgres
+      KOPI_REQUIRE_PGBOUNCER: "1"
       RIVER_VERSION: v0.51.2
     steps:
       - uses: actions/checkout@v5
@@ -78,6 +82,12 @@ jobs:
       - name: build River interop harness
         working-directory: tests/compat/go
         run: go build -o "$KOPI_RIVER_COMPAT" .
+      - name: start PgBouncer (transaction and session mode)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pgbouncer
+          sudo systemctl stop pgbouncer || true
+          sh tests/pgbouncer/start.sh kopi
       - run: dotnet build tests/KopiQueue.Npgsql.Tests -c $CONFIGURATION
       - run: >-
           dotnet test --project tests/KopiQueue.Npgsql.Tests -c $CONFIGURATION --no-build
