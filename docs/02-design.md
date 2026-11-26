@@ -436,7 +436,7 @@ Concurrency control: a `SemaphoreSlim(MaxWorkers)` per producer. A slot is relea
 ```
 using scope = services.CreateAsyncScope()
 args   = serializer.Deserialize(job.Args, registry.TypeFor(job.Kind))       // NFR-SEC-02
-worker = scope.Resolve<IWorker<TArgs>>()
+worker = registry[job.Kind].Create(scope)   // from the scope, or constructed with its dependencies
 timeout = worker.Timeout(job) ?? options.JobTimeout                          // default 1 min
 using cts = CreateLinkedTokenSource(clientHardStopToken, jobCancelToken)
 cts.CancelAfter(timeout)
@@ -499,7 +499,7 @@ public interface IRetryPolicy { DateTimeOffset NextRetry(JobRow job, DateTimeOff
 // attempt 1 → 1 s, 2 → 16 s, 3 → 81 s, 5 → ~10 min, 10 → ~2.8 h, 25 → capped.
 ```
 
-The worker's `NextRetry(job)` override wins over the client policy.
+The worker's `NextRetry(job)` override wins over the client policy. It returns a delay (`TimeSpan?`), not a time, so a worker needs no clock and tests stay deterministic under `FakeTimeProvider`; `null` means "use the policy".
 
 ### 5.5 Leader election
 
@@ -603,6 +603,15 @@ public sealed class SendEmailWorker(IEmailSender sender, ILogger<SendEmailWorker
 ```
 
 `Job<TArgs>` exposes `Id, Args, Kind, Queue, Attempt, MaxAttempts, Priority, Tags, Metadata, CreatedAt, ScheduledAt, AttemptedAt, Errors`.
+
+**Workers and the registry (plan task 2.1, FR-DEF-02, FR-DEF-04, FR-DEF-06).**
+
+- `IWorker<TArgs>` has `WorkAsync(Job<TArgs>, CancellationToken)` and two overridable defaults, `Timeout(job)` and `NextRetry(job)`, which return `null` to use the client's `JobTimeout` and retry policy. `Worker<TArgs>` is the abstract base class with those defaults as virtual methods. `WorkAsync` returns `Task` (DQ-1, closed).
+- `Job<TArgs>` wraps the fetched `JobRow` (also exposed as `Row`) and the deserialised args. Its public constructor checks that the row's kind matches `TArgs`, so tests can build jobs for workers directly. `Metadata` is a `JsonObject` parsed on first use; changing it does not change the stored job.
+- `WorkerRegistry` holds one worker per kind: `Add<TArgs, TWorker>()` (trim and AOT safe), `Add(IWorker<TArgs> instance)` (one thread-safe instance for every job, never disposed by KQ), and `Add<TWorker>()`, which finds `TArgs` by reflection and is marked `[RequiresUnreferencedCode]`/`[RequiresDynamicCode]`. A worker type is resolved from the job's DI scope if it is registered there, which leaves its disposal to the scope; otherwise it is built through `ActivatorUtilities` with its dependencies from the scope and disposed after the job.
+- Registration fails fast with `KopiQueueConfigurationException`: an args type without a valid `[JobKind]`, a second worker for a kind (even the same worker again), two args types with one kind, an abstract worker type, and, for `Add<TWorker>()`, a type that implements `IWorker<>` for no args type or for several. A client that works jobs refuses to start without workers (FR-DEF-06; wired up with the client lifecycle, task 2.7).
+- Internally a registration creates an `IWorkUnit` per job for the executor (task 2.4): it deserialises the args first, so bad JSON fails before any worker is constructed, then gets the worker, and exposes `Timeout()`, `NextRetry()`, `WorkAsync(ct)` and `DisposeAsync()` without the args type.
+- **No worker-level `MaxAttempts`** (requirements 0.5, FR-DEF-04): `max_attempts` is written when the job is inserted, often by a process with no workers, such as a web front-end. A default on the worker would silently not apply there. Per-type defaults come from the args type instead (FR-DEF-05, task 4.5).
 
 **Kinds and insert options (plan task 1.5, FR-DEF-01, FR-DEF-06, FR-INS-05, FR-INS-09).**
 
@@ -977,7 +986,7 @@ SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'de
 
 | ID | Question |
 |----|----------|
-| DQ-1 | Should `IWorker<TArgs>` also allow `ValueTask` for very hot workers? (Probably not: `Task` is fine.) |
+| DQ-1 | ~~Should `IWorker<TArgs>` also allow `ValueTask` for very hot workers?~~ **Closed (`Task` only, decided 2026-11-26 in task 2.1):** a synchronous worker returns the cached `Task.CompletedTask`, which allocates nothing, so `ValueTask` would only save an allocation for workers that complete asynchronously, next to a fetch, a completion write, a DI scope and JSON deserialisation per job. `ValueTask` would also restrict the worker-middleware pipeline (task 6.1) to awaiting each result exactly once. Reopen only if a benchmark (task 7.1) shows the `Task` allocation matters |
 | DQ-2 | ~~Should insert accept `NpgsqlBatch` so a job insert can be pipelined with the user's other commands in one round trip?~~ **Closed (not for 1.0, decided 2026-11-26):** an insert in a caller's transaction is already one round trip (the `INSERT` and its `pg_notify` go out as one Npgsql batch, §4.3), which meets NFR-PERF-01. Accepting the caller's batch would save only the round trip between their statements and the insert. The cost: a PostgreSQL-only API (against FR-DB-03), handing inserted rows back out of the caller's data reader, and more result-shape cases for unique inserts (M4). Reopen after 1.0 if users measure that round trip as a bottleneck; it would then be an opt-in `KopiQueue.Npgsql` extension |
 | DQ-3 | Should "unknown kind" rows be discarded or left for other deployments? A rolling-deploy scenario needs a decision on the default |
 | DQ-4 | ~~Should KQ use the `river_client` and `river_client_queue` tables?~~ **Closed (spike 0.8):** they are not part of the pinned schema (main v8) |

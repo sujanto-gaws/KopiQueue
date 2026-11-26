@@ -236,3 +236,34 @@ static KopiQueue.JobKindRegistry.GetKind(System.Type! argsType) -> string!
 static KopiQueue.JobKindRegistry.GetKind<TArgs>() -> string!
 static KopiQueue.Serialization.SystemTextJsonArgsSerializer.Default.get -> KopiQueue.Serialization.SystemTextJsonArgsSerializer!
 static readonly KopiQueue.Migrations.MigrateOptions.DefaultLockTimeout -> System.TimeSpan
+KopiQueue.IWorker<TArgs>
+KopiQueue.IWorker<TArgs>.NextRetry(KopiQueue.Job<TArgs>! job) -> System.TimeSpan?
+KopiQueue.IWorker<TArgs>.Timeout(KopiQueue.Job<TArgs>! job) -> System.TimeSpan?
+KopiQueue.IWorker<TArgs>.WorkAsync(KopiQueue.Job<TArgs>! job, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+KopiQueue.Job<TArgs>
+KopiQueue.Job<TArgs>.Args.get -> TArgs
+KopiQueue.Job<TArgs>.Attempt.get -> int
+KopiQueue.Job<TArgs>.AttemptedAt.get -> System.DateTimeOffset?
+KopiQueue.Job<TArgs>.CreatedAt.get -> System.DateTimeOffset
+KopiQueue.Job<TArgs>.Errors.get -> System.Collections.Generic.IReadOnlyList<KopiQueue.AttemptError!>!
+KopiQueue.Job<TArgs>.Id.get -> long
+KopiQueue.Job<TArgs>.Job(KopiQueue.JobRow! row, TArgs args) -> void
+KopiQueue.Job<TArgs>.Kind.get -> string!
+KopiQueue.Job<TArgs>.MaxAttempts.get -> int
+KopiQueue.Job<TArgs>.Metadata.get -> System.Text.Json.Nodes.JsonObject!
+KopiQueue.Job<TArgs>.Priority.get -> int
+KopiQueue.Job<TArgs>.Queue.get -> string!
+KopiQueue.Job<TArgs>.Row.get -> KopiQueue.JobRow!
+KopiQueue.Job<TArgs>.ScheduledAt.get -> System.DateTimeOffset
+KopiQueue.Job<TArgs>.Tags.get -> System.Collections.Generic.IReadOnlyList<string!>!
+KopiQueue.Worker<TArgs>
+KopiQueue.Worker<TArgs>.Worker() -> void
+KopiQueue.WorkerRegistry
+KopiQueue.WorkerRegistry.Add<TArgs, TWorker>() -> KopiQueue.WorkerRegistry!
+KopiQueue.WorkerRegistry.Add<TArgs>(KopiQueue.IWorker<TArgs>! worker) -> KopiQueue.WorkerRegistry!
+KopiQueue.WorkerRegistry.Add<TWorker>() -> KopiQueue.WorkerRegistry!
+KopiQueue.WorkerRegistry.Kinds.get -> System.Collections.Generic.IReadOnlyCollection<string!>!
+KopiQueue.WorkerRegistry.WorkerRegistry() -> void
+abstract KopiQueue.Worker<TArgs>.WorkAsync(KopiQueue.Job<TArgs>! job, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+virtual KopiQueue.Worker<TArgs>.NextRetry(KopiQueue.Job<TArgs>! job) -> System.TimeSpan?
+virtual KopiQueue.Worker<TArgs>.Timeout(KopiQueue.Job<TArgs>! job) -> System.TimeSpan?
