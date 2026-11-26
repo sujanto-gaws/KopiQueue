@@ -1,4 +1,61 @@
 #nullable enable
+KopiQueue.AttemptError
+KopiQueue.AttemptError.<Clone>$() -> KopiQueue.AttemptError!
+KopiQueue.AttemptError.At.get -> System.DateTimeOffset
+KopiQueue.AttemptError.At.init -> void
+KopiQueue.AttemptError.Attempt.get -> int
+KopiQueue.AttemptError.Attempt.init -> void
+KopiQueue.AttemptError.AttemptError(System.DateTimeOffset At, int Attempt, string! Error, string? Trace) -> void
+KopiQueue.AttemptError.Deconstruct(out System.DateTimeOffset At, out int Attempt, out string! Error, out string? Trace) -> void
+KopiQueue.AttemptError.Equals(KopiQueue.AttemptError? other) -> bool
+KopiQueue.AttemptError.Error.get -> string!
+KopiQueue.AttemptError.Error.init -> void
+KopiQueue.AttemptError.Trace.get -> string?
+KopiQueue.AttemptError.Trace.init -> void
+KopiQueue.Drivers.DiagnosticIds
+KopiQueue.JobRow
+KopiQueue.JobRow.ArgsJson.get -> string!
+KopiQueue.JobRow.ArgsJson.init -> void
+KopiQueue.JobRow.Attempt.get -> int
+KopiQueue.JobRow.Attempt.init -> void
+KopiQueue.JobRow.AttemptedAt.get -> System.DateTimeOffset?
+KopiQueue.JobRow.AttemptedAt.init -> void
+KopiQueue.JobRow.AttemptedBy.get -> System.Collections.Generic.IReadOnlyList<string!>!
+KopiQueue.JobRow.AttemptedBy.init -> void
+KopiQueue.JobRow.CreatedAt.get -> System.DateTimeOffset
+KopiQueue.JobRow.CreatedAt.init -> void
+KopiQueue.JobRow.Errors.get -> System.Collections.Generic.IReadOnlyList<KopiQueue.AttemptError!>!
+KopiQueue.JobRow.Errors.init -> void
+KopiQueue.JobRow.FinalizedAt.get -> System.DateTimeOffset?
+KopiQueue.JobRow.FinalizedAt.init -> void
+KopiQueue.JobRow.Id.get -> long
+KopiQueue.JobRow.Id.init -> void
+KopiQueue.JobRow.JobRow() -> void
+KopiQueue.JobRow.Kind.get -> string!
+KopiQueue.JobRow.Kind.init -> void
+KopiQueue.JobRow.MaxAttempts.get -> int
+KopiQueue.JobRow.MaxAttempts.init -> void
+KopiQueue.JobRow.MetadataJson.get -> string!
+KopiQueue.JobRow.MetadataJson.init -> void
+KopiQueue.JobRow.Priority.get -> int
+KopiQueue.JobRow.Priority.init -> void
+KopiQueue.JobRow.Queue.get -> string!
+KopiQueue.JobRow.Queue.init -> void
+KopiQueue.JobRow.ScheduledAt.get -> System.DateTimeOffset
+KopiQueue.JobRow.ScheduledAt.init -> void
+KopiQueue.JobRow.State.get -> KopiQueue.JobState
+KopiQueue.JobRow.State.init -> void
+KopiQueue.JobRow.Tags.get -> System.Collections.Generic.IReadOnlyList<string!>!
+KopiQueue.JobRow.Tags.init -> void
+KopiQueue.JobState
+KopiQueue.JobState.Available = 0 -> KopiQueue.JobState
+KopiQueue.JobState.Cancelled = 1 -> KopiQueue.JobState
+KopiQueue.JobState.Completed = 2 -> KopiQueue.JobState
+KopiQueue.JobState.Discarded = 3 -> KopiQueue.JobState
+KopiQueue.JobState.Pending = 4 -> KopiQueue.JobState
+KopiQueue.JobState.Retryable = 5 -> KopiQueue.JobState
+KopiQueue.JobState.Running = 6 -> KopiQueue.JobState
+KopiQueue.JobState.Scheduled = 7 -> KopiQueue.JobState
 KopiQueue.KopiQueueMigrationException
 KopiQueue.KopiQueueMigrationException.KopiQueueMigrationException() -> void
 KopiQueue.KopiQueueMigrationException.KopiQueueMigrationException(string? message) -> void
@@ -48,4 +105,64 @@ KopiQueue.Migrations.MigrationVersion.IsApplied.get -> bool
 KopiQueue.Migrations.MigrationVersion.IsKnown.get -> bool
 KopiQueue.Migrations.MigrationVersion.Name.get -> string?
 KopiQueue.Migrations.MigrationVersion.Version.get -> int
+[KQ0001]KopiQueue.Drivers.DriverCapabilities
+[KQ0001]KopiQueue.Drivers.DriverCapabilities.BulkCopy.get -> bool
+[KQ0001]KopiQueue.Drivers.DriverCapabilities.BulkCopy.init -> void
+[KQ0001]KopiQueue.Drivers.DriverCapabilities.DriverCapabilities() -> void
+[KQ0001]KopiQueue.Drivers.DriverCapabilities.ListenNotify.get -> bool
+[KQ0001]KopiQueue.Drivers.DriverCapabilities.ListenNotify.init -> void
+[KQ0001]KopiQueue.Drivers.DriverCapabilities.MaxRowsPerStatement.get -> int?
+[KQ0001]KopiQueue.Drivers.DriverCapabilities.MaxRowsPerStatement.init -> void
+[KQ0001]KopiQueue.Drivers.IKopiDriver
+[KQ0001]KopiQueue.Drivers.IKopiDriver.Capabilities.get -> KopiQueue.Drivers.DriverCapabilities!
+[KQ0001]KopiQueue.Drivers.IKopiDriver.CreateMigrator(Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null) -> KopiQueue.Migrations.KopiMigrator!
+[KQ0001]KopiQueue.Drivers.IKopiDriver.GetExecutor() -> KopiQueue.Drivers.IKopiExecutor!
+[KQ0001]KopiQueue.Drivers.IKopiDriver.GetExecutor(System.Data.Common.DbTransaction! transaction) -> KopiQueue.Drivers.IKopiExecutor!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobGetByIdAsync(long id, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<KopiQueue.JobRow?>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobInsertManyAsync(System.Collections.Generic.IReadOnlyList<KopiQueue.Drivers.JobInsertParams!>! jobs, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.Drivers.JobInsertResult!>!>!
+[KQ0001]KopiQueue.Drivers.JobInsertParams
+[KQ0001]KopiQueue.Drivers.JobInsertParams.ArgsJson.get -> string!
+[KQ0001]KopiQueue.Drivers.JobInsertParams.ArgsJson.init -> void
+[KQ0001]KopiQueue.Drivers.JobInsertParams.JobInsertParams() -> void
+[KQ0001]KopiQueue.Drivers.JobInsertParams.Kind.get -> string!
+[KQ0001]KopiQueue.Drivers.JobInsertParams.Kind.init -> void
+[KQ0001]KopiQueue.Drivers.JobInsertParams.MaxAttempts.get -> int
+[KQ0001]KopiQueue.Drivers.JobInsertParams.MaxAttempts.init -> void
+[KQ0001]KopiQueue.Drivers.JobInsertParams.MetadataJson.get -> string!
+[KQ0001]KopiQueue.Drivers.JobInsertParams.MetadataJson.init -> void
+[KQ0001]KopiQueue.Drivers.JobInsertParams.Priority.get -> int
+[KQ0001]KopiQueue.Drivers.JobInsertParams.Priority.init -> void
+[KQ0001]KopiQueue.Drivers.JobInsertParams.Queue.get -> string!
+[KQ0001]KopiQueue.Drivers.JobInsertParams.Queue.init -> void
+[KQ0001]KopiQueue.Drivers.JobInsertParams.ScheduledAt.get -> System.DateTimeOffset?
+[KQ0001]KopiQueue.Drivers.JobInsertParams.ScheduledAt.init -> void
+[KQ0001]KopiQueue.Drivers.JobInsertParams.State.get -> KopiQueue.JobState
+[KQ0001]KopiQueue.Drivers.JobInsertParams.State.init -> void
+[KQ0001]KopiQueue.Drivers.JobInsertParams.Tags.get -> System.Collections.Generic.IReadOnlyList<string!>!
+[KQ0001]KopiQueue.Drivers.JobInsertParams.Tags.init -> void
+[KQ0001]KopiQueue.Drivers.JobInsertParams.UniqueKey.get -> byte[]?
+[KQ0001]KopiQueue.Drivers.JobInsertParams.UniqueKey.init -> void
+[KQ0001]KopiQueue.Drivers.JobInsertParams.UniqueStates.get -> byte?
+[KQ0001]KopiQueue.Drivers.JobInsertParams.UniqueStates.init -> void
+[KQ0001]KopiQueue.Drivers.JobInsertResult
+[KQ0001]KopiQueue.Drivers.JobInsertResult.<Clone>$() -> KopiQueue.Drivers.JobInsertResult!
+[KQ0001]KopiQueue.Drivers.JobInsertResult.Deconstruct(out KopiQueue.JobRow! Job, out bool UniqueSkippedAsDuplicate) -> void
+[KQ0001]KopiQueue.Drivers.JobInsertResult.Equals(KopiQueue.Drivers.JobInsertResult? other) -> bool
+[KQ0001]KopiQueue.Drivers.JobInsertResult.Job.get -> KopiQueue.JobRow!
+[KQ0001]KopiQueue.Drivers.JobInsertResult.Job.init -> void
+[KQ0001]KopiQueue.Drivers.JobInsertResult.JobInsertResult(KopiQueue.JobRow! Job, bool UniqueSkippedAsDuplicate) -> void
+[KQ0001]KopiQueue.Drivers.JobInsertResult.UniqueSkippedAsDuplicate.get -> bool
+[KQ0001]KopiQueue.Drivers.JobInsertResult.UniqueSkippedAsDuplicate.init -> void
+[KQ0001]override KopiQueue.Drivers.JobInsertResult.Equals(object? obj) -> bool
+[KQ0001]override KopiQueue.Drivers.JobInsertResult.GetHashCode() -> int
+[KQ0001]override KopiQueue.Drivers.JobInsertResult.ToString() -> string!
+[KQ0001]static KopiQueue.Drivers.JobInsertResult.operator !=(KopiQueue.Drivers.JobInsertResult? left, KopiQueue.Drivers.JobInsertResult? right) -> bool
+[KQ0001]static KopiQueue.Drivers.JobInsertResult.operator ==(KopiQueue.Drivers.JobInsertResult? left, KopiQueue.Drivers.JobInsertResult? right) -> bool
+const KopiQueue.Drivers.DiagnosticIds.ExperimentalDriver = "KQ0001" -> string!
+override KopiQueue.AttemptError.Equals(object? obj) -> bool
+override KopiQueue.AttemptError.GetHashCode() -> int
+override KopiQueue.AttemptError.ToString() -> string!
+static KopiQueue.AttemptError.operator !=(KopiQueue.AttemptError? left, KopiQueue.AttemptError? right) -> bool
+static KopiQueue.AttemptError.operator ==(KopiQueue.AttemptError? left, KopiQueue.AttemptError? right) -> bool
 static readonly KopiQueue.Migrations.MigrateOptions.DefaultLockTimeout -> System.TimeSpan

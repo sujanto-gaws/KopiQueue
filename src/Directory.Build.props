@@ -27,4 +27,9 @@
   <ItemGroup>
     <InternalsVisibleTo Include="$(AssemblyName).Tests" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <!-- KopiQueue's own projects may use the experimental driver API (KopiQueue.Drivers, KQ0001). -->
+    <NoWarn>$(NoWarn);KQ0001</NoWarn>
+  </PropertyGroup>
 </Project>

@@ -698,29 +698,49 @@ All options are validated at startup with `IValidateOptions<KopiQueueOptions>`. 
 
 ## 8. Driver abstraction
 
+The driver API lives in `KopiQueue.Drivers` and is `[Experimental("KQ0001")]` until 2.0: operations are added as features land. Applications create a driver (`new NpgsqlDriver(dataSource, options)`) and hand it to KopiQueue; they don't call it. The shape below is what plan task 1.4 built; later tasks add operations in the same style.
+
 ```csharp
 [Experimental("KQ0001")]
 public interface IKopiDriver
 {
-    IKopiExecutor GetExecutor();                         // pooled connection
-    IKopiExecutor GetExecutor(DbTransaction tx);         // caller's transaction
-    IKopiListener? CreateListener();                      // null ⇒ poll-only (SQL Server)
-    DriverCapabilities Capabilities { get; }              // ListenNotify, ReturningBulkInsert, NativeJson, ...
+    DriverCapabilities Capabilities { get; }
+    IKopiExecutor GetExecutor();                         // a pooled connection per operation
+    IKopiExecutor GetExecutor(DbTransaction tx);         // the caller's transaction (FR-INS-02); the caller owns it
+    KopiMigrator CreateMigrator(ILoggerFactory? loggerFactory = null);
+    // M2: IKopiListener? CreateListener();               // null => poll-only (SQL Server, FR-DB-04)
 }
 
 public interface IKopiExecutor   // typed operations; no SQL leaks to the core
 {
-    Task<JobRow> JobInsertAsync(JobInsertParams p, CancellationToken ct);
-    Task<IReadOnlyList<JobRow>> JobInsertManyAsync(IReadOnlyList<JobInsertParams> p, CancellationToken ct);
-    Task<long> JobInsertCopyAsync(IReadOnlyList<JobInsertParams> p, CancellationToken ct);
-    Task<IReadOnlyList<JobRow>> JobFetchAsync(JobFetchParams p, CancellationToken ct);
-    Task<IReadOnlyList<JobRow>> JobSetStateManyAsync(JobSetStateParams p, CancellationToken ct);
-    Task<int> JobScheduleAsync(JobScheduleParams p, CancellationToken ct);
-    Task<bool> LeaderAttemptElectAsync(LeaderElectParams p, CancellationToken ct);
-    Task NotifyAsync(string channel, IReadOnlyList<string> payloads, CancellationToken ct);
-    // ... ~35 operations in total, mirroring the needs of the components above
+    Task<IReadOnlyList<JobInsertResult>> JobInsertManyAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken ct);
+    Task<JobRow?> JobGetByIdAsync(long id, CancellationToken ct);
+    // Later: JobInsertFastAsync (1.7), JobFetchAsync, JobSetStateManyAsync, JobScheduleAsync, LeaderAttemptElectAsync,
+    // NotifyAsync, ... about 35 operations in total, mirroring the needs of the components above
 }
+
+public sealed class DriverCapabilities { bool ListenNotify; bool BulkCopy; int? MaxRowsPerStatement; }
+public sealed record JobInsertResult(JobRow Job, bool UniqueSkippedAsDuplicate);
 ```
+
+- `JobRow` (namespace `KopiQueue`) is the stored job: `JobState`, args and metadata as JSON text, tags, `AttemptedBy`, `Errors` as typed `AttemptError` entries, and UTC `DateTimeOffset` times. Nothing in it is PostgreSQL-specific.
+- A single insert is a batch of one, so there is no separate `JobInsertAsync`.
+- `JobInsertManyAsync` returns the rows in input order. PostgreSQL inserts them with one `INSERT ... SELECT FROM unnest(...)` statement, with every column as an array parameter.
+- A completed caller transaction is not checked up front: Npgsql 11 keeps `NpgsqlTransaction.Connection` set after commit. The executor's next operation throws `InvalidOperationException` instead.
+
+**Interface review against the SQL Server spikes (plan task 1.4).** Each finding of spikes [0.9](spikes/0.9-sqlserver-fetch-and-locking.md) and [0.10](spikes/0.10-sqlserver-unique-bulk-poll.md) that reaches the interface, and how the interface absorbs it:
+
+| Finding | Effect on the interface |
+|---------|-------------------------|
+| No statement may touch more than 2,000 rows (0.9 D4); batched inserts use ≤ 1,000 rows per statement (0.10 D3) | `DriverCapabilities.MaxRowsPerStatement`: the core splits batches before calling the executor. PostgreSQL reports `null`, SQL Server 1,000 |
+| `SqlBulkCopy` dropped; the fast path uses batched inserts (0.10 D3, ADR-014) | `DriverCapabilities.BulkCopy`: `true` for PostgreSQL (`COPY`), `false` for SQL Server, whose fast path is the batched insert |
+| No LISTEN/NOTIFY; poll-only across processes (FR-DB-04) | `DriverCapabilities.ListenNotify`, and `CreateListener` returning `null` when it arrives in M2 |
+| A failed statement must not detect duplicates, because with `XACT_ABORT ON` it dooms the caller's transaction; unique inserts return the existing job (0.10 D1, D2) | Inserts return `JobInsertResult` with `UniqueSkippedAsDuplicate` instead of throwing on a duplicate |
+| Unique inserts take a transaction-owned `sp_getapplock`; without a caller transaction the batch opens its own (0.10 D1) | Driver-internal: both `GetExecutor` overloads keep the same contract, so the core never manages transactions for the driver |
+| READPAST statements start with `SET TRANSACTION ISOLATION LEVEL READ COMMITTED` because SNAPSHOT leaks through the pool (0.9 D2), and the connection string gets `Application Name=KopiQueue` (0.9 D3) | Driver-internal: no isolation level or connection options in the interface. The caller's transaction can use any isolation level |
+| JSON and arrays are `nvarchar(max)` on SQL Server (§4.3) | `JobRow` carries JSON as text and arrays as lists, with errors parsed into `AttemptError`, so neither `jsonb[]` nor `nvarchar` shows through |
+
+The interface was kept, with these changes from the original sketch: `JobInsertResult` replaces bare `JobRow` results; `JobInsertAsync` was dropped (a batch of one); the `ReturningBulkInsert` and `NativeJson` capabilities became `BulkCopy` and `MaxRowsPerStatement`; `CreateMigrator` was added so a driver is the single entry point.
 
 - SQL is kept as embedded `.sql` resources in the driver. Each is prepared once per connection (Npgsql auto-prepare) and checked by tests run against a real Postgres.
 - The schema name and table prefix are substituted into the SQL at startup, after validation (NFR-SEC-01).
@@ -737,7 +757,7 @@ public interface IKopiExecutor   // typed operations; no SQL leaks to the core
 - The migration table is created by version 1 of the `main` line, in River's original shape, and replaced by the `(line, version)` shape in version 5 (§4.1.1). The driver handles both, so `main` must reach version 5 before any other line is applied.
 - A failed step is wrapped in `KopiQueueMigrationException` with the database error as the inner exception. Earlier steps stay applied.
 
-**Migrator API (plan task 1.3, FR-MIG-02).** `KopiMigrator` (namespace `KopiQueue.Migrations`) manages one line. Driver packages create it, for example `NpgsqlKopiMigrator.Create(dataSource, new NpgsqlMigratorOptions { Schema = "queue" }, loggerFactory)`, which returns the `main` line.
+**Migrator API (plan task 1.3, FR-MIG-02).** `KopiMigrator` (namespace `KopiQueue.Migrations`) manages one line. Drivers create it, for example `new NpgsqlDriver(dataSource, new NpgsqlDriverOptions { Schema = "queue" }).CreateMigrator(loggerFactory)`, which returns the `main` line.
 
 ```csharp
 public sealed class KopiMigrator
@@ -753,7 +773,7 @@ public sealed class KopiMigrator
 
 - Only `MigrateAsync` takes the migration lock. `GetVersionsAsync` and `ValidateAsync` only read, so health checks can call them while a migration runs.
 - `ValidateAsync` reports a database newer than the library (`IsDatabaseNewer`) separately from a current one. Hosting decides what to do with it: migrate-on-startup (FR-MIG-07) and health checks come with `KopiQueue.Hosting`.
-- The driver contract (`IMigrationDriver`) stays internal until the driver interface review in task 1.4.
+- The migration driver contract (`IMigrationDriver`) stays internal: a driver exposes migrations through `IKopiDriver.CreateMigrator`, so third-party drivers need no access to the engine.
 
 ### 8.1 SQL Server driver: algorithm variants
 
