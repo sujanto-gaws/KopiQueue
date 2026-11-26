@@ -40,6 +40,10 @@ If a variable is unset, the fixture starts a Testcontainers container. Override 
 - Changes to SQL, the public API or concurrency code need **two** approving reviews. SQL changes need a reviewer who knows that database.
 - The build treats warnings as errors. Fix analyzer findings rather than suppressing them. If a suppression is truly needed, add a justification.
 
+## Releases
+
+Maintainers release by pushing a `vX.Y.Z[-pre.N]` tag on `main`. The `publish` workflow runs the full CI and then pushes the tested packages to nuget.org. The process and the one-time setup are in [docs/03-plan.md §6.1](docs/03-plan.md#61-publishing-to-nuget).
+
 ## Design changes
 
 Requirement changes go through a PR against `docs/01-requirements.md`. Architectural decisions are recorded as ADRs in `docs/02-design.md` §12.

@@ -358,7 +358,7 @@ They are **initial targets to be validated in milestone M6**.
 | ID | Question | Proposed answer |
 |----|----------|-----------------|
 | OQ-1 | Should KQ be **schema-compatible with River**? | **Decided 2026-11-26: yes** (PostgreSQL driver), pinned to one River schema version. Default table prefix is `river_` on PostgreSQL and `kopi_` on SQL Server |
-| OQ-2 | Product and package name: "KopiQueue"? NuGet ID prefix `KopiQueue.*` must be reserved | Reserve the `KopiQueue` prefix on nuget.org |
+| OQ-2 | Product and package name: "KopiQueue"? NuGet ID prefix `KopiQueue.*` | **Decided 2026-11-26:** name `KopiQueue`. The first release claims all 8 package IDs. Apply for the `KopiQueue.*` prefix reservation once public packages exist (plan §6.1) |
 | OQ-3 | Licence | **Decided 2026-11-26: MIT** |
 | OQ-4 | Should a SQLite driver for local dev and tests be in 1.x? | Post-1.0 (P2) |
 | OQ-5 | Dashboard: rely on River UI (PostgreSQL only, enabled by OQ-1) or build a Blazor UI that also covers SQL Server? | Validate River UI first, decide after 1.0. SQL Server users need our own UI either way |

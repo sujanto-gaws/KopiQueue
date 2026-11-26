@@ -1,0 +1,90 @@
+name: publish
+
+# Pushing a version tag (v1.2.3 or v1.2.3-alpha.1) on main runs the full CI, then publishes the
+# exact packages CI built and tested to nuget.org, and creates a GitHub release.
+# Setup and the release checklist: docs/03-plan.md §6.1.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: nuget.org + GitHub release
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: nuget # add required reviewers in Settings → Environments to gate every release
+    permissions:
+      contents: write # create the GitHub release
+      id-token: write # NuGet trusted publishing (OIDC)
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Tag must point to a commit on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main ||
+            { echo "::error::$GITHUB_REF_NAME is not on main. Releases are tagged on main only."; exit 1; }
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: artifacts/packages
+
+      - name: Packages must match the tag
+        working-directory: artifacts/packages
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          expected=(KopiQueue KopiQueue.Cli KopiQueue.EntityFrameworkCore KopiQueue.Hosting
+                    KopiQueue.Npgsql KopiQueue.OpenTelemetry KopiQueue.SqlServer KopiQueue.Testing)
+          ls -1
+          for id in "${expected[@]}"; do
+            [ -f "$id.$version.nupkg" ] || { echo "::error::missing $id.$version.nupkg (MinVer version differs from the tag?)"; exit 1; }
+          done
+          count=$(ls -1 *.nupkg | wc -l)
+          [ "$count" -eq "${#expected[@]}" ] || { echo "::error::expected ${#expected[@]} packages, found $count"; exit 1; }
+
+      # Preferred: trusted publishing, no long-lived key. Set the repository variable NUGET_USER to the
+      # nuget.org profile name that owns the policy (workflow file: publish.yml, environment: nuget).
+      - name: NuGet login (trusted publishing)
+        id: login
+        if: vars.NUGET_USER != ''
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      # Fallback: the environment secret NUGET_API_KEY (scoped to the glob KopiQueue*, push only).
+      - name: Push to nuget.org
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY || secrets.NUGET_API_KEY }}
+        run: |
+          [ -n "$NUGET_API_KEY" ] || { echo "::error::Set the variable NUGET_USER (trusted publishing) or the secret NUGET_API_KEY."; exit 1; }
+          # Symbol packages (.snupkg) next to each .nupkg are pushed automatically.
+          dotnet nuget push "artifacts/packages/*.nupkg" --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=(--verify-tag --generate-notes --title "$GITHUB_REF_NAME")
+          [[ "$GITHUB_REF_NAME" == *-* ]] && flags+=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" artifacts/packages/*.nupkg "${flags[@]}"

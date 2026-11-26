@@ -37,7 +37,7 @@ The **API freeze waits until after M5**, so that lessons from SQL Server can sti
 | OQ-1 River schema compatibility | **Decided 2026-11-26** | Yes, on PostgreSQL, pinned to one River schema version |
 | OQ-3 Licence | **Decided 2026-11-26** | MIT |
 | SQL Server support | **Decided 2026-11-26** | In 1.0 scope (FR-DB-*), minimum SQL Server 2019 (OQ-7, proposed) |
-| OQ-2 Name and reserve the `KopiQueue.*` NuGet prefix | Open (maintainer, week 1) | KopiQueue |
+| OQ-2 Name and NuGet prefix | **Decided 2026-11-26** | Name `KopiQueue`. Publish first (the first release claims all 8 IDs), then apply for the `KopiQueue.*` prefix reservation once public packages exist (§6.1) |
 | Clean-room protocol (ADR-008) | M0 task 0.6 | A written policy in CONTRIBUTING.md |
 | OQ-6 Minimum Postgres version | Proposed | 14 |
 
@@ -240,8 +240,39 @@ Adding SQL Server costs about 44 ed and 4 calendar weeks compared with plan v0.1
 | Definition of done | Code, tests (conformance cases for any new executor operation, **green on both drivers** once M5 is done), XML docs, a CHANGELOG entry, requirement IDs in the PR description |
 | Quality gates | Analyzers clean, `PublicAPI.Unshipped.txt` updated, coverage does not drop, no new AOT/trim warnings |
 | Versioning | SemVer from git tags (MinVer). Schema versions are tracked per driver, with a documented mapping to package versions |
-| Releases | Tag → GitHub Actions packs, signs and pushes to NuGet, then creates a GitHub release |
+| Releases | Tag on `main` → full CI → the tested packages are pushed to NuGet (trusted publishing), then a GitHub release is created. See §6.1. No author signing: nuget.org adds its repository signature |
 | Supply chain | Central package management, Dependabot, vulnerable-package check, a CycloneDX SBOM per release |
+
+### 6.1 Publishing to NuGet
+
+Releases are published by [`.github/workflows/publish.yml`](../.github/workflows/publish.yml):
+
+1. **Trigger:** a tag `vX.Y.Z` or `vX.Y.Z-pre.N` pushed on a commit on `main`. MinVer sets the package version from the tag.
+2. **Checks:** the workflow runs the full CI ([`ci.yml`](../.github/workflows/ci.yml): build, pack, PostgreSQL 14–18, SQL Server 2019–2025) as a reusable workflow. It then publishes **the exact `.nupkg` files CI built and tested**; nothing is rebuilt. Two guards run before the push:
+   - the tag must be on `main`;
+   - all 8 package IDs must exist at the tag's version.
+3. **Push:** to nuget.org, with symbol packages, using `--skip-duplicate`, so a re-run after a partial failure is safe. Then a GitHub release is created, with generated notes and the packages attached. A tag containing `-` is marked as a prerelease.
+4. **Gate:** the job runs in the GitHub environment `nuget`. Required reviewers on that environment turn every release into a one-click approval.
+
+**Credentials.** No long-lived key is needed once trusted publishing works:
+
+| Option | Setup |
+|--------|-------|
+| **Trusted publishing** (preferred) | On nuget.org, open your profile, then *Trusted Publishing*, and add a policy: owner `sujanto-gaws`, repository `KopiQueue`, workflow file `publish.yml`, environment `nuget`. In GitHub, set the **repository variable** `NUGET_USER` to the nuget.org profile name (not the email address). The workflow then exchanges its OIDC token for an API key that is valid for 1 hour |
+| API key (fallback) | Create a nuget.org API key with only *Push new packages and package versions* rights, glob `KopiQueue*`, and the shortest expiry that is practical. Store it as the **environment secret** `NUGET_API_KEY` on `nuget`. Used only when `NUGET_USER` is not set. Delete it once trusted publishing has succeeded |
+
+nuget.org's documentation does not say whether a trusted publishing policy covers the *first* push of a brand-new package ID. If the first release fails at the push step, use the API-key fallback for that one release.
+
+**Release checklist**
+
+1. `main` is green. `CHANGELOG.md` is updated, and `PublicAPI.Unshipped.txt` entries move to `Shipped` for stable releases.
+2. Tag and push: `git tag v0.1.0-alpha.1 && git push origin v0.1.0-alpha.1`.
+3. If the environment has reviewers, approve the `publish` run.
+4. Check the packages on nuget.org. Validation and indexing take a few minutes.
+
+**Versions are permanent.** A published version cannot be deleted, only unlisted, and its number can never be reused. A broken release is fixed by publishing the next version.
+
+**Package names and the prefix (OQ-2).** The first release claims all 8 IDs: `KopiQueue`, `.Npgsql`, `.SqlServer`, `.Hosting`, `.EntityFrameworkCore`, `.OpenTelemetry`, `.Testing` and `.Cli`. Once there are public packages, which are the evidence nuget.org's criteria ask for, apply for the `KopiQueue.*` prefix reservation (email account@nuget.org) to block look-alike IDs and get the verified mark. The planned first release is `0.1.0-alpha.1` at the end of M1. An earlier placeholder prerelease is only worth it if a squatter appears.
 
 ## 7. Test strategy
 
@@ -289,8 +320,12 @@ Adding SQL Server costs about 44 ed and 4 calendar weeks compared with plan v0.1
 
 ## 10. Immediate next steps
 
-1. Reserve the `KopiQueue` NuGet prefix (OQ-2).
-2. ~~M0 tasks 0.1–0.6~~: **done 2026-11-26.** Solution skeleton (8 src projects, `net10.0;net11.0`), central packages, MinVer, PublicApiAnalyzers, repo-local `nuget.config`, CI workflow, DB fixtures, licence and contributor docs. Tests run on Microsoft.Testing.Platform (xunit.v3 4.x requires it). The CI workflow has not run yet: there is no GitHub remote.
+1. ~~Reserve the `KopiQueue` NuGet prefix~~ → **publish first, reserve later** (OQ-2, §6.1). Publish workflow added. Before the first release:
+   - create the nuget.org account or organization;
+   - add the trusted publishing policy and the `NUGET_USER` variable;
+   - create the `nuget` environment.
+   First release: `v0.1.0-alpha.1` at the end of M1.
+2. ~~M0 tasks 0.1–0.6~~: **done 2026-11-26.** Solution skeleton (8 src projects, `net10.0;net11.0`), central packages, MinVer, PublicApiAnalyzers, repo-local `nuget.config`, CI workflow, DB fixtures, licence and contributor docs. Tests run on Microsoft.Testing.Platform (xunit.v3 4.x requires it). CI first ran green on 2026-11-26 (github.com/sujanto-gaws/KopiQueue).
 3. ~~Spikes 0.9–0.10 (SQL Server)~~: **done 2026-11-26** ([0.9](spikes/0.9-sqlserver-fetch-and-locking.md), [0.10](spikes/0.10-sqlserver-unique-bulk-poll.md)). Design updated (§8.1, ADR-011 revised, ADR-014), NFR-PERF-07 set.
 4. ~~Spikes 0.7–0.8 (PostgreSQL)~~: **done 2026-11-26** ([0.7](spikes/0.7-npgsql-listen-notify.md), [0.8](spikes/0.8-river-schema-and-unique-keys.md)). River schema pinned at `main` v8 (v0.51.2); unique-key algorithm reconstructed and verified on 22 golden vectors; notifier rules (non-pooled, Keepalive, resync). Design updated (§3, §4.1, §4.3, §5.6, §7, ADR-002, DQ-4 closed, DQ-8 new). **PgBouncer not run** (no Docker): moved to task 2.11.
-5. **M0 is complete** apart from the PgBouncer check (moved to M2) and a first CI run, which needs a GitHub remote. Next: M1 (migrations, Npgsql driver, insert API).
+5. **M0 is complete**; the PgBouncer check moved to M2. Next: M1 (migrations, Npgsql driver, insert API).

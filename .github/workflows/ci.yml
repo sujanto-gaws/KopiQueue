@@ -3,8 +3,8 @@ name: ci
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
+  workflow_call: # publish.yml runs the full CI for a version tag, then publishes its packages
 
 permissions:
   contents: read
