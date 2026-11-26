@@ -14,8 +14,10 @@ internal sealed class NpgsqlStatements
 {
     private const string ResourceRoot = "kopi-sql/";
 
-    public NpgsqlStatements(string schemaQualifier, string tablePrefix)
+    public NpgsqlStatements(string? schema, string schemaQualifier, string tablePrefix)
     {
+        Schema = schema;
+
         string Load(string name)
         {
             using var stream = typeof(NpgsqlStatements).Assembly.GetManifestResourceStream(ResourceRoot + name)
@@ -26,11 +28,17 @@ internal sealed class NpgsqlStatements
 
         JobInsertMany = Load("job_insert_many.sql");
         JobGetById = Load("job_get_by_id.sql");
+        JobInsertNotify = Load("job_insert_notify.sql");
     }
+
+    /// <summary>The configured schema, unquoted, or <c>null</c> for the connection's current schema.</summary>
+    public string? Schema { get; }
 
     public string JobInsertMany { get; }
 
     public string JobGetById { get; }
+
+    public string JobInsertNotify { get; }
 }
 
 /// <summary>
@@ -82,6 +90,15 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
             uniqueStates[i] = job.UniqueStates;
         }
 
+        // Notify each queue that received available jobs, once (design §4.3). Scheduled jobs are announced by the scheduler.
+        var notifyQueues = jobs.Where(j => j.State == JobState.Available).Select(j => j.Queue).Distinct(StringComparer.Ordinal).ToArray();
+        var notify = notifyQueues.Length == 0
+            ? null
+            : new NpgsqlBatchCommand(statements.JobInsertNotify)
+            {
+                Parameters = { new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)statements.Schema ?? DBNull.Value }, Array(NpgsqlDbType.Text, notifyQueues) },
+            };
+
         var rows = await QueryAsync(
             statements.JobInsertMany,
             [
@@ -90,6 +107,7 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
                 Array(NpgsqlDbType.TimestampTz, scheduledAt), Array(NpgsqlDbType.Text, states), Array(NpgsqlDbType.Text, tags),
                 Array(NpgsqlDbType.Bytea, uniqueKeys), Array(NpgsqlDbType.Integer, uniqueStates),
             ],
+            notify,
             cancellationToken).ConfigureAwait(false);
 
         // Ids ascend in input order (the statement inserts ordered by ordinal); RETURNING order is not guaranteed.
@@ -98,7 +116,7 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
 
     public async Task<JobRow?> JobGetByIdAsync(long id, CancellationToken cancellationToken)
     {
-        var rows = await QueryAsync(statements.JobGetById, [new NpgsqlParameter { Value = id }], cancellationToken).ConfigureAwait(false);
+        var rows = await QueryAsync(statements.JobGetById, [new NpgsqlParameter { Value = id }], then: null, cancellationToken).ConfigureAwait(false);
         return rows.Count == 0 ? null : rows[0];
     }
 
@@ -118,7 +136,11 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
         return string.Join(',', tags);
     }
 
-    private async Task<List<JobRow>> QueryAsync(string sql, NpgsqlParameter[] parameters, CancellationToken cancellationToken)
+    /// <summary>
+    /// Runs <paramref name="sql"/>, which returns job rows, and then <paramref name="then"/> if given, as one batch. Without a
+    /// caller transaction PostgreSQL runs a batch as one implicit transaction, so the two commit or fail together.
+    /// </summary>
+    private async Task<List<JobRow>> QueryAsync(string sql, NpgsqlParameter[] parameters, NpgsqlBatchCommand? then, CancellationToken cancellationToken)
     {
         var connection = transaction?.Connection;
         var ownConnection = connection is null;
@@ -129,17 +151,29 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
 
         try
         {
-            var command = new NpgsqlCommand(sql, connection, transaction);
-            await using (command.ConfigureAwait(false))
+            var batch = new NpgsqlBatch(connection, transaction);
+            await using (batch.ConfigureAwait(false))
             {
-                command.Parameters.AddRange(parameters);
-                var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                var query = new NpgsqlBatchCommand(sql);
+                query.Parameters.AddRange(parameters);
+                batch.BatchCommands.Add(query);
+                if (then is not null)
+                {
+                    batch.BatchCommands.Add(then);
+                }
+
+                var reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
                 await using (reader.ConfigureAwait(false))
                 {
                     var rows = new List<JobRow>();
                     while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                     {
                         rows.Add(ReadJob(reader));
+                    }
+
+                    // Drain the follow-up command so that its errors surface here.
+                    while (await reader.NextResultAsync(cancellationToken).ConfigureAwait(false))
+                    {
                     }
 
                     return rows;
