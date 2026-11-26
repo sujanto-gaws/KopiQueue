@@ -134,7 +134,8 @@ It stops them in reverse order. The completer is stopped last among the executio
   - An error retries after the worker's `NextRetry(job)` (ignored if it throws or is negative), else the default backoff (§5.4), until `attempt ≥ max_attempts` discards the job. A retry due within the scheduler interval (default 5 s) makes the job `available` at once rather than `retryable`, so short retries are not held up by the scheduler.
 - **Unknown kinds** follow DQ-3: an error like any other.
 - **Job context** (FR-EXE-07): `Job<TArgs>` carries the ID, attempt, metadata and the rest of the row. Reaching the client from a worker comes with the client lifecycle and DI registration (tasks 2.7, 2.8).
-- `JobControl.Cancel`/`Snooze` and the public `IRetryPolicy` arrive in task 2.5; until then the backoff is internal.
+- **Job control** (task 2.5, FR-ERR-03, FR-ERR-04): `throw JobControl.Cancel(reason)` finalises the job as `cancelled` with the reason in its errors, whatever attempts are left. `throw JobControl.Snooze(delay)` reschedules it without using an attempt: `attempt − 1`, `metadata.snoozes` plus one (read leniently, as River), no error, and `available` at once when due within the scheduler interval. Both are found when wrapped, for example in an `AggregateException` or as an inner exception.
+- **Retry policy** (task 2.5, FR-ERR-01, FR-ERR-02): the public `IRetryPolicy`, with `DefaultRetryPolicy` (`n^4` seconds ±10% for the `n`th error, `MaxDelay` default 24 h). The worker's `NextRetry` wins; a policy that throws, or returns a time in the past, falls back to the default policy, as in River. The client option that sets it arrives with the client options in task 2.7.
 
 ## 4. Data model
 

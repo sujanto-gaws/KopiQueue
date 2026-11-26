@@ -301,3 +301,21 @@ virtual KopiQueue.Worker<TArgs>.Timeout(KopiQueue.Job<TArgs>! job) -> System.Tim
 [KQ0001]KopiQueue.Drivers.JobGetAvailableParams.MaxAttemptedBy.init -> void
 [KQ0001]KopiQueue.Drivers.JobGetAvailableParams.Queue.get -> string!
 [KQ0001]KopiQueue.Drivers.JobGetAvailableParams.Queue.init -> void
+KopiQueue.DefaultRetryPolicy
+KopiQueue.DefaultRetryPolicy.DefaultRetryPolicy() -> void
+KopiQueue.DefaultRetryPolicy.MaxDelay.get -> System.TimeSpan
+KopiQueue.DefaultRetryPolicy.MaxDelay.init -> void
+KopiQueue.DefaultRetryPolicy.NextRetry(KopiQueue.JobRow! job, System.DateTimeOffset now) -> System.DateTimeOffset
+KopiQueue.IRetryPolicy
+KopiQueue.IRetryPolicy.NextRetry(KopiQueue.JobRow! job, System.DateTimeOffset now) -> System.DateTimeOffset
+KopiQueue.JobCancelException
+KopiQueue.JobCancelException.JobCancelException(string! reason) -> void
+KopiQueue.JobCancelException.JobCancelException(string! reason, System.Exception? innerException) -> void
+KopiQueue.JobCancelException.Reason.get -> string!
+KopiQueue.JobControl
+KopiQueue.JobSnoozeException
+KopiQueue.JobSnoozeException.Delay.get -> System.TimeSpan
+KopiQueue.JobSnoozeException.JobSnoozeException(System.TimeSpan delay) -> void
+static KopiQueue.DefaultRetryPolicy.Instance.get -> KopiQueue.DefaultRetryPolicy!
+static KopiQueue.JobControl.Cancel(string! reason) -> KopiQueue.JobCancelException!
+static KopiQueue.JobControl.Snooze(System.TimeSpan delay) -> KopiQueue.JobSnoozeException!

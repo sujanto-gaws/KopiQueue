@@ -110,9 +110,10 @@ public sealed class JobExecutorTests
         throwNext = true;
         await executor.ExecuteAsync(Row("ping", attempt: 1), Ct);
 
-        Assert.Equal(
-            [TimeSpan.FromMinutes(7), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)],
-            completer.Completions.Select(c => c.ScheduledAt!.Value - time.GetUtcNow()));
+        var delays = completer.Completions.Select(c => c.ScheduledAt!.Value - time.GetUtcNow()).ToArray();
+        Assert.Equal(TimeSpan.FromMinutes(7), delays[0]);
+        Assert.InRange(delays[1], TimeSpan.FromSeconds(0.9), TimeSpan.FromSeconds(1.1)); // the default policy
+        Assert.Equal(TimeSpan.FromSeconds(1), delays[2]); // the client's policy
     }
 
     [Fact]
@@ -300,14 +301,131 @@ public sealed class JobExecutorTests
     [InlineData(10, 10_000)]
     public void The_default_backoff_is_the_error_count_to_the_fourth_seconds_with_ten_percent_jitter(int errorCount, double seconds)
     {
-        Assert.Equal(seconds, RetryBackoff.Delay(errorCount, 0.5).TotalSeconds, 6);
-        Assert.Equal(seconds * 0.9, RetryBackoff.Delay(errorCount, 0).TotalSeconds, 6);
-        Assert.InRange(RetryBackoff.Delay(errorCount, 0.999999).TotalSeconds, seconds * 1.0999, seconds * 1.1);
+        var policy = new DefaultRetryPolicy();
+        Assert.Equal(seconds, policy.Delay(errorCount, 0.5).TotalSeconds, 6);
+        Assert.Equal(seconds * 0.9, policy.Delay(errorCount, 0).TotalSeconds, 6);
+        Assert.InRange(policy.Delay(errorCount, 0.999999).TotalSeconds, seconds * 1.0999, seconds * 1.1);
     }
 
     [Fact]
-    public void The_default_backoff_is_capped_at_24_hours() =>
-        Assert.Equal([TimeSpan.FromHours(24), TimeSpan.FromHours(24)], new[] { RetryBackoff.Delay(25, 0), RetryBackoff.Delay(1000, 0.9) });
+    public void The_default_backoff_is_capped_at_24_hours_or_the_configured_maximum()
+    {
+        var policy = new DefaultRetryPolicy();
+        Assert.Equal([TimeSpan.FromHours(24), TimeSpan.FromHours(24)], new[] { policy.Delay(25, 0), policy.Delay(1000, 0.9) });
+        Assert.Equal(TimeSpan.FromMinutes(1), new DefaultRetryPolicy { MaxDelay = TimeSpan.FromMinutes(1) }.Delay(5, 0.5));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new DefaultRetryPolicy { MaxDelay = TimeSpan.Zero });
+    }
+
+    [Fact]
+    public void The_default_policy_counts_the_jobs_errors_including_this_one()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var policy = new DefaultRetryPolicy(() => 0.5);
+
+        Assert.Equal(now.AddSeconds(81), policy.NextRetry(Row("ping", errors: 2), now));
+    }
+
+    [Fact]
+    public async Task Cancel_finalises_the_job_as_cancelled_with_its_reason_whatever_attempts_are_left()
+    {
+        var (completer, time) = (new RecordingCompleter(), new FakeTimeProvider());
+        var startedAt = time.GetUtcNow();
+        var executor = Executor(new WorkerRegistry().Add(new LambdaWorker<PingArgs>(async (_, _) =>
+        {
+            await Task.Yield();
+            time.Advance(TimeSpan.FromSeconds(1));
+            throw JobControl.Cancel("customer deleted");
+        })), completer, time);
+
+        await executor.ExecuteAsync(Row("ping", attempt: 1, maxAttempts: 25), Ct);
+
+        var completion = Assert.Single(completer.Completions);
+        Assert.Equal((JobState.Cancelled, time.GetUtcNow(), (DateTimeOffset?)null), (completion.State, completion.FinalizedAt!.Value, completion.ScheduledAt));
+        Assert.Equal(new AttemptError(startedAt, 1, "customer deleted", null), completion.Error);
+        Assert.Null(completion.Attempt);
+    }
+
+    [Theory]
+    [InlineData(0, JobState.Available)]
+    [InlineData(5, JobState.Available)]
+    [InlineData(6, JobState.Scheduled)]
+    [InlineData(300, JobState.Scheduled)]
+    public async Task Snooze_reschedules_without_using_an_attempt_and_counts_the_snoozes(int seconds, JobState state)
+    {
+        var (completer, time) = (new RecordingCompleter(), new FakeTimeProvider());
+        var executor = Executor(Throwing(JobControl.Snooze(TimeSpan.FromSeconds(seconds))), completer, time);
+
+        await executor.ExecuteAsync(Row("ping", attempt: 3, maxAttempts: 3, metadata: """{"snoozes": 2, "tenant": "a"}"""), Ct);
+
+        var completion = Assert.Single(completer.Completions);
+        Assert.Equal(
+            (state, (int?)2, time.GetUtcNow() + TimeSpan.FromSeconds(seconds), "{\"snoozes\":3}"),
+            (completion.State, completion.Attempt, completion.ScheduledAt!.Value, completion.MetadataUpdates));
+        Assert.Null(completion.Error);
+        Assert.Null(completion.FinalizedAt);
+    }
+
+    [Theory]
+    [InlineData("{}", 1)]
+    [InlineData("""{"snoozes": 4}""", 5)]
+    [InlineData("""{"snoozes": 4.7}""", 5)]
+    [InlineData("""{"snoozes": "7"}""", 8)]
+    [InlineData("""{"snoozes": true}""", 1)]
+    [InlineData("[]", 1)]
+    [InlineData("not json", 1)]
+    public void The_snooze_count_is_read_leniently(string metadata, long next) =>
+        Assert.Equal(next, JobExecutor.NextSnoozeCount(metadata));
+
+    [Fact]
+    public async Task Cancel_and_snooze_are_recognised_when_wrapped()
+    {
+        var (completer, time) = (new RecordingCompleter(), new FakeTimeProvider());
+        var throws = new Queue<Exception>(
+        [
+            new AggregateException(JobControl.Cancel("inside an aggregate")),
+            new InvalidOperationException("outer", JobControl.Snooze(TimeSpan.FromMinutes(1))),
+            new AggregateException(new InvalidOperationException("first"), JobControl.Cancel("second of two")),
+        ]);
+        var executor = Executor(new WorkerRegistry().Add(new LambdaWorker<PingArgs>((_, _) => Throw(throws.Dequeue()))), completer, time);
+
+        for (var i = 0; i < 3; i++)
+        {
+            await executor.ExecuteAsync(Row("ping"), Ct);
+        }
+
+        Assert.Equal([JobState.Cancelled, JobState.Scheduled, JobState.Cancelled], completer.Completions.Select(c => c.State));
+        Assert.Equal("second of two", completer.Completions[2].Error!.Error);
+    }
+
+    [Fact]
+    public void Snoozing_for_a_negative_time_and_cancelling_without_a_reason_are_rejected()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => JobControl.Snooze(TimeSpan.FromSeconds(-1)));
+        Assert.Throws<ArgumentException>(() => JobControl.Cancel(" "));
+        Assert.Equal("why", JobControl.Cancel("why").Reason);
+        Assert.Equal(TimeSpan.FromSeconds(3), JobControl.Snooze(TimeSpan.FromSeconds(3)).Delay);
+    }
+
+    [Fact]
+    public async Task The_clients_retry_policy_is_used_and_one_in_the_past_or_throwing_falls_back_to_the_default()
+    {
+        var (completer, time) = (new RecordingCompleter(), new FakeTimeProvider());
+        var policy = new ScriptedPolicy();
+        var executor = Executor(Throwing(new InvalidOperationException("boom")), completer, time, policy: policy);
+
+        policy.Next = now => now.AddHours(2);
+        await executor.ExecuteAsync(Row("ping"), Ct);
+        policy.Next = now => now.AddSeconds(-1);
+        await executor.ExecuteAsync(Row("ping"), Ct);
+        policy.Next = _ => throw new InvalidOperationException("policy bug");
+        await executor.ExecuteAsync(Row("ping"), Ct);
+
+        var delays = completer.Completions.Select(c => c.ScheduledAt!.Value - time.GetUtcNow()).ToArray();
+        Assert.Equal(TimeSpan.FromHours(2), delays[0]);
+        Assert.Equal(JobState.Retryable, completer.Completions[0].State);
+        Assert.All(delays[1..], d => Assert.InRange(d, TimeSpan.FromSeconds(0.9), TimeSpan.FromSeconds(1.1)));
+        Assert.Equal(7, Assert.IsType<JobRow>(policy.LastJob).Id);
+    }
 
     [Theory]
     [InlineData(0)]
@@ -317,8 +435,18 @@ public sealed class JobExecutorTests
             new WorkerRegistry(), Serializer, new RecordingCompleter(), options: new JobExecutorOptions { JobTimeout = TimeSpan.FromSeconds(seconds) }));
 
     private static JobExecutor Executor(
-        WorkerRegistry workers, RecordingCompleter completer, FakeTimeProvider time, TimeSpan? timeout = null, Func<double>? random = null) =>
-        new(workers, Serializer, completer, options: new JobExecutorOptions { JobTimeout = timeout ?? TimeSpan.FromMinutes(1), Random = random }, timeProvider: time);
+        WorkerRegistry workers, RecordingCompleter completer, FakeTimeProvider time, TimeSpan? timeout = null, Func<double>? random = null,
+        IRetryPolicy? policy = null) =>
+        new(
+            workers,
+            Serializer,
+            completer,
+            options: new JobExecutorOptions
+            {
+                JobTimeout = timeout ?? TimeSpan.FromMinutes(1),
+                RetryPolicy = policy ?? (random is null ? null : new DefaultRetryPolicy(random)),
+            },
+            timeProvider: time);
 
     private static WorkerRegistry Throwing(Exception exception) =>
         new WorkerRegistry().Add(new LambdaWorker<PingArgs>((_, _) => Throw(exception)));
@@ -335,6 +463,19 @@ public sealed class JobExecutorTests
 
     [JobKind("ping")]
     public sealed record PingArgs(string? Text = null) : IJobArgs;
+
+    private sealed class ScriptedPolicy : IRetryPolicy
+    {
+        public Func<DateTimeOffset, DateTimeOffset> Next { get; set; } = now => now;
+
+        public JobRow? LastJob { get; private set; }
+
+        public DateTimeOffset NextRetry(JobRow job, DateTimeOffset now)
+        {
+            LastJob = job;
+            return Next(now);
+        }
+    }
 
     private sealed class RecordingCompleter : IJobCompleter
     {
