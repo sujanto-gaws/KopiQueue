@@ -978,7 +978,7 @@ SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'de
 | ID | Question |
 |----|----------|
 | DQ-1 | Should `IWorker<TArgs>` also allow `ValueTask` for very hot workers? (Probably not: `Task` is fine.) |
-| DQ-2 | Should insert accept `NpgsqlBatch` so a job insert can be pipelined with the user's other commands in one round trip? |
+| DQ-2 | ~~Should insert accept `NpgsqlBatch` so a job insert can be pipelined with the user's other commands in one round trip?~~ **Closed (not for 1.0, decided 2026-11-26):** an insert in a caller's transaction is already one round trip (the `INSERT` and its `pg_notify` go out as one Npgsql batch, §4.3), which meets NFR-PERF-01. Accepting the caller's batch would save only the round trip between their statements and the insert. The cost: a PostgreSQL-only API (against FR-DB-03), handing inserted rows back out of the caller's data reader, and more result-shape cases for unique inserts (M4). Reopen after 1.0 if users measure that round trip as a bottleneck; it would then be an opt-in `KopiQueue.Npgsql` extension |
 | DQ-3 | Should "unknown kind" rows be discarded or left for other deployments? A rolling-deploy scenario needs a decision on the default |
 | DQ-4 | ~~Should KQ use the `river_client` and `river_client_queue` tables?~~ **Closed (spike 0.8):** they are not part of the pinned schema (main v8) |
 | DQ-5 | Cron library: write our own small parser, or depend on `Cronos` (MIT)? Leaning towards Cronos |
