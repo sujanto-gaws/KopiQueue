@@ -55,6 +55,10 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       KOPI_TEST_PG: Host=localhost;Port=5432;Username=postgres;Password=kopi;Database=postgres
+      # River's CLI at the pinned version, run as a black box: the main line must leave the same catalog (task 1.2).
+      KOPI_RIVER_CLI: ${{ github.workspace }}/.river/river
+      KOPI_REQUIRE_RIVER_CLI: "1"
+      RIVER_VERSION: v0.51.2
     steps:
       - uses: actions/checkout@v5
         with:
@@ -63,6 +67,12 @@ jobs:
         with:
           global-json-file: global.json
           dotnet-version: 10.0.x
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - name: install River CLI
+        run: GOBIN="$GITHUB_WORKSPACE/.river" go install "github.com/riverqueue/river/cmd/river@$RIVER_VERSION"
       - run: dotnet build tests/KopiQueue.Npgsql.Tests -c $CONFIGURATION
       - run: >-
           dotnet test --project tests/KopiQueue.Npgsql.Tests -c $CONFIGURATION --no-build

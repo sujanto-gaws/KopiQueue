@@ -109,7 +109,7 @@ It stops them in reverse order. The completer is stopped last among the executio
 ## 4. Data model
 
 > **PostgreSQL (River-compatible, OQ-1 decided):** the table names and columns below MUST match River's schema at the pinned version: **migration line `main`, version 8, as created by River v0.51.2**.
-> The exact shape was taken in [spike 0.8](spikes/0.8-river-schema-and-unique-keys.md), which introspects a database migrated by River's own CLI. It is re-checked on every upstream schema change with the same script (`spikes/RiverSchema/introspect.sql`, to become a CI job in M7).
+> The exact shape was taken in [spike 0.8](spikes/0.8-river-schema-and-unique-keys.md), which introspects a database migrated by River's own CLI. Since task 1.2, CI checks it on every supported PostgreSQL version: after each version of the main line, up and down, KQ's catalog must equal River's (§4.1.1).
 > The prefix is configurable: `river_` (default, compatible) or `kopi_` (no compatibility).
 > **SQL Server:** KQ's own schema with the same logical model, see §4.4.
 
@@ -186,7 +186,7 @@ CREATE TABLE river_migration (
   line       text   NOT NULL CONSTRAINT line_length CHECK (char_length(line) > 0 AND char_length(line) < 128),
   version    bigint NOT NULL CONSTRAINT version_gte_1 CHECK (version >= 1),
   created_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (line, version)
+  CONSTRAINT river_migration_pkey1 PRIMARY KEY (line, version)   -- "pkey1" is River's name from version 5 on
 );
 
 -- Notification outbox for drivers without LISTEN/NOTIFY. Part of the pinned schema; unused by KQ on PostgreSQL
@@ -200,7 +200,7 @@ CREATE INDEX river_notification_created_at_idx ON river_notification (created_at
 CREATE INDEX river_notification_topic_id_idx   ON river_notification (topic, id);
 ```
 
-Constraint and index names, column order, types and defaults were checked against the introspected catalog (spike 0.8). The names are kept identical so that later River migrations, which may refer to them, apply cleanly.
+The DDL above is a summary. The authoritative definition is the migration SQL in `src/KopiQueue.Npgsql/Migrations/main/`, whose result is compared with River's catalog in CI (§4.1.1): every name, column order, type, default, constraint, index and function signature is identical. For example, `river_leader`'s columns are in the order `elected_at, expires_at, leader_id, name`. The names are kept identical so that later River migrations, which may refer to them, apply cleanly.
 
 Design notes:
 
@@ -209,6 +209,26 @@ Design notes:
 - `errors jsonb[]` holds one element per failed attempt: `{ "at", "attempt", "error", "trace" }`. The size is capped and the trace truncated (NFR-SEC-03).
 - `attempted_by` is capped at the last N client IDs so the row does not grow without bound.
 - `metadata` holds internal keys under reserved names, for example `cancel_attempted_at`, `snoozes` and `traceparent`. User keys are free-form.
+
+#### 4.1.1 The main line, version by version (plan task 1.2)
+
+KQ ships all eight versions, not just the final schema, so that it can continue a database River migrated part of the way, and River can continue one KQ migrated. Each version was written clean-room from black-box observation of River v0.51.2's CLI: migrate a scratch schema one version at a time, read its catalog (shape only, no function bodies), and probe how each step treats existing rows.
+
+| Version | Up | Down |
+|---------|----|------|
+| 1 | `river_migration` in its original shape: `id bigserial`, `created_at`, `version` (unique, `CHECK version >= 1`) | Drop it |
+| 2 | `river_job_state` (7 values), `river_job` with its indexes, `river_leader` (UNLOGGED), and an `AFTER INSERT` trigger that calls `pg_notify('river_insert', '{"queue" : "<queue>"}')` for rows inserted as `available` | Drop them |
+| 3 | `tags`: NULLs become `{}`, then `DEFAULT '{}' NOT NULL` | Drop the default and NOT NULL |
+| 4 | Add enum value `pending`; NULL `args` and `metadata` become `{}`, then NOT NULL; stricter `finalized_or_finalized_at_null`; drop the trigger; add `river_queue`; `river_leader.name` gets `DEFAULT 'default'` and `CHECK (name = 'default')` (fails while a row has another name) | Reverse everything **except** the `pending` value, and also make `metadata` nullable without a default: River's own down leaves that state |
+| 5 | Replace the migration table with `(line, version, created_at)`, copying rows as line `main` with their timestamps; add `unique_key` and the unique index on `(kind, unique_key)`; add UNLOGGED `river_client` and `river_client_queue` | Refuse while other lines are recorded; otherwise restore the original table and drop the rest |
+| 6 | Add `unique_states bit(8)`, `river_job_state_in_bitmask` and `river_job_unique_idx`; drop the `(kind, unique_key)` index. Existing rows are not backfilled | Reverse; recreating the old index fails while two rows share `(kind, unique_key)` |
+| 7 | Drop `river_client*`; add `river_notification`; `max_attempts DEFAULT 25`; `river_queue.updated_at DEFAULT CURRENT_TIMESTAMP` | Reverse |
+| 8 | Nothing on PostgreSQL: the catalog is identical before and after it (in River the version matters for other databases) | Nothing |
+
+- **Migration table shapes.** Versions 1–4 use the original table, which can only record the `main` line. The driver detects the shape each time it reads or writes a version, so any other line needs `main` at version 5 or later.
+- **Bitmask function.** `river_job_state_in_bitmask(bitmask, state)` returns the bit for `state`. From left to right the bits are scheduled, running, retryable, pending, discarded, completed, cancelled, available. A NULL bitmask gives NULL and a NULL state gives false. Tests check all 2,048 inputs against River's function.
+- **Goldens and checks.** `tests/KopiQueue.Npgsql.Tests/Migrations/River/v0.51.2/` holds River's catalog after each up version, plus the two down states that differ (versions 2 and 3). The tests compare KQ against them at every version, up and down. With `KOPI_RIVER_CLI` set (always in CI), they also check that River's CLI still produces the goldens, that KQ continues a schema River migrated to version 4, that River continues and reverts a schema KQ migrated, and that `river validate` passes. Set `KOPI_RIVER_GOLDEN_DIR` to regenerate the goldens for a new pinned version.
+- **Prefix.** With another prefix, for example `kopi_`, the same objects are created with that prefix and can coexist with `river_` objects in one schema. Trigger, channel and column names that are fixed in River (for example `river_insert` and `river_client_id`) stay as they are.
 
 ### 4.2 Job state machine
 
@@ -714,7 +734,7 @@ public interface IKopiExecutor   // typed operations; no SQL leaks to the core
 - Each script runs in its own transaction together with its version row. Up runs the SQL and then inserts the row; down deletes the row and then runs the SQL. A script whose leading comments contain `-- kopi:no-transaction` runs outside a transaction (for `CREATE INDEX CONCURRENTLY`). Such a script must hold a single statement, because PostgreSQL treats a multi-statement batch as an implicit transaction.
 - Planning: up applies the missing versions up to the target (default: the latest). Down reverts down to the target (default: one step; `0` reverts the whole line). Recorded versions must form a gap-free 1..N. A database that is newer than the library is a no-op for up and an error for down.
 - Lock: the runner polls `TryAcquireLock` every 200 ms until `LockTimeout` (default 30 s). PostgreSQL uses a session-level `pg_try_advisory_lock` whose key is the first 8 bytes of SHA-256(`kopi_migrate:<schema>.<prefix>`), so separate schemas migrate independently. SQL Server uses `sp_getapplock` (§8.1). River's CLI does not take this lock, so do not run both against the same schema at once.
-- The migration table is created by version 1 of the `main` line (River-compatible shape, §4.1), so `main` must be applied before any other line.
+- The migration table is created by version 1 of the `main` line, in River's original shape, and replaced by the `(line, version)` shape in version 5 (§4.1.1). The driver handles both, so `main` must reach version 5 before any other line is applied.
 - A failed step is wrapped in `KopiQueueMigrationException` with the database error as the inner exception. Earlier steps stay applied.
 
 ### 8.1 SQL Server driver: algorithm variants
