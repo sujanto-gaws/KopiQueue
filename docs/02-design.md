@@ -679,6 +679,13 @@ await kopi.InsertAsync(new SendEmailArgs(...), db, ct: ct);   // uses db's curre
 await tx.CommitAsync(ct);
 ```
 
+**Insert-only mode (plan task 1.8, FR-INS-08).** A `KopiClient` with no queues or workers inserts with no start step, which suits web front-ends. It holds no connection and runs no background work: every insert borrows a pooled connection and returns it, and no LISTEN connection is opened. One client can be shared by concurrent callers, and creating one per request is cheap. `InsertOnlyClientTests` checks these points in `pg_stat_activity`:
+
+- with pooling off, no session remains after inserts;
+- with a pool of 5, 200 parallel inserts on one client stay within 5 idle sessions, none of them listening.
+
+Once M2 adds queues and workers, a client without them must keep this behaviour: starting it with the host (task 2.8) must not open the notifier, elector or maintenance services.
+
 **Bulk insert (plan task 1.7, FR-INS-04).** `InsertManyAsync` and `InsertManyFastAsync` take `InsertRequest(args, options?)` items. Each item's kind comes from its args' runtime type, so one batch can mix job types.
 
 - Every request is validated and serialised before any SQL runs. An invalid one throws `ArgumentException` naming its index (`Job 3: Invalid insert option Tags: ...`), and nothing is inserted.

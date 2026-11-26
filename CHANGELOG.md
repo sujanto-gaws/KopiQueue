@@ -6,6 +6,7 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ### Added
 
+- Insert-only use (FR-INS-08): `KopiClient` inserts with no queues, workers or start step, and holds no connection or background work between inserts, so a web front-end can share one client or create one per request. ([#18](https://github.com/sujanto-gaws/KopiQueue/issues/18))
 - Bulk insert: `InsertManyAsync` returns the stored jobs in order, and `InsertManyFastAsync` uses PostgreSQL binary `COPY` and returns the count. Both take `InsertRequest(args, options)` items of any job types, validate every job before inserting any, are all-or-nothing, and notify each queue once on commit. ([#17](https://github.com/sujanto-gaws/KopiQueue/issues/17))
 - `KopiClient` and `IKopiClient` with `InsertAsync`, on a pooled connection or inside the caller's transaction, returning `InsertResult<TArgs>`. On PostgreSQL the insert notifies `<schema>.river_insert` for each queue with available jobs, in the same transaction, so listeners hear of it only on commit. ([#16](https://github.com/sujanto-gaws/KopiQueue/issues/16))
 - Job model: the `IJobArgs` marker and `[JobKind]` attribute; `JobKindRegistry` (kind lookup, duplicate-kind detection); `InsertOptions` (`Queue`, `Priority`, `ScheduledAt`, `MaxAttempts`, `Tags`, `Metadata`) with `InsertDefaults`, validated before insert; `KopiQueueConfigurationException`. ([#15](https://github.com/sujanto-gaws/KopiQueue/issues/15))
