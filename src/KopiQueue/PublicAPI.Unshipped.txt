@@ -3,3 +3,49 @@ KopiQueue.KopiQueueMigrationException
 KopiQueue.KopiQueueMigrationException.KopiQueueMigrationException() -> void
 KopiQueue.KopiQueueMigrationException.KopiQueueMigrationException(string? message) -> void
 KopiQueue.KopiQueueMigrationException.KopiQueueMigrationException(string? message, System.Exception? innerException) -> void
+KopiQueue.Migrations.KopiMigrator
+KopiQueue.Migrations.KopiMigrator.GetVersionsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.Migrations.MigrationVersion!>!>!
+KopiQueue.Migrations.KopiMigrator.LatestVersion.get -> int
+KopiQueue.Migrations.KopiMigrator.Line.get -> string!
+KopiQueue.Migrations.KopiMigrator.MigrateAsync(KopiQueue.Migrations.MigrationDirection direction, KopiQueue.Migrations.MigrateOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.Migrations.MigrationResult!>!
+KopiQueue.Migrations.KopiMigrator.ValidateAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.Migrations.MigrationValidationResult!>!
+KopiQueue.Migrations.MigrateOptions
+KopiQueue.Migrations.MigrateOptions.DryRun.get -> bool
+KopiQueue.Migrations.MigrateOptions.DryRun.init -> void
+KopiQueue.Migrations.MigrateOptions.LockTimeout.get -> System.TimeSpan
+KopiQueue.Migrations.MigrateOptions.LockTimeout.init -> void
+KopiQueue.Migrations.MigrateOptions.MigrateOptions() -> void
+KopiQueue.Migrations.MigrateOptions.TargetVersion.get -> int?
+KopiQueue.Migrations.MigrateOptions.TargetVersion.init -> void
+KopiQueue.Migrations.MigrationDirection
+KopiQueue.Migrations.MigrationDirection.Down = 1 -> KopiQueue.Migrations.MigrationDirection
+KopiQueue.Migrations.MigrationDirection.Up = 0 -> KopiQueue.Migrations.MigrationDirection
+KopiQueue.Migrations.MigrationResult
+KopiQueue.Migrations.MigrationResult.Direction.get -> KopiQueue.Migrations.MigrationDirection
+KopiQueue.Migrations.MigrationResult.DryRun.get -> bool
+KopiQueue.Migrations.MigrationResult.LatestVersion.get -> int
+KopiQueue.Migrations.MigrationResult.Line.get -> string!
+KopiQueue.Migrations.MigrationResult.Steps.get -> System.Collections.Generic.IReadOnlyList<KopiQueue.Migrations.MigrationStepResult!>!
+KopiQueue.Migrations.MigrationResult.VersionAfter.get -> int
+KopiQueue.Migrations.MigrationResult.VersionBefore.get -> int
+KopiQueue.Migrations.MigrationStepResult
+KopiQueue.Migrations.MigrationStepResult.Direction.get -> KopiQueue.Migrations.MigrationDirection
+KopiQueue.Migrations.MigrationStepResult.Duration.get -> System.TimeSpan
+KopiQueue.Migrations.MigrationStepResult.Name.get -> string!
+KopiQueue.Migrations.MigrationStepResult.Sql.get -> string!
+KopiQueue.Migrations.MigrationStepResult.Version.get -> int
+KopiQueue.Migrations.MigrationValidationResult
+KopiQueue.Migrations.MigrationValidationResult.CurrentVersion.get -> int
+KopiQueue.Migrations.MigrationValidationResult.IsCurrent.get -> bool
+KopiQueue.Migrations.MigrationValidationResult.IsDatabaseNewer.get -> bool
+KopiQueue.Migrations.MigrationValidationResult.LatestVersion.get -> int
+KopiQueue.Migrations.MigrationValidationResult.Line.get -> string!
+KopiQueue.Migrations.MigrationValidationResult.Message.get -> string!
+KopiQueue.Migrations.MigrationValidationResult.PendingVersions.get -> System.Collections.Generic.IReadOnlyList<int>!
+KopiQueue.Migrations.MigrationVersion
+KopiQueue.Migrations.MigrationVersion.AppliedAt.get -> System.DateTimeOffset?
+KopiQueue.Migrations.MigrationVersion.IsApplied.get -> bool
+KopiQueue.Migrations.MigrationVersion.IsKnown.get -> bool
+KopiQueue.Migrations.MigrationVersion.Name.get -> string?
+KopiQueue.Migrations.MigrationVersion.Version.get -> int
+static readonly KopiQueue.Migrations.MigrateOptions.DefaultLockTimeout -> System.TimeSpan

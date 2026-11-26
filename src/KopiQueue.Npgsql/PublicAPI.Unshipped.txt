@@ -1,1 +1,9 @@
 #nullable enable
+KopiQueue.Npgsql.NpgsqlKopiMigrator
+KopiQueue.Npgsql.NpgsqlMigratorOptions
+KopiQueue.Npgsql.NpgsqlMigratorOptions.NpgsqlMigratorOptions() -> void
+KopiQueue.Npgsql.NpgsqlMigratorOptions.Schema.get -> string?
+KopiQueue.Npgsql.NpgsqlMigratorOptions.Schema.init -> void
+KopiQueue.Npgsql.NpgsqlMigratorOptions.TablePrefix.get -> string!
+KopiQueue.Npgsql.NpgsqlMigratorOptions.TablePrefix.init -> void
+static KopiQueue.Npgsql.NpgsqlKopiMigrator.Create(Npgsql.NpgsqlDataSource! dataSource, KopiQueue.Npgsql.NpgsqlMigratorOptions? options = null, Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null) -> KopiQueue.Migrations.KopiMigrator!

@@ -1,12 +1,5 @@
 namespace KopiQueue.Migrations;
 
-/// <summary>Direction of a migration run.</summary>
-internal enum MigrationDirection
-{
-    Up,
-    Down,
-}
-
 /// <summary>One versioned migration of a line (for example <c>main</c>), with its up and down SQL templates.</summary>
 /// <param name="Line">Migration line. Versions are numbered per line, from 1, without gaps.</param>
 /// <param name="Version">Version number within the line.</param>

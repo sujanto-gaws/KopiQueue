@@ -737,6 +737,24 @@ public interface IKopiExecutor   // typed operations; no SQL leaks to the core
 - The migration table is created by version 1 of the `main` line, in River's original shape, and replaced by the `(line, version)` shape in version 5 (§4.1.1). The driver handles both, so `main` must reach version 5 before any other line is applied.
 - A failed step is wrapped in `KopiQueueMigrationException` with the database error as the inner exception. Earlier steps stay applied.
 
+**Migrator API (plan task 1.3, FR-MIG-02).** `KopiMigrator` (namespace `KopiQueue.Migrations`) manages one line. Driver packages create it, for example `NpgsqlKopiMigrator.Create(dataSource, new NpgsqlMigratorOptions { Schema = "queue" }, loggerFactory)`, which returns the `main` line.
+
+```csharp
+public sealed class KopiMigrator
+{
+    public string Line { get; }
+    public int LatestVersion { get; }
+    Task<MigrationResult> MigrateAsync(MigrationDirection direction, MigrateOptions? options = null, CancellationToken ct = default);
+    Task<IReadOnlyList<MigrationVersion>> GetVersionsAsync(CancellationToken ct = default);   // known versions + applied unknown ones
+    Task<MigrationValidationResult> ValidateAsync(CancellationToken ct = default);           // IsCurrent, IsDatabaseNewer, PendingVersions, Message
+}
+// MigrateOptions: TargetVersion, DryRun (returns the rendered SQL without executing), LockTimeout (default 30 s)
+```
+
+- Only `MigrateAsync` takes the migration lock. `GetVersionsAsync` and `ValidateAsync` only read, so health checks can call them while a migration runs.
+- `ValidateAsync` reports a database newer than the library (`IsDatabaseNewer`) separately from a current one. Hosting decides what to do with it: migrate-on-startup (FR-MIG-07) and health checks come with `KopiQueue.Hosting`.
+- The driver contract (`IMigrationDriver`) stays internal until the driver interface review in task 1.4.
+
 ### 8.1 SQL Server driver: algorithm variants
 
 The Postgres SQL in §5 has these SQL Server equivalents. Fetch, complete, unique insert, bulk insert and polling were validated on SQL Server 2019 with RCSI both off and on, in spikes [0.9](spikes/0.9-sqlserver-fetch-and-locking.md) and [0.10](spikes/0.10-sqlserver-unique-bulk-poll.md). The statements below include the changes those spikes required.
