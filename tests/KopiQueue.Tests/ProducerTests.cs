@@ -431,5 +431,8 @@ public sealed class ProducerTests
             throw new NotSupportedException();
 
         public Task<JobRow?> JobGetByIdAsync(long id, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }

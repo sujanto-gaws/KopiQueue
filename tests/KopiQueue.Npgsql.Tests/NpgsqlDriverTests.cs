@@ -402,6 +402,20 @@ public sealed class NpgsqlDriverTests(PostgresFixture db) : IClassFixture<Postgr
         Assert.Equal([ids[0]], after.Select(j => j.Id));
     }
 
+    [Fact]
+    public void Errors_are_written_as_River_writes_them()
+    {
+        var at = new DateTimeOffset(2026, 1, 1, 9, 0, 1, 500, TimeSpan.FromHours(9));
+
+        Assert.Equal(
+            """{"at":"2026-01-01T00:00:01.5Z","attempt":3,"error":"boom","trace":""}""",
+            NpgsqlExecutor.FormatError(new AttemptError(at, 3, "boom", null)));
+        Assert.Equal(
+            """{"at":"2026-01-01T00:00:01Z","attempt":1,"error":"x","trace":"at Y"}""",
+            NpgsqlExecutor.FormatError(new AttemptError(at.AddMilliseconds(-500), 1, "x", "at Y")));
+        Assert.Null(NpgsqlExecutor.ParseError("""{"at":"2026-01-01T00:00:01Z","attempt":1,"error":"x","trace":""}""").Trace);
+    }
+
     private static async Task<IKopiDriver> MigratedDriverAsync(NpgsqlDataSource ds) => (await MigratedDriverWithSchemaAsync(ds)).Driver;
 
     private static async Task<(IKopiDriver Driver, string Schema)> MigratedDriverWithSchemaAsync(NpgsqlDataSource ds)

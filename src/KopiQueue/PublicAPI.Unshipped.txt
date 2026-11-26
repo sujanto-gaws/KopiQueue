@@ -319,3 +319,20 @@ KopiQueue.JobSnoozeException.JobSnoozeException(System.TimeSpan delay) -> void
 static KopiQueue.DefaultRetryPolicy.Instance.get -> KopiQueue.DefaultRetryPolicy!
 static KopiQueue.JobControl.Cancel(string! reason) -> KopiQueue.JobCancelException!
 static KopiQueue.JobControl.Snooze(System.TimeSpan delay) -> KopiQueue.JobSnoozeException!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobSetStateIfRunningManyAsync(System.Collections.Generic.IReadOnlyList<KopiQueue.Drivers.JobSetStateParams!>! jobs, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.JobRow!>!>!
+[KQ0001]KopiQueue.Drivers.JobSetStateParams
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.Attempt.get -> int?
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.Attempt.init -> void
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.Error.get -> KopiQueue.AttemptError?
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.Error.init -> void
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.FinalizedAt.get -> System.DateTimeOffset?
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.FinalizedAt.init -> void
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.Id.get -> long
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.Id.init -> void
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.JobSetStateParams() -> void
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.MetadataUpdates.get -> string?
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.MetadataUpdates.init -> void
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.ScheduledAt.get -> System.DateTimeOffset?
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.ScheduledAt.init -> void
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.State.get -> KopiQueue.JobState
+[KQ0001]KopiQueue.Drivers.JobSetStateParams.State.init -> void

@@ -137,6 +137,14 @@ It stops them in reverse order. The completer is stopped last among the executio
 - **Job control** (task 2.5, FR-ERR-03, FR-ERR-04): `throw JobControl.Cancel(reason)` finalises the job as `cancelled` with the reason in its errors, whatever attempts are left. `throw JobControl.Snooze(delay)` reschedules it without using an attempt: `attempt − 1`, `metadata.snoozes` plus one (read leniently, as River), no error, and `available` at once when due within the scheduler interval. Both are found when wrapped, for example in an `AggregateException` or as an inner exception.
 - **Retry policy** (task 2.5, FR-ERR-01, FR-ERR-02): the public `IRetryPolicy`, with `DefaultRetryPolicy` (`n^4` seconds ±10% for the `n`th error, `MaxDelay` default 24 h). The worker's `NextRetry` wins; a policy that throws, or returns a time in the past, falls back to the default policy, as in River. The client option that sets it arrives with the client options in task 2.7.
 
+### 3.6 Completer (plan task 2.6)
+
+- **Driver contract:** `IKopiExecutor.JobSetStateIfRunningManyAsync(JobSetStateParams[])`, River's `JobSetStateIfRunningMany` (§5.3): one statement for a whole batch; a `null` field leaves its column alone. Only a job still `running` changes, so a completion never clobbers a rescue, a cancel or a delete; metadata updates merge either way. A running job with `cancel_attempted_at` whose outcome would run it again becomes `cancelled`, finalised now, with its attempt and schedule kept and the error still appended (§5.8). It returns every given job that exists, changed or not, in ID order. Errors are stored in River's JSON, `{"at", "attempt", "error", "trace"}`, with the time as Go's RFC 3339 in UTC and an empty trace for none.
+- **Completers** (internal, `CompleterKind`): `Batch` (default) queues completions in a bounded channel (twice the batch size) and writes a batch when it reaches 2,000 (or the driver's row limit) or 50 ms after its first completion; a full queue makes executors wait, which slows the producers down. `Async` writes each completion on its own, at most 100 at once. `Inline` writes before returning.
+- **Failures:** a failed write is retried after 100 ms, doubling to 5 s, until it succeeds or a hard stop abandons it; the jobs then stay `running` and are rescued later. Nothing is dropped or thrown at the executor (NFR-REL-04).
+- **Reporting** (NFR-REL-03): `onCompleted` receives each completion with its stored row only after the write committed; this is where events (task 6.x) will hang. The row's state shows what actually happened, for example `cancelled` instead of `retryable`.
+- **Stop** (§5.9 step 4): after the producers stop, `StopAsync` writes what is pending; if its token fires first it abandons the rest. The client option that picks the completer arrives with the client options in task 2.7.
+
 ## 4. Data model
 
 > **PostgreSQL (River-compatible, OQ-1 decided):** the table names and columns below MUST match River's schema at the pinned version: **migration line `main`, version 8, as created by River v0.51.2**.
@@ -806,6 +814,7 @@ public interface IKopiExecutor   // typed operations; no SQL leaks to the core
     Task<long> JobInsertFastAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken ct);   // COPY; no rows read back
     Task<JobRow?> JobGetByIdAsync(long id, CancellationToken ct);
     Task<IReadOnlyList<JobRow>> JobGetAvailableAsync(JobGetAvailableParams p, CancellationToken ct);   // §5.1, SKIP LOCKED
+    Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken ct);   // §5.3
     // Later: JobFetchAsync, JobSetStateManyAsync, JobScheduleAsync, LeaderAttemptElectAsync,
     // NotifyAsync, ... about 35 operations in total, mirroring the needs of the components above
 }
@@ -1000,6 +1009,7 @@ SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'de
   - *Migration:* a new schema has every version pending; up once, idempotently; down to 0 and back; step by step; dry run; four concurrent migrators apply each version once; insert after migrating.
 - **M2 listener cases (task 2.2):** a listener exists exactly when `ListenNotify` is set; on such a driver a committed pooled insert reaches a listener connection as an `Insert` notification for its queue. Reconnects, keep-alive and channel limits stay in `NpgsqlNotifierTests`.
 - **M2 fetch cases (task 2.3):** only due, available jobs of the asked queue, in `priority, scheduled_at, id` order, come back running with one more attempt and the client recorded; at most `Max` per fetch; eight concurrent fetchers never get the same job; limits below 1 are rejected. The `attempted_by` cap and skipping a row another transaction locked stay in `NpgsqlDriverTests`.
+- **M2 completion cases (task 2.6):** completing keeps attempt and errors; a failed attempt appends its error (with and without trace, quotes and non-ASCII) and reschedules or discards; an outcome can set the attempt and merge metadata; a job no longer running is returned unchanged except for merged metadata; `cancel_attempted_at` turns `retryable`, `available` and `scheduled` outcomes into `cancelled` but leaves `completed` alone; missing IDs are left out and rows come back in ID order; `running` and `pending` are rejected.
 - SQL Server joins when its driver lands (M3). PostgreSQL-specific behaviour (River catalog equality, `pg_notify`, `COPY` details, constraint names) stays in `KopiQueue.Npgsql.Tests`.
 
 ## 12. Decision log (ADRs)

@@ -87,6 +87,17 @@ public interface IKopiExecutor
     /// </summary>
     /// <returns>The started jobs, in fetch order. Empty when nothing is due.</returns>
     Task<IReadOnlyList<JobRow>> JobGetAvailableAsync(JobGetAvailableParams parameters, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Records the outcomes of finished attempts in one statement (design §5.3), as River's
+    /// <c>JobSetStateIfRunningMany</c>. Only a job that is still <see cref="JobState.Running"/> changes; a job that was
+    /// rescued, cancelled or deleted meanwhile keeps its row, except that <see cref="JobSetStateParams.MetadataUpdates"/>
+    /// is merged either way. A running job whose cancellation was asked for (<c>cancel_attempted_at</c> in its metadata)
+    /// and whose outcome would run it again is <see cref="JobState.Cancelled"/> instead, finalised now, keeping its
+    /// attempt and schedule, with the error still appended.
+    /// </summary>
+    /// <returns>Every given job that exists, changed or not, in ID order. A job that does not exist is left out.</returns>
+    Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken);
 }
 
 /// <summary>What a database supports. The core reads these instead of checking the driver type (FR-DB-03).</summary>
@@ -113,6 +124,35 @@ public sealed class DriverCapabilities
     /// 2,000-row lock-escalation cap (spike 0.9).
     /// </summary>
     public int? MaxRowsPerStatement { get; init; }
+}
+
+/// <summary>One outcome for <see cref="IKopiExecutor.JobSetStateIfRunningManyAsync"/>; a <c>null</c> field leaves its column as it is.</summary>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed class JobSetStateParams
+{
+    /// <summary>The job.</summary>
+    public required long Id { get; init; }
+
+    /// <summary>
+    /// The new state: any but <see cref="JobState.Running"/> and <see cref="JobState.Pending"/>.
+    /// </summary>
+    public required JobState State { get; init; }
+
+    /// <summary>The attempt number to store, for an attempt that does not count.</summary>
+    public int? Attempt { get; init; }
+
+    /// <summary>An error to append to the job's errors.</summary>
+    public AttemptError? Error { get; init; }
+
+    /// <summary>When the job was finalised.</summary>
+    public DateTimeOffset? FinalizedAt { get; init; }
+
+    /// <summary>A JSON object merged into the job's metadata at the top level.</summary>
+    public string? MetadataUpdates { get; init; }
+
+    /// <summary>When the job is due again.</summary>
+    public DateTimeOffset? ScheduledAt { get; init; }
 }
 
 /// <summary>What <see cref="IKopiExecutor.JobGetAvailableAsync"/> fetches.</summary>
