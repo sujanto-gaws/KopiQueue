@@ -4,6 +4,14 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ## [Unreleased]
 
+### Added
+
+- Workers (FR-DEF-02, FR-DEF-04, FR-DEF-06): `IWorker<TArgs>` and the `Worker<TArgs>` base class with `WorkAsync(Job<TArgs>, CancellationToken)` and overridable `Timeout` and `NextRetry`; `Job<TArgs>`, the fetched row with its deserialised args; and `WorkerRegistry`, one worker per kind, added as a type created in each job's DI scope (`Add<TArgs, TWorker>()`, or `Add<TWorker>()` outside trimmed and AOT apps) or as a shared instance. Duplicate kinds, missing or invalid kinds and abstract worker types fail at registration with `KopiQueueConfigurationException`. Nothing runs workers yet; the executor follows in 0.2.0-alpha. ([#22](https://github.com/sujanto-gaws/KopiQueue/issues/22))
+
+### Changed
+
+- Requirements 0.5: a worker no longer sets a `MaxAttempts` default (FR-DEF-04); per-type defaults come from the args type (FR-DEF-05). DQ-1 is closed: `WorkAsync` returns `Task`. ([#22](https://github.com/sujanto-gaws/KopiQueue/issues/22), [#73](https://github.com/sujanto-gaws/KopiQueue/issues/73))
+
 ## [0.1.0-alpha.1] - 2026-11-26
 
 First preview (milestone M1, schema and insert): migrate a PostgreSQL database to the River-compatible schema and insert jobs, alone, in bulk, or in the caller's Npgsql or EF Core transaction. Workers and job execution come in 0.2.0-alpha.

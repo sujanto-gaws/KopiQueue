@@ -1,6 +1,6 @@
 # KopiQueue — Requirements Specification
 
-**Version:** 0.4 (draft) · **Date:** 2026-11-26 · **Related:** [Design](02-design.md), [Plan](03-plan.md)
+**Version:** 0.5 (draft) · **Date:** 2026-11-26 · **Related:** [Design](02-design.md), [Plan](03-plan.md)
 
 ---
 
@@ -102,7 +102,7 @@ Priority: **P0** = required for 1.0 MVP · **P1** = required for 1.0 GA · **P2*
 | FR-DEF-01 | A job type is defined by an args type, usually a `record`. It MUST be JSON-serialisable and MUST declare a stable, unique **kind** string | P0 |
 | FR-DEF-02 | A worker is defined by implementing `IWorker<TArgs>`, or by deriving from `Worker<TArgs>`, with an async `WorkAsync(Job<TArgs>, CancellationToken)` method | P0 |
 | FR-DEF-03 | Workers MUST be resolved from DI in a new scope per job execution, so scoped services such as a `DbContext` are supported | P0 |
-| FR-DEF-04 | A worker MAY override per-job behaviour: `Timeout`, `NextRetry` (custom backoff) and `MaxAttempts` default | P0 |
+| FR-DEF-04 | A worker MAY override per-job behaviour: `Timeout` and `NextRetry` (custom backoff). **Changed in 0.5:** the per-type `MaxAttempts` default belongs to the args type (FR-DEF-05), not the worker, because `max_attempts` is written at insert time and an insert-only process has no workers to ask | P0 |
 | FR-DEF-05 | An args type MAY supply default insert options (queue, priority, max attempts, tags, uniqueness), like River's `JobArgsWithInsertOpts` | P1 |
 | FR-DEF-06 | Kind strings MUST be validated at startup. Duplicate kinds and kinds without a worker are configuration errors, raised when the client starts working | P0 |
 | FR-DEF-07 | Support renaming a kind without losing in-flight jobs, through alias kinds | P2 |
