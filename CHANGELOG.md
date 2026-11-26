@@ -6,6 +6,7 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ### Added
 
+- Driver conformance suite (FR-DB-06, ADR-012): `DriverConformanceTests<TFixture>` holds the insert and migration cases every driver must pass, and the PostgreSQL driver passes them. A new driver adds a fixture and a one-line subclass. ([#21](https://github.com/sujanto-gaws/KopiQueue/issues/21))
 - Args serialisation (NFR-COMP-06): `IJobArgsSerializer` and `SystemTextJsonArgsSerializer`, made from a `JsonSerializerContext` for trimmed and Native AOT apps, from `JsonSerializerOptions`, or the reflection-based `Default`; set through the new `KopiClientOptions.ArgsSerializer`. `KopiClientOptions` also takes the `TimeProvider`, which replaces `KopiClient`'s `timeProvider` constructor parameter. ([#20](https://github.com/sujanto-gaws/KopiQueue/issues/20))
 - `KopiQueue.EntityFrameworkCore`: `InsertAsync`, `InsertManyAsync` and `InsertManyFastAsync` extension methods that insert jobs in a `DbContext`'s current transaction, so they commit or roll back with its changes. Provider-neutral (EF Core Relational only); a context without a transaction is rejected. ([#19](https://github.com/sujanto-gaws/KopiQueue/issues/19))
 - Insert-only use (FR-INS-08): `KopiClient` inserts with no queues, workers or start step, and holds no connection or background work between inserts, so a web front-end can share one client or create one per request. ([#18](https://github.com/sujanto-gaws/KopiQueue/issues/18))

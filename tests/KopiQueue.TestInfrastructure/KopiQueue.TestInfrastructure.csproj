@@ -13,4 +13,9 @@
     <PackageReference Include="Testcontainers.MsSql" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The conformance suite is written against the driver-neutral core only. -->
+    <ProjectReference Include="..\..\src\KopiQueue\KopiQueue.csproj" />
+  </ItemGroup>
+
 </Project>

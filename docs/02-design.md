@@ -941,6 +941,19 @@ SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'de
 | River compatibility (PostgreSQL) | A Go River program and a KQ program sharing a database |
 | Benchmarks | BenchmarkDotNet micro benchmarks plus a `kopi bench` macro throughput tool |
 
+**Driver conformance suite (plan task 1.11, FR-DB-06, ADR-012).** It lives in `tests/KopiQueue.TestInfrastructure/Conformance`.
+
+- **What a driver supplies:** a `DriverConformanceFixture` that creates empty schemas, opens caller transactions and counts committed jobs of a kind. Everything else the suite does goes through `IKopiDriver` and `KopiClient`, so the cases state the semantics every database must share.
+- **Adding a driver** is a fixture plus a one-line subclass, as `NpgsqlConformanceTests` shows: `public sealed class XConformanceTests(XFixture f) : DriverConformanceTests<XFixture>(f), IClassFixture<XFixture>;`.
+- **Speed:** each test class shares one migrated schema. Most cases insert in a caller transaction that is rolled back. Cases about committing use a kind of their own, and migration cases get fresh schemas.
+- **M1 cases:**
+  - *Insert:* defaults, every field, input order, all insertable states, batches over `MaxRowsPerStatement`, fast path equal to the batch path, empty batches.
+  - *Transactions and errors:* caller-transaction visibility, commit and rollback, pooled commit, all-or-nothing on a database error, missing IDs, unique keys rejected, foreign and completed transactions.
+  - *Client:* inserts through `KopiClient`.
+  - *Migration:* a new schema has every version pending; up once, idempotently; down to 0 and back; step by step; dry run; four concurrent migrators apply each version once; insert after migrating.
+- Notifications are not part of `IKopiDriver` until the M2 listener, so they stay in the PostgreSQL tests for now.
+- SQL Server joins when its driver lands (M3). PostgreSQL-specific behaviour (River catalog equality, `pg_notify`, `COPY` details, constraint names) stays in `KopiQueue.Npgsql.Tests`.
+
 ## 12. Decision log (ADRs)
 
 | ID | Decision | Rationale | Alternatives considered |
