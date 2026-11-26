@@ -596,6 +596,22 @@ public sealed class SendEmailWorker(IEmailSender sender, ILogger<SendEmailWorker
 
 `Job<TArgs>` exposes `Id, Args, Kind, Queue, Attempt, MaxAttempts, Priority, Tags, Metadata, CreatedAt, ScheduledAt, AttemptedAt, Errors`.
 
+**Kinds and insert options (plan task 1.5, FR-DEF-01, FR-DEF-06, FR-INS-05, FR-INS-09).**
+
+- `JobKindRegistry.GetKind<TArgs>()` reads `[JobKind]` (not inherited) and caches it. A missing attribute or a kind outside 1–127 characters throws `KopiQueueConfigurationException`, naming the type. A failure is not cached, so a fixed type works without a restart.
+- A `JobKindRegistry` instance maps kinds back to args types for the client. Registering a second type with an existing kind throws `KopiQueueConfigurationException`. Kinds are compared ordinally, so `Send_Email` and `send_email` are different kinds.
+- `InsertOptions` has `Queue`, `Priority`, `ScheduledAt`, `MaxAttempts`, `Tags` and `Metadata` (a `JsonObject`). Unset options take `InsertDefaults`: queue `default`, priority 1, 25 attempts, scheduled now by the database's clock. `Unique` arrives with M4 (tasks 4.1–4.2), and args-level defaults with task 4.5.
+- A `ScheduledAt` later than the client's clock inserts the job as `scheduled`; otherwise it is `available`.
+- Validation runs before any SQL. An invalid option throws `ArgumentException` naming the option:
+
+| Input | Rule | Source |
+|-------|------|--------|
+| Kind | 1–127 characters, anything else free | The `kind` column's CHECK (spike 0.8) |
+| Queue | 1–127 characters of `a-z`, `0-9`, `_` and `-`, starting and ending with a letter or digit | **KQ's own rule**: the length is the column's CHECK, the character set is deliberately strict so that it can be loosened later without breaking anyone |
+| Priority | 1–4 | `priority_in_range` |
+| MaxAttempts | 1–32,767 | `max_attempts_is_positive` and `smallint` |
+| Each tag | 3–255 characters matching `\A[\w][\w\-]+[\w]\z`, with Go's ASCII `\w` | River's client-side rule (spike 0.8 D7) |
+
 ### 6.2 Registration
 
 ```csharp

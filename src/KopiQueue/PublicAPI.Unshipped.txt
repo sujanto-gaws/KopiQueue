@@ -13,6 +13,31 @@ KopiQueue.AttemptError.Error.init -> void
 KopiQueue.AttemptError.Trace.get -> string?
 KopiQueue.AttemptError.Trace.init -> void
 KopiQueue.Drivers.DiagnosticIds
+KopiQueue.IJobArgs
+KopiQueue.InsertDefaults
+KopiQueue.InsertOptions
+KopiQueue.InsertOptions.InsertOptions() -> void
+KopiQueue.InsertOptions.MaxAttempts.get -> int?
+KopiQueue.InsertOptions.MaxAttempts.init -> void
+KopiQueue.InsertOptions.Metadata.get -> System.Text.Json.Nodes.JsonObject?
+KopiQueue.InsertOptions.Metadata.init -> void
+KopiQueue.InsertOptions.Priority.get -> int?
+KopiQueue.InsertOptions.Priority.init -> void
+KopiQueue.InsertOptions.Queue.get -> string?
+KopiQueue.InsertOptions.Queue.init -> void
+KopiQueue.InsertOptions.ScheduledAt.get -> System.DateTimeOffset?
+KopiQueue.InsertOptions.ScheduledAt.init -> void
+KopiQueue.InsertOptions.Tags.get -> System.Collections.Generic.IReadOnlyList<string!>?
+KopiQueue.InsertOptions.Tags.init -> void
+KopiQueue.JobKindAttribute
+KopiQueue.JobKindAttribute.JobKindAttribute(string! kind) -> void
+KopiQueue.JobKindAttribute.Kind.get -> string!
+KopiQueue.JobKindRegistry
+KopiQueue.JobKindRegistry.JobKindRegistry() -> void
+KopiQueue.JobKindRegistry.Kinds.get -> System.Collections.Generic.IReadOnlyCollection<string!>!
+KopiQueue.JobKindRegistry.Register(System.Type! argsType) -> string!
+KopiQueue.JobKindRegistry.Register<TArgs>() -> string!
+KopiQueue.JobKindRegistry.TryGetType(string! kind, out System.Type? argsType) -> bool
 KopiQueue.JobRow
 KopiQueue.JobRow.ArgsJson.get -> string!
 KopiQueue.JobRow.ArgsJson.init -> void
@@ -56,6 +81,10 @@ KopiQueue.JobState.Pending = 4 -> KopiQueue.JobState
 KopiQueue.JobState.Retryable = 5 -> KopiQueue.JobState
 KopiQueue.JobState.Running = 6 -> KopiQueue.JobState
 KopiQueue.JobState.Scheduled = 7 -> KopiQueue.JobState
+KopiQueue.KopiQueueConfigurationException
+KopiQueue.KopiQueueConfigurationException.KopiQueueConfigurationException() -> void
+KopiQueue.KopiQueueConfigurationException.KopiQueueConfigurationException(string? message) -> void
+KopiQueue.KopiQueueConfigurationException.KopiQueueConfigurationException(string? message, System.Exception? innerException) -> void
 KopiQueue.KopiQueueMigrationException
 KopiQueue.KopiQueueMigrationException.KopiQueueMigrationException() -> void
 KopiQueue.KopiQueueMigrationException.KopiQueueMigrationException(string? message) -> void
@@ -160,9 +189,14 @@ KopiQueue.Migrations.MigrationVersion.Version.get -> int
 [KQ0001]static KopiQueue.Drivers.JobInsertResult.operator !=(KopiQueue.Drivers.JobInsertResult? left, KopiQueue.Drivers.JobInsertResult? right) -> bool
 [KQ0001]static KopiQueue.Drivers.JobInsertResult.operator ==(KopiQueue.Drivers.JobInsertResult? left, KopiQueue.Drivers.JobInsertResult? right) -> bool
 const KopiQueue.Drivers.DiagnosticIds.ExperimentalDriver = "KQ0001" -> string!
+const KopiQueue.InsertDefaults.MaxAttempts = 25 -> int
+const KopiQueue.InsertDefaults.Priority = 1 -> int
+const KopiQueue.InsertDefaults.Queue = "default" -> string!
 override KopiQueue.AttemptError.Equals(object? obj) -> bool
 override KopiQueue.AttemptError.GetHashCode() -> int
 override KopiQueue.AttemptError.ToString() -> string!
 static KopiQueue.AttemptError.operator !=(KopiQueue.AttemptError? left, KopiQueue.AttemptError? right) -> bool
 static KopiQueue.AttemptError.operator ==(KopiQueue.AttemptError? left, KopiQueue.AttemptError? right) -> bool
+static KopiQueue.JobKindRegistry.GetKind(System.Type! argsType) -> string!
+static KopiQueue.JobKindRegistry.GetKind<TArgs>() -> string!
 static readonly KopiQueue.Migrations.MigrateOptions.DefaultLockTimeout -> System.TimeSpan

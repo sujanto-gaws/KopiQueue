@@ -243,6 +243,41 @@ public sealed class NpgsqlDriverTests(PostgresFixture db) : IClassFixture<Postgr
         Assert.Equal(("23514", "priority_in_range"), (ex.SqlState, ex.ConstraintName));
     }
 
+    [Fact]
+    public async Task Resolved_insert_options_are_stored_as_given()
+    {
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var driver = await MigratedDriverAsync(ds);
+        var now = DateTimeOffset.UtcNow;
+        var later = now.AddHours(1);
+        later = later.AddTicks(-(later.Ticks % 10)); // PostgreSQL stores microseconds
+
+        var results = await driver.GetExecutor().JobInsertManyAsync(
+            [
+                JobValidation.ToInsertParams("plain", "{}", null, now),
+                JobValidation.ToInsertParams(
+                    "full",
+                    "{\"n\": 1}",
+                    new InsertOptions
+                    {
+                        Queue = "email", Priority = 3, MaxAttempts = 2, ScheduledAt = later, Tags = ["welcome"],
+                        Metadata = new System.Text.Json.Nodes.JsonObject { ["source"] = "signup" },
+                    },
+                    now),
+                JobValidation.ToInsertParams("longest", "{}", new InsertOptions { Queue = new string('q', JobValidation.MaxNameLength) }, now),
+            ],
+            Ct);
+
+        var plain = results[0].Job;
+        Assert.Equal(("default", JobState.Available, 1, 25), (plain.Queue, plain.State, plain.Priority, plain.MaxAttempts));
+        var full = results[1].Job;
+        Assert.Equal(("email", JobState.Scheduled, 3, 2, later), (full.Queue, full.State, full.Priority, full.MaxAttempts, full.ScheduledAt));
+        Assert.Equal(["welcome"], full.Tags);
+        Assert.Equal("{\"source\": \"signup\"}", full.MetadataJson);
+        Assert.Equal(127, results[2].Job.Queue.Length);
+    }
+
     private static JobInsertParams Job(string kind) => new()
     {
         Kind = kind,
