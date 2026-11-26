@@ -63,6 +63,18 @@ internal sealed class RiverHarness
         return [.. events.Where(e => e.Name == "inserted").Select(e => e.Id!.Value)];
     }
 
+    /// <summary>
+    /// Runs a queue command of River's public API on <paramref name="queue"/>: <c>pause</c> (<c>QueuePause</c>; the queue
+    /// may be <c>"*"</c>), <c>resume</c> (<c>QueueResume</c>) or <c>update</c> (<c>QueueUpdate</c> with
+    /// <paramref name="metadata"/>). Returns the error River reported, or <c>null</c>.
+    /// </summary>
+    public async Task<string?> QueueAsync(string command, string schema, string queue, string? metadata = null, CancellationToken cancellationToken = default)
+    {
+        await using var process = Start([command, "-schema", schema, "-queue", queue, "-metadata", metadata ?? "{}"]);
+        var events = await process.WaitForExitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        return events.FirstOrDefault(e => e.Name == "error")?.Error;
+    }
+
     /// <summary>Starts a River client working <paramref name="queue"/> and returns once it has started.</summary>
     public async Task<RiverProcess> StartWorkerAsync(
         string schema, string queue, int expect, TimeSpan? poll = null, TimeSpan? minRun = null, CancellationToken cancellationToken = default)
@@ -93,7 +105,7 @@ internal sealed class RiverHarness
 }
 
 /// <summary>One line of the harness's output.</summary>
-internal sealed record RiverEvent(string Name, long? Id, string? What);
+internal sealed record RiverEvent(string Name, long? Id, string? What, string? Error = null);
 
 /// <summary>A running harness process and the events it has printed.</summary>
 internal sealed class RiverProcess : IAsyncDisposable
@@ -117,7 +129,8 @@ internal sealed class RiverProcess : IAsyncDisposable
                 await _events.Writer.WriteAsync(new RiverEvent(
                     root.GetProperty("event").GetString()!,
                     root.TryGetProperty("id", out var id) ? id.GetInt64() : null,
-                    root.TryGetProperty("what", out var what) ? what.GetString() : null));
+                    root.TryGetProperty("what", out var what) ? what.GetString() : null,
+                    root.TryGetProperty("error", out var error) ? error.GetString() : null));
             }
 
             _events.Writer.Complete();

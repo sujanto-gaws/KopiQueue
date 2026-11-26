@@ -281,6 +281,179 @@ public sealed class RiverInteropTests(PostgresFixture db) : IClassFixture<Postgr
         }
     }
 
+    [Fact]
+    public async Task Both_libraries_pause_resume_and_update_queues_the_same_way()
+    {
+        db.SkipIfUnavailable();
+        var river = RiverHarness.GetOrSkip(db.ConnectionString);
+        await using var ds = db.CreateDataSource();
+
+        // The same steps, each library on a schema of its own (a pause of "*" reaches every queue of a schema).
+        (string Label, string Command, string Queue, string? Metadata)[] steps =
+        [
+            ("pause alpha", "pause", "alpha", null),
+            ("pause alpha again", "pause", "alpha", null),
+            ("pause missing", "pause", "missing", null),
+            ("pause *", "pause", "*", null),
+            ("resume alpha", "resume", "alpha", null),
+            ("resume alpha again", "resume", "alpha", null),
+            ("resume missing", "resume", "missing", null),
+            ("resume *", "resume", "*", null),
+            ("update alpha", "update", "alpha", """{"k": "v", "n": 1}"""),
+            ("update missing", "update", "missing", """{"k": "v"}"""),
+        ];
+
+        var (_, riverSchema) = await MigratedAsync(ds);
+        var riverTrace = await QueueTraceAsync(ds, riverSchema, steps, (command, queue, metadata) => river.QueueAsync(command, riverSchema, queue, metadata, Ct));
+
+        var (kopiDriver, kopiSchema) = await MigratedAsync(ds);
+        var admin = new KopiClient(kopiDriver);
+        var kopiTrace = await QueueTraceAsync(ds, kopiSchema, steps, async (command, queue, metadata) =>
+        {
+            try
+            {
+                switch (command)
+                {
+                    case "pause":
+                        await admin.QueuePauseAsync(queue, cancellationToken: Ct);
+                        break;
+                    case "resume":
+                        await admin.QueueResumeAsync(queue, cancellationToken: Ct);
+                        break;
+                    default:
+                        await admin.QueueUpdateAsync(queue, System.Text.Json.Nodes.JsonNode.Parse(metadata!)!.AsObject(), Ct);
+                        break;
+                }
+
+                return null;
+            }
+            catch (KopiQueueNotFoundException)
+            {
+                return "not found";
+            }
+        });
+
+        foreach (var line in riverTrace)
+        {
+            Report($"River:      {line}");
+        }
+
+        foreach (var line in kopiTrace)
+        {
+            Report($"KopiQueue:  {line}");
+        }
+
+        Assert.Equal(riverTrace, kopiTrace);
+    }
+
+    [Fact]
+    public async Task A_queue_paused_by_either_library_stops_the_other_until_resumed()
+    {
+        db.SkipIfUnavailable();
+        var river = RiverHarness.GetOrSkip(db.ConnectionString);
+        await using var ds = db.CreateDataSource();
+        var (driver, schema) = await MigratedAsync(ds);
+
+        // River pauses a queue a KopiQueue client works.
+        var worker = new CompatWorker();
+        var client = Client(driver, worker, TimeSpan.FromSeconds(1));
+        await client.StartAsync(Ct);
+        long riverJob;
+        try
+        {
+            Assert.Null(await river.QueueAsync("pause", schema, "compat", cancellationToken: Ct)); // KopiQueue created the row
+            await Task.Delay(TimeSpan.FromSeconds(1.5), Ct);
+            riverJob = (await river.InsertAsync(schema, "compat", "ok", cancellationToken: Ct)).Single();
+            await Task.Delay(TimeSpan.FromSeconds(2.5), Ct);
+            Assert.Equal(JobState.Available, (await GetAsync(driver, riverJob)).State);
+
+            Assert.Null(await river.QueueAsync("resume", schema, "compat", cancellationToken: Ct));
+            await WaitForAsync(driver, riverJob, j => j.State == JobState.Completed, TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            await client.StopAsync(Ct);
+        }
+
+        // KopiQueue pauses a queue a River client works.
+        await using var riverWorker = await river.StartWorkerAsync(schema, "compat_r", expect: 1, cancellationToken: Ct);
+        var admin = new KopiClient(driver);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (await admin.QueueGetAsync("compat_r", Ct) is null)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "River did not create its queue's row.");
+            await Task.Delay(50, Ct);
+        }
+
+        await admin.QueuePauseAsync("compat_r", cancellationToken: Ct);
+        await Task.Delay(TimeSpan.FromSeconds(1.5), Ct);
+        var kopiJob = await admin.InsertAsync(new CompatArgs("ok"), new InsertOptions { Queue = "compat_r" }, Ct);
+        await Task.Delay(TimeSpan.FromSeconds(2.5), Ct);
+        Assert.Equal(JobState.Available, (await GetAsync(driver, kopiJob.Job.Id)).State);
+
+        var resumed = Stopwatch.StartNew();
+        await admin.QueueResumeAsync("compat_r", cancellationToken: Ct);
+        var events = await riverWorker.WaitForExitAsync(TimeSpan.FromSeconds(20), Ct);
+        Assert.Equal([kopiJob.Job.Id], events.Where(e => e.Name == "worked").Select(e => e.Id!.Value));
+        Report($"River worked a job {resumed.ElapsedMilliseconds} ms after KopiQueue resumed its queue");
+    }
+
+    /// <summary>
+    /// Runs <paramref name="steps"/> on queues <c>alpha</c> and <c>beta</c> of <paramref name="schema"/> and describes each:
+    /// the error, the control notifications (as canonical JSON) and, per queue, whether it is paused, whether
+    /// <c>updated_at</c> moved, and its metadata.
+    /// </summary>
+    private static async Task<List<string>> QueueTraceAsync(
+        NpgsqlDataSource ds,
+        string schema,
+        (string Label, string Command, string Queue, string? Metadata)[] steps,
+        Func<string, string, string?, Task<string?>> run)
+    {
+        await using (var cmd = ds.CreateCommand($"INSERT INTO {schema}.river_queue (name, created_at, updated_at) VALUES ('alpha', now() - interval '1 hour', now() - interval '1 hour'), ('beta', now() - interval '1 hour', now() - interval '1 hour')"))
+        {
+            await cmd.ExecuteNonQueryAsync(Ct);
+        }
+
+        await using var listener = await ListenAsync(ds, schema, "river_control");
+        var trace = new List<string>();
+        var updated = await QueueRowsAsync(ds, schema);
+        foreach (var (label, command, queue, metadata) in steps)
+        {
+            var heard = listener.Heard.Count;
+            var error = await run(command, queue, metadata);
+            await Task.Delay(300, Ct);
+            var notifications = listener.Heard.Skip(heard).Select(h => Canonical(System.Text.Json.Nodes.JsonNode.Parse(h.Payload)));
+            var rows = await QueueRowsAsync(ds, schema);
+            var states = rows.Select(r => $"{r.Key}: {(r.Value.Paused ? "paused" : "running")}, {(r.Value.UpdatedAt != updated[r.Key].UpdatedAt ? "updated" : "unchanged")}, {r.Value.Metadata}");
+            trace.Add($"{label}: error {error ?? "none"}; notify [{string.Join(", ", notifications)}]; {string.Join("; ", states)}");
+            updated = rows;
+        }
+
+        return trace;
+    }
+
+    private static async Task<SortedDictionary<string, (bool Paused, DateTime UpdatedAt, string Metadata)>> QueueRowsAsync(NpgsqlDataSource ds, string schema)
+    {
+        await using var cmd = ds.CreateCommand($"SELECT name, paused_at IS NOT NULL, updated_at, metadata::text FROM {schema}.river_queue");
+        var rows = new SortedDictionary<string, (bool, DateTime, string)>(StringComparer.Ordinal);
+        await using var reader = await cmd.ExecuteReaderAsync(Ct);
+        while (await reader.ReadAsync(Ct))
+        {
+            rows[reader.GetString(0)] = (reader.GetBoolean(1), reader.GetDateTime(2), Canonical(System.Text.Json.Nodes.JsonNode.Parse(reader.GetString(3))));
+        }
+
+        return rows;
+    }
+
+    /// <summary>JSON with object keys sorted and no spaces, so payloads written differently compare equal.</summary>
+    private static string Canonical(System.Text.Json.Nodes.JsonNode? node) => node switch
+    {
+        System.Text.Json.Nodes.JsonObject o => "{" + string.Join(",", o.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => JsonSerializer.Serialize(p.Key) + ":" + Canonical(p.Value))) + "}",
+        System.Text.Json.Nodes.JsonArray a => "[" + string.Join(",", a.Select(Canonical)) + "]",
+        null => "null",
+        _ => node.ToJsonString(),
+    };
+
     private static async Task<KopiClient> LeadershipClientAsync(IKopiDriver driver, TimeSpan electInterval)
     {
         var client = new KopiClient(driver, new KopiClientOptions

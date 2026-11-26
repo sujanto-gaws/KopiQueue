@@ -47,6 +47,11 @@ internal sealed class ProducerOptions
 /// taken until the function returns, which for the executor is when the completer has accepted the outcome. The run
 /// function must not throw; if it does, the error is logged and the slot freed.
 /// </para>
+/// <para>
+/// A paused queue fetches nothing; running jobs carry on (FR-QUE-03). It is paused while either its pause everywhere (the
+/// database's <c>paused_at</c>, applied by the <see cref="QueueMaintainer"/>) or its local pause is set; clearing the
+/// last one fetches at once.
+/// </para>
 /// </remarks>
 internal sealed partial class Producer : IStartStopService, IAsyncDisposable
 {
@@ -66,6 +71,8 @@ internal sealed partial class Producer : IStartStopService, IAsyncDisposable
     private Task? _loop;
     private IDisposable[] _subscriptions = [];
     private int _waitingForSlot;
+    private int _pausedEverywhere;
+    private int _pausedLocally;
 
     public Producer(
         IKopiDriver driver,
@@ -102,6 +109,44 @@ internal sealed partial class Producer : IStartStopService, IAsyncDisposable
 
     /// <summary>Asks for a fetch as soon as the cooldown allows.</summary>
     public void Wake() => _wake.Set();
+
+    /// <summary>Whether the queue is paused here, everywhere or locally, so nothing is fetched.</summary>
+    public bool IsPaused => Volatile.Read(ref _pausedEverywhere) == 1 || Volatile.Read(ref _pausedLocally) == 1;
+
+    /// <summary>
+    /// Sets the queue's pause everywhere (<paramref name="locally"/> <c>false</c>) or its local pause. Fetching stops
+    /// while either is set; when neither is any more, the producer fetches at once.
+    /// </summary>
+    public void SetPaused(bool paused, bool locally)
+    {
+        lock (_lock)
+        {
+            var was = IsPaused;
+            if (locally)
+            {
+                Volatile.Write(ref _pausedLocally, paused ? 1 : 0);
+            }
+            else
+            {
+                Volatile.Write(ref _pausedEverywhere, paused ? 1 : 0);
+            }
+
+            if (was == IsPaused)
+            {
+                return;
+            }
+
+            if (was)
+            {
+                LogResumed(Queue);
+                Wake();
+            }
+            else
+            {
+                LogPaused(Queue);
+            }
+        }
+    }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -246,10 +291,24 @@ internal sealed partial class Producer : IStartStopService, IAsyncDisposable
             try
             {
                 await _wake.WaitAsync(_options.FetchPollInterval, _time, stop).ConfigureAwait(false);
+                if (IsPaused)
+                {
+                    // Look again after clearing, so a resume in between is not missed.
+                    _wake.Clear();
+                    if (IsPaused)
+                    {
+                        continue;
+                    }
+                }
+
                 var sinceLast = _time.GetUtcNow() - lastFetch;
                 if (sinceLast < _options.FetchCooldown)
                 {
                     await Task.Delay(_options.FetchCooldown - sinceLast, _time, stop).ConfigureAwait(false);
+                    if (IsPaused)
+                    {
+                        continue; // paused during the cooldown: only a fetch already sent completes
+                    }
                 }
 
                 var free = _options.MaxWorkers - _running.Count;
@@ -356,6 +415,12 @@ internal sealed partial class Producer : IStartStopService, IAsyncDisposable
 
     [LoggerMessage(EventId = 2005, Level = LogLevel.Debug, Message = "Ignored an insert notification for queue {Queue} that is not valid JSON")]
     private partial void LogBadNotification(string queue);
+
+    [LoggerMessage(EventId = 2006, Level = LogLevel.Information, Message = "Queue {Queue} is paused here; running jobs carry on")]
+    private partial void LogPaused(string queue);
+
+    [LoggerMessage(EventId = 2007, Level = LogLevel.Information, Message = "Queue {Queue} is resumed here")]
+    private partial void LogResumed(string queue);
 
     private sealed class RunningJob(CancellationTokenSource cancellation)
     {

@@ -1,5 +1,6 @@
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
+using System.Text.Json.Nodes;
 using KopiQueue.Drivers;
 using KopiQueue.Execution;
 using KopiQueue.Serialization;
@@ -75,6 +76,53 @@ public interface IKopiClient
     /// <exception cref="ArgumentException">A job or its options are not valid; the message names the job's index. Nothing is inserted.</exception>
     /// <exception cref="KopiQueueConfigurationException">An args type has no valid <see cref="JobKindAttribute"/>.</exception>
     Task<long> InsertManyFastAsync(IEnumerable<InsertRequest> jobs, DbTransaction? transaction = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Reads a queue (FR-ADM-04).</summary>
+    /// <param name="name">The queue.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The queue, or <c>null</c> if it does not exist.</returns>
+    Task<QueueRow?> QueueGetAsync(string name, CancellationToken cancellationToken = default);
+
+    /// <summary>Lists queues in name order, a page at a time (FR-ADM-04).</summary>
+    /// <param name="parameters">The page size and where to start. <c>null</c> returns the first 100.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><see cref="QueueListParams.Limit"/> is not from 1 to 10,000.</exception>
+    Task<IReadOnlyList<QueueRow>> QueueListAsync(QueueListParams? parameters = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Pauses a queue, or every queue for <c>"*"</c> (FR-QUE-03): clients fetch none of its jobs until it is resumed, and
+    /// jobs already running finish. Everywhere by default: the pause is stored, every client working the queue learns of
+    /// it at once through a notification, or within its poll interval without notifications (FR-QUE-04), and River
+    /// clients sharing the schema obey it too. With <see cref="QueuePauseOptions.LocalOnly"/>, only this client stops.
+    /// Pausing a paused queue changes nothing.
+    /// </summary>
+    /// <param name="name">The queue, or <c>"*"</c> for all.</param>
+    /// <param name="options">Where the pause applies. <c>null</c>: everywhere.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <exception cref="KopiQueueNotFoundException">
+    /// The queue does not exist (no client has worked it yet), or, locally, this client does not work it.
+    /// </exception>
+    Task QueuePauseAsync(string name, QueuePauseOptions? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resumes a queue, or every queue for <c>"*"</c>: the reverse of <see cref="QueuePauseAsync"/>, which applies the
+    /// same way. A local resume does not undo a pause everywhere, nor the other way round.
+    /// </summary>
+    /// <param name="name">The queue, or <c>"*"</c> for all.</param>
+    /// <param name="options">Where the resume applies. <c>null</c>: everywhere.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <exception cref="KopiQueueNotFoundException">
+    /// The queue does not exist, or, locally, this client does not work it.
+    /// </exception>
+    Task QueueResumeAsync(string name, QueuePauseOptions? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Replaces a queue's metadata (FR-ADM-04).</summary>
+    /// <param name="name">The queue.</param>
+    /// <param name="metadata">The new metadata, which replaces the old.</param>
+    /// <param name="cancellationToken">Cancels the update.</param>
+    /// <returns>The updated queue.</returns>
+    /// <exception cref="KopiQueueNotFoundException">The queue does not exist.</exception>
+    Task<QueueRow> QueueUpdateAsync(string name, JsonObject metadata, CancellationToken cancellationToken = default);
 }
 #pragma warning restore RS0026
 
@@ -224,8 +272,8 @@ public sealed class KopiClientOptions
 
     /// <summary>
     /// How long the leader keeps a queue's row after no client has worked the queue (FR-MNT-05). The row holds the
-    /// queue's pause state and metadata; its jobs are never deleted with it. Default: 24 hours; <c>null</c> keeps queue
-    /// rows forever.
+    /// queue's pause state and metadata; its jobs are never deleted with it. Clients mark the queues they work every
+    /// minute, so it must be at least 5 minutes. Default: 24 hours; <c>null</c> keeps queue rows forever.
     /// </summary>
     public TimeSpan? QueueRetention { get; init; } = TimeSpan.FromHours(24);
 }
@@ -362,6 +410,67 @@ public sealed partial class KopiClient : IKopiClient
         var count = await Executor(transaction).JobInsertFastAsync(inserts, cancellationToken).ConfigureAwait(false);
         WakeIfPooled(transaction, inserts);
         return count;
+    }
+
+    /// <inheritdoc/>
+    public Task<QueueRow?> QueueGetAsync(string name, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        return _driver.GetExecutor().QueueGetAsync(name, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<QueueRow>> QueueListAsync(QueueListParams? parameters = null, CancellationToken cancellationToken = default)
+    {
+        parameters ??= new QueueListParams();
+        ArgumentOutOfRangeException.ThrowIfLessThan(parameters.Limit, 1, nameof(parameters));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(parameters.Limit, 10_000, nameof(parameters));
+        return _driver.GetExecutor().QueueListAsync(new QueueListQuery { Max = parameters.Limit, After = parameters.After }, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public Task QueuePauseAsync(string name, QueuePauseOptions? options = null, CancellationToken cancellationToken = default) =>
+        SetPausedAsync(name, paused: true, options, cancellationToken);
+
+    /// <inheritdoc/>
+    public Task QueueResumeAsync(string name, QueuePauseOptions? options = null, CancellationToken cancellationToken = default) =>
+        SetPausedAsync(name, paused: false, options, cancellationToken);
+
+    /// <inheritdoc/>
+    public async Task<QueueRow> QueueUpdateAsync(string name, JsonObject metadata, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentNullException.ThrowIfNull(metadata);
+        var row = await _driver.GetExecutor()
+            .QueueUpdateAsync(new QueueUpdateParams { Name = name, MetadataJson = metadata.ToJsonString() }, cancellationToken)
+            .ConfigureAwait(false);
+        return row ?? throw new KopiQueueNotFoundException($"Queue '{name}' does not exist.");
+    }
+
+    private async Task SetPausedAsync(string name, bool paused, QueuePauseOptions? options, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        var queues = QueueMaintainer;
+        if (options?.LocalOnly == true)
+        {
+            if (queues is null || !queues.Apply(name, paused, locally: true))
+            {
+                throw new KopiQueueNotFoundException($"This client does not work queue '{name}'.");
+            }
+
+            return;
+        }
+
+        var executor = _driver.GetExecutor();
+        var found = paused
+            ? await executor.QueuePauseAsync(name, cancellationToken).ConfigureAwait(false)
+            : await executor.QueueResumeAsync(name, cancellationToken).ConfigureAwait(false);
+        if (!found)
+        {
+            throw new KopiQueueNotFoundException($"Queue '{name}' does not exist.");
+        }
+
+        queues?.Apply(name, paused, locally: false); // here at once, without waiting for the notification or the poll
     }
 
     private void WakeIfPooled(DbTransaction? transaction, IEnumerable<JobInsertParams> inserts)

@@ -16,8 +16,23 @@ public sealed partial class KopiClient
 
     private readonly Lock _lifecycle = new();
     private Running? _running;
+
+    /// <summary>The shortest <see cref="KopiClientOptions.QueueRetention"/>: several of the queue maintainer's refreshes.</summary>
+    private static readonly TimeSpan MinQueueRetention = TimeSpan.FromMinutes(5);
     private Task? _stopping;
     private bool _started;
+
+    /// <summary>The working client's queue maintainer, or <c>null</c> before it starts working.</summary>
+    private QueueMaintainer? QueueMaintainer
+    {
+        get
+        {
+            lock (_lifecycle)
+            {
+                return _running?.Queues;
+            }
+        }
+    }
 
     /// <summary>Whether the client is working jobs: started, and not yet stopped.</summary>
     public bool IsWorking
@@ -70,6 +85,7 @@ public sealed partial class KopiClient
             }
 
             await running.Elector.StartAsync(cancellationToken).ConfigureAwait(false);
+            await running.Queues.StartAsync(cancellationToken).ConfigureAwait(false); // paused queues pause before the first fetch
             await running.Completer.StartAsync(cancellationToken).ConfigureAwait(false);
             foreach (var producer in running.Producers)
             {
@@ -140,6 +156,7 @@ public sealed partial class KopiClient
 
         // 1. Stop fetching and unsubscribe; a fetch in progress still starts its jobs.
         await Task.WhenAll(running.Producers.Select(p => p.StopFetchingAsync())).ConfigureAwait(false);
+        await running.Queues.StopAsync(CancellationToken.None).ConfigureAwait(false);
 
         // 2-3. Soft stop, then hard stop.
         try
@@ -227,7 +244,10 @@ public sealed partial class KopiClient
         Check(options.ClientId is null || options.ClientId.Length <= MaxClientIdLength, nameof(KopiClientOptions.ClientId), $"must be at most {MaxClientIdLength} characters");
         Check(options.ElectInterval > TimeSpan.Zero, nameof(KopiClientOptions.ElectInterval), "must be positive");
         Check(options.LeaderTtl >= options.ElectInterval * 2, nameof(KopiClientOptions.LeaderTtl), "must be at least twice ElectInterval");
-        Check(options.QueueRetention is null || options.QueueRetention > TimeSpan.Zero, nameof(KopiClientOptions.QueueRetention), "must be positive, or null to keep queues");
+        Check(
+            options.QueueRetention is null || options.QueueRetention >= MinQueueRetention,
+            nameof(KopiClientOptions.QueueRetention),
+            "must be at least 5 minutes (clients mark their queues worked every minute), or null to keep queues");
         Check(Enum.IsDefined(options.NotificationMode), nameof(KopiClientOptions.NotificationMode), "is not a known mode");
         Check(Enum.IsDefined(options.CompleterMode), nameof(KopiClientOptions.CompleterMode), "is not a known mode");
         return errors;
@@ -304,7 +324,14 @@ public sealed partial class KopiClient
                 _timeProvider,
                 loggers.CreateLogger<Producer>()))
             .ToArray();
-        return new Running(producers, completer, elector, maintenance, notifier, loggers.CreateLogger<KopiClient>());
+        var queueMaintainer = new QueueMaintainer(
+            _driver,
+            producers,
+            new QueueMaintainerOptions { PollInterval = _options.FetchPollInterval },
+            notifier,
+            _timeProvider,
+            loggers.CreateLogger<QueueMaintainer>());
+        return new Running(producers, queueMaintainer, completer, elector, maintenance, notifier, loggers.CreateLogger<KopiClient>());
     }
 
     /// <summary>The leader-only maintenance services (design §5.7), which run while this client leads.</summary>
@@ -323,9 +350,17 @@ public sealed partial class KopiClient
 
     /// <summary>The components of a working client.</summary>
     private sealed class Running(
-        Producer[] producers, JobCompleter completer, Elector elector, MaintenanceHost maintenance, Notifier? notifier, ILogger logger) : IAsyncDisposable
+        Producer[] producers,
+        QueueMaintainer queues,
+        JobCompleter completer,
+        Elector elector,
+        MaintenanceHost maintenance,
+        Notifier? notifier,
+        ILogger logger) : IAsyncDisposable
     {
         public Producer[] Producers { get; } = producers;
+
+        public QueueMaintainer Queues { get; } = queues;
 
         public JobCompleter Completer { get; } = completer;
 
@@ -344,6 +379,7 @@ public sealed partial class KopiClient
                 await producer.DisposeAsync().ConfigureAwait(false);
             }
 
+            await Queues.DisposeAsync().ConfigureAwait(false);
             await Completer.DisposeAsync().ConfigureAwait(false);
             await Elector.DisposeAsync().ConfigureAwait(false);
             await Maintenance.DisposeAsync().ConfigureAwait(false);

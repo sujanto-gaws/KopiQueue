@@ -36,6 +36,12 @@ internal sealed class NpgsqlStatements
         LeaderAttemptReelect = Load("leader_attempt_reelect.sql");
         LeaderResign = Load("leader_resign.sql");
         QueueDeleteExpired = Load("queue_delete_expired.sql");
+        QueueCreateOrSetUpdatedAtMany = Load("queue_create_or_set_updated_at_many.sql");
+        QueueGet = Load("queue_get.sql");
+        QueueList = Load("queue_list.sql");
+        QueuePause = Load("queue_pause.sql");
+        QueueResume = Load("queue_resume.sql");
+        QueueUpdate = Load("queue_update.sql");
     }
 
     /// <summary>The configured schema, unquoted, or <c>null</c> for the connection's current schema.</summary>
@@ -58,6 +64,18 @@ internal sealed class NpgsqlStatements
     public string LeaderResign { get; }
 
     public string QueueDeleteExpired { get; }
+
+    public string QueueCreateOrSetUpdatedAtMany { get; }
+
+    public string QueueGet { get; }
+
+    public string QueueList { get; }
+
+    public string QueuePause { get; }
+
+    public string QueueResume { get; }
+
+    public string QueueUpdate { get; }
 
     /// <summary>The binary <c>COPY</c> command of the fast insert path. Its columns match <see cref="NpgsqlExecutor.JobInsertFastAsync"/>.</summary>
     public string JobInsertFast { get; }
@@ -326,6 +344,106 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(parameters.Retention, TimeSpan.Zero, nameof(parameters));
         ArgumentOutOfRangeException.ThrowIfLessThan(parameters.Max, 1, nameof(parameters));
 
+        var names = await RowsAsync(
+            statements.QueueDeleteExpired,
+            [
+                new() { NpgsqlDbType = NpgsqlDbType.Interval, Value = parameters.Retention },
+                new() { NpgsqlDbType = NpgsqlDbType.Integer, Value = parameters.Max },
+            ],
+            reader => reader.GetString(0),
+            cancellationToken).ConfigureAwait(false);
+        names.Sort(StringComparer.Ordinal);
+        return names;
+    }
+
+    public async Task<IReadOnlyList<QueueRow>> QueueCreateOrSetUpdatedAtManyAsync(IReadOnlyList<string> names, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+        ArgumentOutOfRangeException.ThrowIfZero(names.Count, nameof(names));
+        foreach (var name in names)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(name, nameof(names));
+        }
+
+        if (names.Distinct(StringComparer.Ordinal).Count() != names.Count)
+        {
+            throw new ArgumentException("The queue names must be distinct.", nameof(names));
+        }
+
+        return await RowsAsync(
+            statements.QueueCreateOrSetUpdatedAtMany,
+            [new() { NpgsqlDbType = NpgsqlDbType.Array | NpgsqlDbType.Text, Value = names.ToArray() }],
+            ReadQueue,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<QueueRow?> QueueGetAsync(string name, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        var rows = await RowsAsync(statements.QueueGet, [new() { NpgsqlDbType = NpgsqlDbType.Text, Value = name }], ReadQueue, cancellationToken)
+            .ConfigureAwait(false);
+        return rows.Count == 0 ? null : rows[0];
+    }
+
+    public async Task<IReadOnlyList<QueueRow>> QueueListAsync(QueueListQuery query, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentOutOfRangeException.ThrowIfLessThan(query.Max, 1, nameof(query));
+        return await RowsAsync(
+            statements.QueueList,
+            [
+                new() { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)query.After ?? DBNull.Value },
+                new() { NpgsqlDbType = NpgsqlDbType.Array | NpgsqlDbType.Text, Value = (object?)query.Names?.ToArray() ?? DBNull.Value },
+                new() { NpgsqlDbType = NpgsqlDbType.Integer, Value = query.Max },
+            ],
+            ReadQueue,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task<bool> QueuePauseAsync(string name, CancellationToken cancellationToken) =>
+        AnyRowAsync(statements.QueuePause, ControlParameters(name), cancellationToken);
+
+    public Task<bool> QueueResumeAsync(string name, CancellationToken cancellationToken) =>
+        AnyRowAsync(statements.QueueResume, ControlParameters(name), cancellationToken);
+
+    public async Task<QueueRow?> QueueUpdateAsync(QueueUpdateParams parameters, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentException.ThrowIfNullOrEmpty(parameters.Name, nameof(parameters));
+        ArgumentException.ThrowIfNullOrEmpty(parameters.MetadataJson, nameof(parameters));
+        var rows = await RowsAsync(
+            statements.QueueUpdate,
+            [
+                new() { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)statements.Schema ?? DBNull.Value },
+                new() { NpgsqlDbType = NpgsqlDbType.Text, Value = parameters.Name },
+                new() { NpgsqlDbType = NpgsqlDbType.Jsonb, Value = parameters.MetadataJson },
+            ],
+            ReadQueue,
+            cancellationToken).ConfigureAwait(false);
+        return rows.Count == 0 ? null : rows[0];
+    }
+
+    private static QueueRow ReadQueue(NpgsqlDataReader reader) => new()
+    {
+        Name = reader.GetString(0),
+        CreatedAt = reader.GetFieldValue<DateTimeOffset>(1),
+        UpdatedAt = reader.GetFieldValue<DateTimeOffset>(2),
+        PausedAt = reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3),
+        MetadataJson = reader.GetString(4),
+    };
+
+    private NpgsqlParameter[] ControlParameters(string name)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        return
+        [
+            new() { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)statements.Schema ?? DBNull.Value },
+            new() { NpgsqlDbType = NpgsqlDbType.Text, Value = name },
+        ];
+    }
+
+    private async Task<List<T>> RowsAsync<T>(string sql, NpgsqlParameter[] parameters, Func<NpgsqlDataReader, T> read, CancellationToken cancellationToken)
+    {
         var connection = transaction?.Connection;
         var ownConnection = connection is null;
         if (ownConnection)
@@ -335,23 +453,21 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
 
         try
         {
-            var command = new NpgsqlCommand(statements.QueueDeleteExpired, connection, transaction);
+            var command = new NpgsqlCommand(sql, connection, transaction);
             await using (command.ConfigureAwait(false))
             {
-                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Interval, Value = parameters.Retention });
-                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = parameters.Max });
-                var names = new List<string>();
+                command.Parameters.AddRange(parameters);
+                var rows = new List<T>();
                 var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
                 await using (reader.ConfigureAwait(false))
                 {
                     while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                     {
-                        names.Add(reader.GetString(0));
+                        rows.Add(read(reader));
                     }
                 }
 
-                names.Sort(StringComparer.Ordinal);
-                return names;
+                return rows;
             }
         }
         finally

@@ -130,6 +130,47 @@ public interface IKopiExecutor
     /// </summary>
     /// <returns>The names of the deleted queues.</returns>
     Task<IReadOnlyList<string>> QueueDeleteExpiredAsync(QueueDeleteExpiredParams parameters, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Creates the rows of <paramref name="names"/> that do not exist, and sets <see cref="QueueRow.UpdatedAt"/> of the
+    /// others to the database's now (FR-QUE-02): a client working the queues runs it when it starts and then regularly, so
+    /// the queue cleaner keeps them. Rows are locked in name order, so clients refreshing the same queues cannot deadlock.
+    /// </summary>
+    /// <param name="names">The queues: not empty, without duplicates.</param>
+    /// <param name="cancellationToken">Cancels the statement.</param>
+    /// <returns>The rows, with their pause state, in no particular order.</returns>
+    Task<IReadOnlyList<QueueRow>> QueueCreateOrSetUpdatedAtManyAsync(IReadOnlyList<string> names, CancellationToken cancellationToken);
+
+    /// <summary>Reads a queue (FR-ADM-04).</summary>
+    /// <returns>The queue, or <c>null</c> if it does not exist.</returns>
+    Task<QueueRow?> QueueGetAsync(string name, CancellationToken cancellationToken);
+
+    /// <summary>Lists queues in name order, as the database sorts them (FR-ADM-04).</summary>
+    Task<IReadOnlyList<QueueRow>> QueueListAsync(QueueListQuery query, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Pauses queue <paramref name="name"/>, or every queue for <c>"*"</c> (FR-QUE-03), as River does: a queue not yet
+    /// paused gets <see cref="QueueRow.PausedAt"/> and <see cref="QueueRow.UpdatedAt"/> set to now; one already paused
+    /// keeps both. Drivers that can notify then announce <c>{"action": "pause", "queue": name}</c> on the control topic,
+    /// even when nothing changed, so every client applies it (FR-QUE-04).
+    /// </summary>
+    /// <returns><c>false</c> if the named queue does not exist; always <c>true</c> for <c>"*"</c>.</returns>
+    Task<bool> QueuePauseAsync(string name, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Resumes queue <paramref name="name"/>, or every queue for <c>"*"</c>: the mirror of <see cref="QueuePauseAsync"/>,
+    /// announcing <c>{"action": "resume", "queue": name}</c>.
+    /// </summary>
+    /// <returns><c>false</c> if the named queue does not exist; always <c>true</c> for <c>"*"</c>.</returns>
+    Task<bool> QueueResumeAsync(string name, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Replaces a queue's metadata and sets its <see cref="QueueRow.UpdatedAt"/> to now (FR-ADM-04), as River does.
+    /// Drivers that can notify announce <c>{"action": "metadata_changed", "metadata": ..., "queue": name}</c> on the
+    /// control topic.
+    /// </summary>
+    /// <returns>The updated queue, or <c>null</c> if it does not exist.</returns>
+    Task<QueueRow?> QueueUpdateAsync(QueueUpdateParams parameters, CancellationToken cancellationToken);
 }
 
 /// <summary>What a database supports. The core reads these instead of checking the driver type (FR-DB-03).</summary>
@@ -215,6 +256,33 @@ public sealed class LeaderElectParams
 
     /// <summary>How long the lease lasts after it is won or extended. Positive.</summary>
     public required TimeSpan Ttl { get; init; }
+}
+
+/// <summary>Which queues <see cref="IKopiExecutor.QueueListAsync"/> returns.</summary>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed class QueueListQuery
+{
+    /// <summary>The most queues to return: at least 1.</summary>
+    public required int Max { get; init; }
+
+    /// <summary>Only queues whose name sorts after this one, or <c>null</c> for no lower bound.</summary>
+    public string? After { get; init; }
+
+    /// <summary>Only these queues, or <c>null</c> for any.</summary>
+    public IReadOnlyList<string>? Names { get; init; }
+}
+
+/// <summary>A change of a queue by <see cref="IKopiExecutor.QueueUpdateAsync"/>.</summary>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed class QueueUpdateParams
+{
+    /// <summary>The queue.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>The queue's new metadata: a JSON object, which replaces the old one.</summary>
+    public required string MetadataJson { get; init; }
 }
 
 /// <summary>Which queues <see cref="IKopiExecutor.QueueDeleteExpiredAsync"/> deletes.</summary>
