@@ -1,0 +1,194 @@
+using System.Data.Common;
+using KopiQueue.Drivers;
+
+namespace KopiQueue.Tests;
+
+/// <summary>Starting and stopping a client, and checking its configuration (plan task 2.7: FR-HST-03, FR-DEF-06).</summary>
+public sealed class KopiClientLifecycleTests
+{
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    [Fact]
+    public async Task An_insert_only_client_starts_nothing_and_never_touches_the_database()
+    {
+        var driver = new IdleDriver();
+        var client = new KopiClient(driver);
+
+        await client.StartAsync(Ct);
+        await Task.Delay(100, Ct);
+        await client.StopAsync(Ct);
+
+        Assert.False(client.IsWorking);
+        Assert.Equal(0, driver.Fetches);
+        Assert.Equal(0, driver.ListenerRequests);
+    }
+
+    [Fact]
+    public async Task A_working_client_fetches_until_stopped_and_stopping_twice_is_harmless()
+    {
+        var driver = new IdleDriver();
+        var client = new KopiClient(driver, Working());
+
+        await client.StartAsync(Ct);
+        await Until(() => driver.Fetches > 0);
+        var working = client.IsWorking;
+        await client.StopAsync(Ct);
+        await client.StopAsync(Ct);
+        var fetches = driver.Fetches;
+        await Task.Delay(200, Ct);
+
+        Assert.True(working);
+        Assert.False(client.IsWorking);
+        Assert.Equal(fetches, driver.Fetches);
+        Assert.Equal(["a", "b"], driver.Queues.Order());
+    }
+
+    [Fact]
+    public async Task A_client_starts_once()
+    {
+        var client = new KopiClient(new IdleDriver(), Working());
+        await client.StartAsync(Ct);
+        await client.StopAsync(Ct);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.StartAsync(Ct));
+    }
+
+    [Fact]
+    public async Task Stopping_a_client_that_never_started_is_harmless() =>
+        await new KopiClient(new IdleDriver(), Working()).StopAsync(Ct);
+
+    [Fact]
+    public void The_client_id_defaults_to_machine_process_and_a_random_suffix()
+    {
+        var a = new KopiClient(new IdleDriver()).ClientId;
+        var b = new KopiClient(new IdleDriver()).ClientId;
+
+        Assert.StartsWith($"{Environment.MachineName}-{Environment.ProcessId}-", a, StringComparison.Ordinal);
+        Assert.NotEqual(a, b);
+        Assert.Equal("worker-7", new KopiClient(new IdleDriver(), new KopiClientOptions { ClientId = "worker-7" }).ClientId);
+    }
+
+    public static TheoryData<string, KopiClientOptions> InvalidConfigurations() => new()
+    {
+        { "no queues", new KopiClientOptions { Workers = Workers() } },
+        { "no workers", new KopiClientOptions { Queues = Queue("a", 1) } },
+        { "an empty registry", new KopiClientOptions { Queues = Queue("a", 1), Workers = new WorkerRegistry() } },
+        { "MaxWorkers 0", new KopiClientOptions { Queues = Queue("a", 0), Workers = Workers() } },
+        { "MaxWorkers 10,001", new KopiClientOptions { Queues = Queue("a", 10_001), Workers = Workers() } },
+        { "a bad queue name", new KopiClientOptions { Queues = Queue("Not A Queue!", 1), Workers = Workers() } },
+        { "a zero job timeout", new KopiClientOptions { Queues = TwoQueues(), Workers = Workers(), JobTimeout = TimeSpan.Zero } },
+        { "a zero poll interval", new KopiClientOptions { Queues = TwoQueues(), Workers = Workers(), FetchPollInterval = TimeSpan.Zero } },
+        { "a negative cooldown", new KopiClientOptions { Queues = TwoQueues(), Workers = Workers(), FetchCooldown = TimeSpan.FromSeconds(-1) } },
+        { "a zero batch", new KopiClientOptions { Queues = TwoQueues(), Workers = Workers(), FetchBatchMax = 0 } },
+        { "a negative soft stop", new KopiClientOptions { Queues = TwoQueues(), Workers = Workers(), SoftStopTimeout = TimeSpan.FromSeconds(-1) } },
+        { "a blank client id", new KopiClientOptions { Queues = TwoQueues(), Workers = Workers(), ClientId = " " } },
+        { "ListenNotify on a driver that cannot listen", new KopiClientOptions { Queues = TwoQueues(), Workers = Workers(), NotificationMode = NotificationMode.ListenNotify } },
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidConfigurations))]
+    public async Task An_invalid_configuration_fails_start_and_starts_nothing(string what, KopiClientOptions options)
+    {
+        var driver = new IdleDriver();
+        var client = new KopiClient(driver, options);
+
+        var error = await Assert.ThrowsAsync<KopiQueueConfigurationException>(() => client.StartAsync(Ct));
+
+        Assert.False(string.IsNullOrWhiteSpace(error.Message), what);
+        await Task.Delay(50, Ct);
+        Assert.Equal(0, driver.Fetches);
+        Assert.False(client.IsWorking);
+    }
+
+    [Fact]
+    public async Task Poll_only_never_asks_the_driver_for_a_listener()
+    {
+        var driver = new IdleDriver();
+        var client = new KopiClient(driver, new KopiClientOptions { Queues = TwoQueues(), Workers = Workers(), NotificationMode = NotificationMode.PollOnly });
+
+        await client.StartAsync(Ct);
+        await client.StopAsync(Ct);
+
+        Assert.Equal(0, driver.ListenerRequests);
+    }
+
+    private static KopiClientOptions Working() => new()
+    {
+        Queues = TwoQueues(),
+        Workers = Workers(),
+        FetchPollInterval = TimeSpan.FromMilliseconds(20),
+    };
+
+    private static Dictionary<string, QueueOptions> TwoQueues() =>
+        new() { ["a"] = new() { MaxWorkers = 2 }, ["b"] = new() { MaxWorkers = 1 } };
+
+    private static Dictionary<string, QueueOptions> Queue(string name, int maxWorkers) => new() { [name] = new() { MaxWorkers = maxWorkers } };
+
+    private static WorkerRegistry Workers() => new WorkerRegistry().Add(new NoopWorker());
+
+    private static async Task Until(Func<bool> condition)
+    {
+        var limit = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < limit, "The condition was not met within 10 s.");
+            await Task.Delay(10, Ct);
+        }
+    }
+
+    [JobKind("lifecycle_noop")]
+    private sealed record NoopArgs : IJobArgs;
+
+    private sealed class NoopWorker : Worker<NoopArgs>
+    {
+        public override Task WorkAsync(Job<NoopArgs> job, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    /// <summary>A database with no jobs and no listener.</summary>
+    private sealed class IdleDriver : IKopiDriver, IKopiExecutor
+    {
+        private int _fetches;
+        private int _listenerRequests;
+
+        public int Fetches => Volatile.Read(ref _fetches);
+
+        public int ListenerRequests => Volatile.Read(ref _listenerRequests);
+
+        public System.Collections.Concurrent.ConcurrentDictionary<string, byte> QueueSet { get; } = new();
+
+        public IEnumerable<string> Queues => QueueSet.Keys;
+
+        public DriverCapabilities Capabilities { get; } = new() { ListenNotify = false, BulkCopy = false };
+
+        public IKopiExecutor GetExecutor() => this;
+
+        public IKopiExecutor GetExecutor(DbTransaction transaction) => throw new NotSupportedException();
+
+        public KopiQueue.Migrations.KopiMigrator CreateMigrator(Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null) =>
+            throw new NotSupportedException();
+
+        public IKopiListener? CreateListener()
+        {
+            Interlocked.Increment(ref _listenerRequests);
+            return null;
+        }
+
+        public Task<IReadOnlyList<JobRow>> JobGetAvailableAsync(JobGetAvailableParams parameters, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _fetches);
+            QueueSet.TryAdd(parameters.Queue, 0);
+            return Task.FromResult<IReadOnlyList<JobRow>>([]);
+        }
+
+        public Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<JobRow>>([]);
+
+        public Task<IReadOnlyList<JobInsertResult>> JobInsertManyAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<long> JobInsertFastAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<JobRow?> JobGetByIdAsync(long id, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+}

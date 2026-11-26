@@ -336,3 +336,47 @@ static KopiQueue.JobControl.Snooze(System.TimeSpan delay) -> KopiQueue.JobSnooze
 [KQ0001]KopiQueue.Drivers.JobSetStateParams.ScheduledAt.init -> void
 [KQ0001]KopiQueue.Drivers.JobSetStateParams.State.get -> KopiQueue.JobState
 [KQ0001]KopiQueue.Drivers.JobSetStateParams.State.init -> void
+KopiQueue.CompleterMode
+KopiQueue.CompleterMode.Async = 1 -> KopiQueue.CompleterMode
+KopiQueue.CompleterMode.Batch = 0 -> KopiQueue.CompleterMode
+KopiQueue.CompleterMode.Inline = 2 -> KopiQueue.CompleterMode
+KopiQueue.KopiClient.ClientId.get -> string!
+KopiQueue.KopiClient.IsWorking.get -> bool
+KopiQueue.KopiClient.StartAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+KopiQueue.KopiClient.StopAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+KopiQueue.KopiClientOptions.ClientId.get -> string?
+KopiQueue.KopiClientOptions.ClientId.init -> void
+KopiQueue.KopiClientOptions.CompleterMode.get -> KopiQueue.CompleterMode
+KopiQueue.KopiClientOptions.CompleterMode.init -> void
+KopiQueue.KopiClientOptions.FetchBatchMax.get -> int
+KopiQueue.KopiClientOptions.FetchBatchMax.init -> void
+KopiQueue.KopiClientOptions.FetchCooldown.get -> System.TimeSpan
+KopiQueue.KopiClientOptions.FetchCooldown.init -> void
+KopiQueue.KopiClientOptions.FetchPollInterval.get -> System.TimeSpan
+KopiQueue.KopiClientOptions.FetchPollInterval.init -> void
+KopiQueue.KopiClientOptions.HardStopGrace.get -> System.TimeSpan
+KopiQueue.KopiClientOptions.HardStopGrace.init -> void
+KopiQueue.KopiClientOptions.JobTimeout.get -> System.TimeSpan
+KopiQueue.KopiClientOptions.JobTimeout.init -> void
+KopiQueue.KopiClientOptions.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory?
+KopiQueue.KopiClientOptions.LoggerFactory.init -> void
+KopiQueue.KopiClientOptions.NotificationMode.get -> KopiQueue.NotificationMode
+KopiQueue.KopiClientOptions.NotificationMode.init -> void
+KopiQueue.KopiClientOptions.Queues.get -> System.Collections.Generic.IReadOnlyDictionary<string!, KopiQueue.QueueOptions!>?
+KopiQueue.KopiClientOptions.Queues.init -> void
+KopiQueue.KopiClientOptions.RetryPolicy.get -> KopiQueue.IRetryPolicy?
+KopiQueue.KopiClientOptions.RetryPolicy.init -> void
+KopiQueue.KopiClientOptions.Services.get -> System.IServiceProvider?
+KopiQueue.KopiClientOptions.Services.init -> void
+KopiQueue.KopiClientOptions.SoftStopTimeout.get -> System.TimeSpan?
+KopiQueue.KopiClientOptions.SoftStopTimeout.init -> void
+KopiQueue.KopiClientOptions.Workers.get -> KopiQueue.WorkerRegistry?
+KopiQueue.KopiClientOptions.Workers.init -> void
+KopiQueue.NotificationMode
+KopiQueue.NotificationMode.Auto = 0 -> KopiQueue.NotificationMode
+KopiQueue.NotificationMode.ListenNotify = 1 -> KopiQueue.NotificationMode
+KopiQueue.NotificationMode.PollOnly = 2 -> KopiQueue.NotificationMode
+KopiQueue.QueueOptions
+KopiQueue.QueueOptions.MaxWorkers.get -> int
+KopiQueue.QueueOptions.MaxWorkers.init -> void
+KopiQueue.QueueOptions.QueueOptions() -> void

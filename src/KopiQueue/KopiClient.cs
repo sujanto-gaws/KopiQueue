@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using KopiQueue.Drivers;
 using KopiQueue.Execution;
 using KopiQueue.Serialization;
+using Microsoft.Extensions.Logging;
 
 namespace KopiQueue;
 
@@ -143,8 +144,104 @@ public sealed class KopiClientOptions
     /// </summary>
     public IJobArgsSerializer? ArgsSerializer { get; init; }
 
-    /// <summary>The clock used to tell whether <see cref="InsertOptions.ScheduledAt"/> is in the future. Default: the system clock.</summary>
+    /// <summary>
+    /// The clock: whether <see cref="InsertOptions.ScheduledAt"/> is in the future, timeouts, retry times and polling.
+    /// Default: the system clock.
+    /// </summary>
     public TimeProvider? TimeProvider { get; init; }
+
+    /// <summary>
+    /// The queues this client works, by name, each with its concurrency (FR-QUE-01). Empty (the default) makes an
+    /// insert-only client, which <see cref="KopiClient.StartAsync"/> leaves idle.
+    /// </summary>
+    public IReadOnlyDictionary<string, QueueOptions>? Queues { get; init; }
+
+    /// <summary>The workers, one per job kind (FR-DEF-02). Required when <see cref="Queues"/> is set.</summary>
+    public WorkerRegistry? Workers { get; init; }
+
+    /// <summary>
+    /// Resolves workers and their dependencies, in a new scope per job (FR-DEF-03). Default: none; workers are then
+    /// created with their public constructor, or registered as instances.
+    /// </summary>
+    public IServiceProvider? Services { get; init; }
+
+    /// <summary>Creates the client's loggers. Default: none.</summary>
+    public ILoggerFactory? LoggerFactory { get; init; }
+
+    /// <summary>
+    /// This client's name, recorded in each job it fetches (<c>attempted_by</c>). Default: the machine name, the process
+    /// ID and a random suffix.
+    /// </summary>
+    public string? ClientId { get; init; }
+
+    /// <summary>How long a job may run unless its worker says (FR-EXE-05). Default: 1 minute; <see cref="Timeout.InfiniteTimeSpan"/> for no limit.</summary>
+    public TimeSpan JobTimeout { get; init; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>When a failed job runs again, unless its worker says (FR-ERR-02). Default: <see cref="DefaultRetryPolicy"/>.</summary>
+    public IRetryPolicy? RetryPolicy { get; init; }
+
+    /// <summary>
+    /// How often each queue looks for jobs when nothing wakes it (FR-EXE-03). Default: 1 s. In poll-only mode this bounds
+    /// how long a job inserted by another process waits.
+    /// </summary>
+    public TimeSpan FetchPollInterval { get; init; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>The least time between two fetches of a queue, which coalesces bursts of inserts. Default: 100 ms.</summary>
+    public TimeSpan FetchCooldown { get; init; } = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>The most jobs one fetch takes. Default: 1,000.</summary>
+    public int FetchBatchMax { get; init; } = 1_000;
+
+    /// <summary>Whether fetching listens for insert notifications or only polls (FR-EXE-03, FR-DB-04). Default: <see cref="KopiQueue.NotificationMode.Auto"/>.</summary>
+    public NotificationMode NotificationMode { get; init; } = NotificationMode.Auto;
+
+    /// <summary>How finished jobs are written (design §5.3). Default: <see cref="KopiQueue.CompleterMode.Batch"/>.</summary>
+    public CompleterMode CompleterMode { get; init; } = CompleterMode.Batch;
+
+    /// <summary>
+    /// How long <see cref="KopiClient.StopAsync"/> waits for running jobs before it cancels them (FR-HST-03). Default:
+    /// <c>null</c>, which waits until the stop's token fires.
+    /// </summary>
+    public TimeSpan? SoftStopTimeout { get; init; }
+
+    /// <summary>
+    /// After a hard stop cancels the running jobs, how long to wait for them to finish, and then for their outcomes to be
+    /// written. Default: 5 s.
+    /// </summary>
+    public TimeSpan HardStopGrace { get; init; } = TimeSpan.FromSeconds(5);
+}
+
+/// <summary>Settings of one queue (design §7).</summary>
+public sealed class QueueOptions
+{
+    /// <summary>The most jobs of the queue this client runs at once (FR-EXE-04): 1 to 10,000.</summary>
+    public required int MaxWorkers { get; init; }
+}
+
+/// <summary>How a client learns about new jobs (FR-EXE-03, FR-DB-04; design §3.3).</summary>
+public enum NotificationMode
+{
+    /// <summary>Listen when the driver can (PostgreSQL), otherwise poll.</summary>
+    Auto,
+
+    /// <summary>Listen; starting fails if the driver cannot.</summary>
+    ListenNotify,
+
+    /// <summary>Only poll, for example behind PgBouncer in transaction mode.</summary>
+    PollOnly,
+}
+
+/// <summary>How a client writes finished jobs (design §5.3).</summary>
+public enum CompleterMode
+{
+    /// <summary>In batches of up to 2,000 every 50 ms: the fewest writes.</summary>
+    Batch,
+
+    /// <summary>Each on its own, up to 100 at once.</summary>
+    Async,
+
+    /// <summary>Each before the job's slot is freed; mainly for tests.</summary>
+    Inline,
 }
 
 /// <summary>The KopiQueue client (design §6.3).</summary>
@@ -165,23 +262,34 @@ public sealed class KopiClientOptions
 /// from the driver and returns it. One client can be shared by any number of concurrent callers, and creating one per
 /// request is cheap; there is nothing to dispose.
 /// </para>
+/// <para>
+/// To work jobs, configure <see cref="KopiClientOptions.Queues"/> and <see cref="KopiClientOptions.Workers"/>, call
+/// <see cref="StartAsync"/>, and call <see cref="StopAsync"/> before the process exits (FR-HST-03). Hosting does both
+/// with the application.
+/// </para>
 /// </remarks>
-public sealed class KopiClient : IKopiClient
+public sealed partial class KopiClient : IKopiClient
 {
     private readonly IKopiDriver _driver;
     private readonly IJobArgsSerializer _serializer;
     private readonly TimeProvider _timeProvider;
+    private readonly KopiClientOptions _options;
 
     /// <summary>Creates a client on <paramref name="driver"/>.</summary>
     /// <param name="driver">The database driver, for example <c>new NpgsqlDriver(dataSource)</c>.</param>
-    /// <param name="options">Serialiser and clock. <c>null</c> uses the defaults.</param>
+    /// <param name="options">Serialiser, clock, and the queues and workers to work. <c>null</c> uses the defaults.</param>
     public KopiClient(IKopiDriver driver, KopiClientOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(driver);
         _driver = driver;
-        _serializer = options?.ArgsSerializer ?? SystemTextJsonArgsSerializer.Default;
-        _timeProvider = options?.TimeProvider ?? TimeProvider.System;
+        _options = options ?? new KopiClientOptions();
+        _serializer = _options.ArgsSerializer ?? SystemTextJsonArgsSerializer.Default;
+        _timeProvider = _options.TimeProvider ?? TimeProvider.System;
+        ClientId = _options.ClientId ?? DefaultClientId();
     }
+
+    /// <summary>This client's name, recorded in the jobs it fetches.</summary>
+    public string ClientId { get; }
 
     /// <summary>
     /// Wakes this client's producers after its own pooled inserts, whose commit it knows about (design §3, FR-DB-04).
