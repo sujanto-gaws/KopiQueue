@@ -1,0 +1,25 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
+    <File Path="README.md" />
+    <File Path=".github/workflows/ci.yml" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/KopiQueue/KopiQueue.csproj" />
+    <Project Path="src/KopiQueue.Npgsql/KopiQueue.Npgsql.csproj" />
+    <Project Path="src/KopiQueue.SqlServer/KopiQueue.SqlServer.csproj" />
+    <Project Path="src/KopiQueue.Hosting/KopiQueue.Hosting.csproj" />
+    <Project Path="src/KopiQueue.EntityFrameworkCore/KopiQueue.EntityFrameworkCore.csproj" />
+    <Project Path="src/KopiQueue.OpenTelemetry/KopiQueue.OpenTelemetry.csproj" />
+    <Project Path="src/KopiQueue.Testing/KopiQueue.Testing.csproj" />
+    <Project Path="src/KopiQueue.Cli/KopiQueue.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KopiQueue.TestInfrastructure/KopiQueue.TestInfrastructure.csproj" />
+    <Project Path="tests/KopiQueue.Npgsql.Tests/KopiQueue.Npgsql.Tests.csproj" />
+    <Project Path="tests/KopiQueue.SqlServer.Tests/KopiQueue.SqlServer.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Test helpers for applications using KopiQueue: insertion assertions, worker harness, fake client.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\KopiQueue\KopiQueue.csproj" />
+  </ItemGroup>
+
+</Project>

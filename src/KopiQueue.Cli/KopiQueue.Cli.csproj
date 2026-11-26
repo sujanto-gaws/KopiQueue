@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>The 'kopi' dotnet tool: run KopiQueue schema migrations for PostgreSQL and SQL Server.</Description>
+    <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>kopi</ToolCommandName>
+    <IsAotCompatible>false</IsAotCompatible>
+    <IncludeSymbols>false</IncludeSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\KopiQueue.Npgsql\KopiQueue.Npgsql.csproj" />
+    <ProjectReference Include="..\KopiQueue.SqlServer\KopiQueue.SqlServer.csproj" />
+  </ItemGroup>
+
+</Project>

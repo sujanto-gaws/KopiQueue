@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>PostgreSQL driver for KopiQueue (River-compatible schema, LISTEN/NOTIFY, COPY).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\KopiQueue\KopiQueue.csproj" />
+  </ItemGroup>
+
+</Project>

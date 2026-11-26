@@ -1,0 +1,20 @@
+name: Feature request
+description: Propose new behaviour or an API change
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: An API sketch is welcome. Note which databases it must work on.
+  - type: input
+    id: requirement
+    attributes:
+      label: Related requirement IDs
+      description: From docs/01-requirements.md, if any (e.g. FR-PER-03)

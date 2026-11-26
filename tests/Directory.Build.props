@@ -1,0 +1,13 @@
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)../Directory.Build.props" />
+
+  <PropertyGroup>
+    <TargetFrameworks>$(KopiTargetFrameworks)</TargetFrameworks>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- Test-friendly analyzer relaxations:
+         CA1707 underscores in test names; CA1515 xUnit test classes must be public;
+         CA2007 ConfigureAwait is irrelevant in tests. -->
+    <NoWarn>$(NoWarn);CA1707;CA1515;CA2007</NoWarn>
+  </PropertyGroup>
+</Project>

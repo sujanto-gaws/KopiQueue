@@ -1,0 +1,15 @@
+bin/
+obj/
+artifacts/
+TestResults/
+BenchmarkDotNet.Artifacts/
+*.user
+*.suo
+.vs/
+.idea/
+*.DotSettings.user
+coverage*.xml
+*.nupkg
+*.snupkg
+.env
+.claude/settings.local.json
