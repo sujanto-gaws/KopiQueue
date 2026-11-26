@@ -1,0 +1,61 @@
+== relations
+river_job|r|p
+river_job_id_seq|S|p
+river_leader|r|u
+river_migration|r|p
+river_migration_id_seq|S|p
+== columns
+river_job|1|id|bigint|true|||nextval('{schema}.river_job_id_seq'::regclass)
+river_job|2|state|{schema}.river_job_state|true|||'available'::{schema}.river_job_state
+river_job|3|attempt|smallint|true|||0
+river_job|4|max_attempts|smallint|true|||
+river_job|5|attempted_at|timestamp with time zone|false|||
+river_job|6|created_at|timestamp with time zone|true|||now()
+river_job|7|finalized_at|timestamp with time zone|false|||
+river_job|8|scheduled_at|timestamp with time zone|true|||now()
+river_job|9|priority|smallint|true|||1
+river_job|10|args|jsonb|false|||
+river_job|11|attempted_by|text[]|false|||
+river_job|12|errors|jsonb[]|false|||
+river_job|13|kind|text|true|||
+river_job|14|metadata|jsonb|false|||
+river_job|15|queue|text|true|||'default'::text
+river_job|16|tags|character varying(255)[]|true|||'{}'::character varying[]
+river_leader|1|elected_at|timestamp with time zone|true|||
+river_leader|2|expires_at|timestamp with time zone|true|||
+river_leader|3|leader_id|text|true|||
+river_leader|4|name|text|true|||
+river_migration|1|id|bigint|true|||nextval('{schema}.river_migration_id_seq'::regclass)
+river_migration|2|created_at|timestamp with time zone|true|||now()
+river_migration|3|version|bigint|true|||
+== constraints
+river_job|finalized_or_finalized_at_null|c|CHECK ((((state = ANY (ARRAY['cancelled'::{schema}.river_job_state, 'completed'::{schema}.river_job_state, 'discarded'::{schema}.river_job_state])) AND (finalized_at IS NOT NULL)) OR (finalized_at IS NULL)))|false|false|true
+river_job|kind_length|c|CHECK (((char_length(kind) > 0) AND (char_length(kind) < 128)))|false|false|true
+river_job|max_attempts_is_positive|c|CHECK ((max_attempts > 0))|false|false|true
+river_job|priority_in_range|c|CHECK (((priority >= 1) AND (priority <= 4)))|false|false|true
+river_job|queue_length|c|CHECK (((char_length(queue) > 0) AND (char_length(queue) < 128)))|false|false|true
+river_job|river_job_pkey|p|PRIMARY KEY (id)|false|false|true
+river_leader|leader_id_length|c|CHECK (((char_length(leader_id) > 0) AND (char_length(leader_id) < 128)))|false|false|true
+river_leader|name_length|c|CHECK (((char_length(name) > 0) AND (char_length(name) < 128)))|false|false|true
+river_leader|river_leader_pkey|p|PRIMARY KEY (name)|false|false|true
+river_migration|river_migration_pkey|p|PRIMARY KEY (id)|false|false|true
+river_migration|version|c|CHECK ((version >= 1))|false|false|true
+== indexes
+river_job|river_job_args_index|CREATE INDEX river_job_args_index ON {schema}.river_job USING gin (args)
+river_job|river_job_kind|CREATE INDEX river_job_kind ON {schema}.river_job USING btree (kind)
+river_job|river_job_metadata_index|CREATE INDEX river_job_metadata_index ON {schema}.river_job USING gin (metadata)
+river_job|river_job_pkey|CREATE UNIQUE INDEX river_job_pkey ON {schema}.river_job USING btree (id)
+river_job|river_job_prioritized_fetching_index|CREATE INDEX river_job_prioritized_fetching_index ON {schema}.river_job USING btree (state, queue, priority, scheduled_at, id)
+river_job|river_job_state_and_finalized_at_index|CREATE INDEX river_job_state_and_finalized_at_index ON {schema}.river_job USING btree (state, finalized_at) WHERE (finalized_at IS NOT NULL)
+river_leader|river_leader_pkey|CREATE UNIQUE INDEX river_leader_pkey ON {schema}.river_leader USING btree (name)
+river_migration|river_migration_pkey|CREATE UNIQUE INDEX river_migration_pkey ON {schema}.river_migration USING btree (id)
+river_migration|river_migration_version_idx|CREATE UNIQUE INDEX river_migration_version_idx ON {schema}.river_migration USING btree (version)
+== types
+river_job_state|e|available,cancelled,completed,discarded,pending,retryable,running,scheduled
+== functions
+river_job_notify||trigger|plpgsql|v|u|false|false|false|100|0
+== triggers
+river_job|river_notify|CREATE TRIGGER river_notify AFTER INSERT ON {schema}.river_job FOR EACH ROW EXECUTE FUNCTION {schema}.river_job_notify()
+== sequences
+river_job_id_seq|bigint|1|1|1|9223372036854775807|1|false|river_job.id
+river_migration_id_seq|bigint|1|1|1|9223372036854775807|1|false|river_migration.id

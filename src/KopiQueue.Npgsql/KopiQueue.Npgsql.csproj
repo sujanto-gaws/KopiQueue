@@ -12,4 +12,9 @@
     <ProjectReference Include="..\KopiQueue\KopiQueue.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- River-compatible migration line "main" (design §4.1, plan task 1.2). -->
+    <EmbeddedResource Include="Migrations\**\*.sql" LogicalName="kopi-migrations/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
 </Project>
