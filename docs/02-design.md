@@ -127,7 +127,11 @@ It stops them in reverse order. The completer is stopped last among the executio
 - **Run function:** `JobExecutor.ExecuteAsync(row, hardStop)` is what the producer runs for each job. It returns once the completer (`IJobCompleter`, task 2.6) has *accepted* the outcome, which frees the slot.
 - **Scope and worker:** a new DI scope per job (FR-DEF-03), in which the args are deserialised and the worker is resolved or created. A client without DI gets an empty service provider, so workers with public constructors still work. Bad args or a worker that cannot be built fail the attempt without running it.
 - **Timeout** (FR-EXE-05): the worker's `Timeout(job)`, else the client's `JobTimeout` (default 1 min). Zero means the client's; `Timeout.InfiniteTimeSpan` (any negative value) means none. The worker's token is cancelled by the timeout or by the client's hard stop.
-- **Outcomes** (FR-EXE-08): returning completes the job. Any exception, cancellation included, is an error recorded as `{at, attempt, error, trace}`: the message, and `Exception.ToString()` as the trace. A timeout records "The job did not finish within its timeout of …", a hard stop "The client stopped before the job finished.". An error retries after the worker's `NextRetry(job)` (ignored if it throws or is negative), else the default backoff (§5.4), until `attempt ≥ max_attempts` discards the job.
+- **Outcomes** (FR-EXE-08), as River v0.51.2's `jobexecutor.reportError`, so jobs move the same way whichever library works them (table in §5.2):
+  - Returning completes the job.
+  - A cancellation caused by the client's hard stop **interrupts** the attempt: the job is made `available` now with `attempt − 1` and no error, so a client stop never uses up an attempt.
+  - Any other exception, a timeout included, is an error recorded as `{at, attempt, error, trace}`: `at` is when the attempt started, the message is the error and `Exception.ToString()` the trace. A timeout records "The job did not finish within its timeout of …".
+  - An error retries after the worker's `NextRetry(job)` (ignored if it throws or is negative), else the default backoff (§5.4), until `attempt ≥ max_attempts` discards the job. A retry due within the scheduler interval (default 5 s) makes the job `available` at once rather than `retryable`, so short retries are not held up by the scheduler.
 - **Unknown kinds** follow DQ-3: an error like any other.
 - **Job context** (FR-EXE-07): `Job<TArgs>` carries the ID, attempt, metadata and the rest of the row. Reaching the client from a worker comes with the client lifecycle and DI registration (tasks 2.7, 2.8).
 - `JobControl.Cancel`/`Snooze` and the public `IRetryPolicy` arrive in task 2.5; until then the backoff is internal.
@@ -270,7 +274,7 @@ stateDiagram-v2
   running --> retryable   : error and attempt < max_attempts
   running --> discarded   : error and attempt >= max_attempts
   running --> cancelled   : JobCancel from worker / external cancel
-  running --> scheduled   : snooze (max_attempts++)
+  running --> scheduled   : snooze (attempt--)
   running --> retryable   : rescuer (stuck, attempts left)
   running --> discarded   : rescuer (stuck, no attempts left)
   available --> cancelled : external cancel
@@ -472,6 +476,7 @@ try   await pipeline(middlewares..., worker.WorkAsync)(job, cts.Token)
       → Completed
 catch JobCancelException     → Cancelled (reason recorded in errors)
 catch JobSnoozeException(d)  → Snoozed(d)
+catch OperationCanceledException when the hard stop fired → Interrupted
 catch OperationCanceledException when the timeout fired → Error(timeout)
 catch Exception e            → errorHandler?.HandleError(job, e) may override; else Error(e)
 outcome → completer.Enqueue(job.Id, outcome)
@@ -489,10 +494,13 @@ Classifying outcomes into states:
 | Outcome | New state | Fields |
 |---------|-----------|--------|
 | Completed | `completed` | `finalized_at = now()` |
-| Error, attempt < max | `retryable` | `scheduled_at = now() + NextRetry(job)`, append to `errors` |
+| Interrupted (hard stop) | `available` | `scheduled_at = now()`, `attempt = attempt − 1`; no error |
+| Error, attempt < max | `retryable`, or `available` if due within the scheduler interval | `scheduled_at = now() + NextRetry(job)`, append to `errors` |
 | Error, attempt ≥ max | `discarded` | `finalized_at = now()`, append to `errors` |
 | Cancel | `cancelled` | `finalized_at = now()`, append to `errors` |
-| Snooze(d) | `scheduled` (or `available` if d = 0) | `scheduled_at = now() + d`, `max_attempts = max_attempts + 1`, `metadata.snoozes++` |
+| Snooze(d) | `scheduled`, or `available` if due within the scheduler interval | `scheduled_at = now() + d`, `attempt = attempt − 1`, `metadata.snoozes = snoozes + 1` |
+
+These are River v0.51.2's rules (`jobexecutor.reportResult` and `reportError`), read from its source in task 2.4. An earlier draft of this table had a snooze raise `max_attempts`; River decrements `attempt` instead, which also keeps a snooze out of an attempt-based backoff.
 
 ### 5.3 Batch complete
 
@@ -523,8 +531,8 @@ Completer variants (option): `Batch` (default), `Async` (one update per job, run
 ```csharp
 public interface IRetryPolicy { DateTimeOffset NextRetry(JobRow job, DateTimeOffset now); }
 
-// Default: attempt^4 seconds, ±10% jitter, capped at 24 h.
-// attempt 1 → 1 s, 2 → 16 s, 3 → 81 s, 5 → ~10 min, 10 → ~2.8 h, 25 → capped.
+// Default: n^4 seconds, ±10% jitter, capped at 24 h, where n = errors.Count + 1 (as River: errors, not attempts).
+// 1st error → 1 s, 2nd → 16 s, 3rd → 81 s, 5th → ~10 min, 10th → ~2.8 h, 25th → capped.
 ```
 
 The worker's `NextRetry(job)` override wins over the client policy. It returns a delay (`TimeSpan?`), not a time, so a worker needs no clock and tests stay deterministic under `FakeTimeProvider`; `null` means "use the policy".

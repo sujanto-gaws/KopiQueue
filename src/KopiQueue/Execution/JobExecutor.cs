@@ -15,6 +15,12 @@ internal sealed class JobExecutorOptions
     /// </summary>
     public TimeSpan JobTimeout { get; init; } = TimeSpan.FromMinutes(1);
 
+    /// <summary>
+    /// How often the leader's scheduler makes due jobs available (design §5.7). A job due again within this interval is
+    /// made <see cref="JobState.Available"/> at once instead of waiting for the scheduler, as River does. Default: 5 s.
+    /// </summary>
+    public TimeSpan SchedulerInterval { get; init; } = TimeSpan.FromSeconds(5);
+
     /// <summary>Picks retry jitter: returns a number in [0, 1). Default: <see cref="Random.Shared"/>.</summary>
     public Func<double>? Random { get; init; }
 }
@@ -26,10 +32,12 @@ internal sealed class JobExecutorOptions
 /// <remarks>
 /// <para>
 /// Each job gets a new DI scope, in which its worker is resolved (or created) after its args are deserialised. The
-/// worker runs with a token that its timeout and the client's hard stop cancel. Returning means the job completed;
-/// any exception, including a cancellation, is an error: recorded in the job's <c>errors</c> with its message and
-/// stack trace, and retried after the worker's <c>NextRetry</c> or the default backoff until the job's attempts run
-/// out, when it is discarded. Nothing a worker does escapes to the host.
+/// worker runs with a token that its timeout and the client's hard stop cancel. Returning means the job completed.
+/// A cancellation caused by the client stopping interrupts the attempt: the job is made available again and the
+/// attempt does not count. Any other exception, a timeout included, is an error: recorded in the job's <c>errors</c>
+/// with its message and stack trace, and retried after the worker's <c>NextRetry</c> or the default backoff until the
+/// job's attempts run out, when it is discarded. Nothing a worker does escapes to the host. These rules are River's
+/// (v0.51.2 <c>jobexecutor.reportError</c>), so jobs move the same way whichever library works them.
 /// </para>
 /// <para>
 /// A job whose kind has no worker on this client is an error like any other (DQ-3, as River): it is retried with
@@ -77,6 +85,13 @@ internal sealed partial class JobExecutor
         _logger = (ILogger?)logger ?? NullLogger.Instance;
     }
 
+    private enum OutcomeKind
+    {
+        Completed,
+        Interrupted,
+        Failed,
+    }
+
     /// <summary>
     /// Runs <paramref name="job"/> and returns once the completer has accepted its outcome. Never throws for anything
     /// the job does; only the completer's own failures escape.
@@ -86,19 +101,23 @@ internal sealed partial class JobExecutor
     public async Task ExecuteAsync(JobRow job, CancellationToken hardStop)
     {
         ArgumentNullException.ThrowIfNull(job);
+        var startedAt = _time.GetUtcNow();
         var started = _time.GetTimestamp();
-        var (error, retryDelay) = await RunAsync(job, hardStop).ConfigureAwait(false);
-        var completion = Classify(job, error, retryDelay, _time.GetElapsedTime(started));
+        var outcome = await RunAsync(job, startedAt, hardStop).ConfigureAwait(false);
+        var completion = Classify(job, outcome, _time.GetElapsedTime(started));
         await _completer.CompleteAsync(completion, CancellationToken.None).ConfigureAwait(false);
     }
 
-    /// <summary>Runs the worker; returns the attempt's error (<c>null</c> if it completed) and the worker's retry delay.</summary>
-    private async Task<(AttemptError? Error, TimeSpan? RetryDelay)> RunAsync(JobRow job, CancellationToken hardStop)
+    private static AttemptError Error(JobRow job, DateTimeOffset startedAt, Exception exception) =>
+        new(startedAt, job.Attempt, exception.Message, exception.ToString());
+
+    /// <summary>Runs the worker and says how the attempt ended.</summary>
+    private async Task<Outcome> RunAsync(JobRow job, DateTimeOffset startedAt, CancellationToken hardStop)
     {
         if (!_workers.TryGet(job.Kind, out var registration))
         {
             LogUnknownKind(job.Id, job.Kind);
-            return (Error(job, $"No worker is registered for kind '{job.Kind}' on this client.", trace: null), null);
+            return Outcome.Failed(new AttemptError(startedAt, job.Attempt, $"No worker is registered for kind '{job.Kind}' on this client.", null));
         }
 
         var scope = _scopes?.CreateAsyncScope();
@@ -113,12 +132,13 @@ internal sealed partial class JobExecutor
             catch (Exception e)
 #pragma warning restore CA1031
             {
-                return (Error(job, e), null);
+                return Outcome.Failed(Error(job, startedAt, e));
             }
 
             await using (unit.ConfigureAwait(false))
             {
-                return (await WorkAsync(job, unit, hardStop).ConfigureAwait(false), RetryDelay(job, unit));
+                var outcome = await WorkAsync(job, unit, startedAt, hardStop).ConfigureAwait(false);
+                return outcome.Kind == OutcomeKind.Failed ? outcome with { RetryDelay = RetryDelay(job, unit) } : outcome;
             }
         }
         finally
@@ -130,7 +150,7 @@ internal sealed partial class JobExecutor
         }
     }
 
-    private async Task<AttemptError?> WorkAsync(JobRow job, IWorkUnit unit, CancellationToken hardStop)
+    private async Task<Outcome> WorkAsync(JobRow job, IWorkUnit unit, DateTimeOffset startedAt, CancellationToken hardStop)
     {
         TimeSpan timeout;
         try
@@ -141,7 +161,7 @@ internal sealed partial class JobExecutor
         catch (Exception e)
 #pragma warning restore CA1031
         {
-            return Error(job, e);
+            return Outcome.Failed(Error(job, startedAt, e));
         }
 
         // A zero timeout means the client's; any negative one means no limit.
@@ -155,32 +175,32 @@ internal sealed partial class JobExecutor
         try
         {
             await unit.WorkAsync(linked.Token).ConfigureAwait(false);
-            return null;
+            return Outcome.Completed;
         }
-        catch (OperationCanceledException e) when (timer.IsCancellationRequested && !hardStop.IsCancellationRequested)
+        catch (OperationCanceledException) when (hardStop.IsCancellationRequested)
+        {
+            LogInterrupted(job.Id, job.Kind);
+            return Outcome.Interrupted;
+        }
+        catch (OperationCanceledException e) when (timer.IsCancellationRequested)
         {
             LogTimedOut(job.Id, job.Kind, timeout);
-            return Error(job, $"The job did not finish within its timeout of {timeout}.", e.ToString());
-        }
-        catch (OperationCanceledException e) when (hardStop.IsCancellationRequested)
-        {
-            return Error(job, "The client stopped before the job finished.", e.ToString());
+            return Outcome.Failed(new AttemptError(startedAt, job.Attempt, $"The job did not finish within its timeout of {timeout}.", e.ToString()));
         }
 #pragma warning disable CA1031 // Whatever the worker throws fails the attempt, never the host (FR-EXE-08).
         catch (Exception e)
 #pragma warning restore CA1031
         {
-            return Error(job, e);
+            return Outcome.Failed(Error(job, startedAt, e));
         }
     }
 
-    /// <summary>The worker's retry delay; a <c>NextRetry</c> override that throws or returns a negative delay is ignored.</summary>
+    /// <summary>The worker's retry delay, or <c>null</c> for the default; a <c>NextRetry</c> override that throws is ignored.</summary>
     private TimeSpan? RetryDelay(JobRow job, IWorkUnit unit)
     {
         try
         {
-            var delay = unit.NextRetry();
-            return delay is { } d && d < TimeSpan.Zero ? null : delay;
+            return unit.NextRetry();
         }
 #pragma warning disable CA1031 // Fall back to the default backoff rather than lose the outcome.
         catch (Exception e)
@@ -191,29 +211,34 @@ internal sealed partial class JobExecutor
         }
     }
 
-    /// <summary>The outcome table of design §5.2 for completed and failed attempts.</summary>
-    private JobCompletion Classify(JobRow job, AttemptError? error, TimeSpan? retryDelay, TimeSpan duration)
+    /// <summary>The outcome table of design §5.2.</summary>
+    private JobCompletion Classify(JobRow job, Outcome outcome, TimeSpan duration)
     {
         var now = _time.GetUtcNow();
-        if (error is null)
+        if (outcome.Kind == OutcomeKind.Completed)
         {
             return new JobCompletion(job, JobState.Completed, now, null, null, duration);
         }
 
+        if (outcome.Kind == OutcomeKind.Interrupted)
+        {
+            // The client stopped: run it again soon, as if this attempt had not happened (River: JobSetStateInterrupted).
+            return new JobCompletion(job, JobState.Available, null, now, null, duration, Attempt: Math.Max(job.Attempt - 1, 0));
+        }
+
+        var error = outcome.Error!;
         if (job.Attempt >= job.MaxAttempts)
         {
             LogDiscarded(job.Id, job.Kind, job.Attempt, error.Error);
             return new JobCompletion(job, JobState.Discarded, now, null, error, duration);
         }
 
-        var delay = retryDelay ?? RetryBackoff.Delay(job.Attempt, _random());
+        // A worker delay that lands in the past (it was negative) falls back to the default, as in River.
+        var delay = outcome.RetryDelay is { } d && d >= TimeSpan.Zero ? d : RetryBackoff.Delay(job.Errors.Count + 1, _random());
         LogRetrying(job.Id, job.Kind, job.Attempt, delay, error.Error);
-        return new JobCompletion(job, JobState.Retryable, null, now + delay, error, duration);
+        var state = delay <= _options.SchedulerInterval ? JobState.Available : JobState.Retryable;
+        return new JobCompletion(job, state, null, now + delay, error, duration);
     }
-
-    private AttemptError Error(JobRow job, Exception exception) => Error(job, exception.Message, exception.ToString());
-
-    private AttemptError Error(JobRow job, string message, string? trace) => new(_time.GetUtcNow(), job.Attempt, message, trace);
 
     [LoggerMessage(EventId = 2100, Level = LogLevel.Warning, Message = "Job {JobId} has kind {Kind}, which has no worker on this client; it will be retried")]
     private partial void LogUnknownKind(long jobId, string kind);
@@ -229,6 +254,19 @@ internal sealed partial class JobExecutor
 
     [LoggerMessage(EventId = 2104, Level = LogLevel.Warning, Message = "The NextRetry override of job {JobId} ({Kind}) threw; using the default backoff")]
     private partial void LogNextRetryFailed(Exception exception, long jobId, string kind);
+
+    [LoggerMessage(EventId = 2105, Level = LogLevel.Information, Message = "Job {JobId} ({Kind}) was interrupted by the client stopping; it will run again")]
+    private partial void LogInterrupted(long jobId, string kind);
+
+    /// <summary>How an attempt ended, before classification.</summary>
+    private sealed record Outcome(OutcomeKind Kind, AttemptError? Error = null, TimeSpan? RetryDelay = null)
+    {
+        public static readonly Outcome Completed = new(OutcomeKind.Completed);
+
+        public static readonly Outcome Interrupted = new(OutcomeKind.Interrupted);
+
+        public static Outcome Failed(AttemptError error) => new(OutcomeKind.Failed, error);
+    }
 
     /// <summary>The services of a client created without DI: workers with public constructors still work.</summary>
     private sealed class EmptyServiceProvider : IServiceProvider

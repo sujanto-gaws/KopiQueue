@@ -44,17 +44,39 @@ public sealed class JobExecutorTests
     public async Task An_exception_is_recorded_and_the_job_retried_after_the_default_backoff()
     {
         var (completer, time) = (new RecordingCompleter(), new FakeTimeProvider());
-        var executor = Executor(Throwing(new InvalidOperationException("boom")), completer, time, random: () => 0.5);
+        var startedAt = time.GetUtcNow();
+        var executor = Executor(new WorkerRegistry().Add(new LambdaWorker<PingArgs>((_, _) =>
+        {
+            time.Advance(TimeSpan.FromSeconds(3));
+            return Throw(new InvalidOperationException("boom"));
+        })), completer, time, random: () => 0.5);
 
-        await executor.ExecuteAsync(Row("ping", attempt: 2), Ct);
+        await executor.ExecuteAsync(Row("ping", attempt: 2, errors: 1), Ct);
 
         var completion = Assert.Single(completer.Completions);
-        Assert.Equal((JobState.Retryable, (DateTimeOffset?)null), (completion.State, completion.FinalizedAt));
+        Assert.Equal((JobState.Retryable, (DateTimeOffset?)null, (int?)null), (completion.State, completion.FinalizedAt, completion.Attempt));
         Assert.Equal(time.GetUtcNow() + TimeSpan.FromSeconds(16), completion.ScheduledAt);
         Assert.NotNull(completion.Error);
-        Assert.Equal((time.GetUtcNow(), 2, "boom"), (completion.Error.At, completion.Error.Attempt, completion.Error.Error));
+        Assert.Equal((startedAt, 2, "boom"), (completion.Error.At, completion.Error.Attempt, completion.Error.Error));
         Assert.Contains("System.InvalidOperationException: boom", completion.Error.Trace, StringComparison.Ordinal);
-        Assert.Contains(nameof(Throwing), completion.Error.Trace, StringComparison.Ordinal);
+        Assert.Contains(nameof(Throw), completion.Error.Trace, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(0, 1, JobState.Available)]
+    [InlineData(1, 16, JobState.Retryable)]
+    [InlineData(4, 625, JobState.Retryable)]
+    public async Task The_backoff_counts_errors_and_a_retry_within_the_scheduler_interval_is_available_at_once(
+        int previousErrors, int seconds, JobState state)
+    {
+        var (completer, time) = (new RecordingCompleter(), new FakeTimeProvider());
+        var executor = Executor(Throwing(new InvalidOperationException("boom")), completer, time, random: () => 0.5);
+
+        // The attempt number does not matter: snoozes and interruptions use no attempt, but errors are what count.
+        await executor.ExecuteAsync(Row("ping", attempt: 9, errors: previousErrors), Ct);
+
+        var completion = Assert.Single(completer.Completions);
+        Assert.Equal((state, time.GetUtcNow() + TimeSpan.FromSeconds(seconds)), (completion.State, completion.ScheduledAt!.Value));
     }
 
     [Fact]
@@ -120,7 +142,7 @@ public sealed class JobExecutorTests
         Assert.False(early);
         Assert.True(await observed.Task);
         var completion = Assert.Single(completer.Completions);
-        Assert.Equal(JobState.Retryable, completion.State);
+        Assert.Equal(JobState.Available, completion.State);
         Assert.Equal("The job did not finish within its timeout of 00:00:30.", completion.Error!.Error);
     }
 
@@ -147,24 +169,41 @@ public sealed class JobExecutorTests
         await infinite.WaitAsync(TimeSpan.FromSeconds(10), Ct);
 
         Assert.True(stillRunning);
-        Assert.Equal([JobState.Retryable, JobState.Completed], completer.Completions.Select(c => c.State));
+        Assert.Equal([JobState.Available, JobState.Completed], completer.Completions.Select(c => c.State));
         Assert.Contains("00:00:05", completer.Completions[0].Error!.Error, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task A_hard_stop_cancels_the_token_and_the_attempt_is_retried()
+    public async Task A_hard_stop_interrupts_the_job_which_runs_again_without_using_an_attempt()
     {
         var (completer, time) = (new RecordingCompleter(), new FakeTimeProvider());
         var executor = Executor(new WorkerRegistry().Add(new LambdaWorker<PingArgs>((_, ct) => Task.Delay(Timeout.Infinite, ct))), completer, time);
         using var hardStop = new CancellationTokenSource();
 
-        var run = executor.ExecuteAsync(Row("ping"), hardStop.Token);
+        var run = executor.ExecuteAsync(Row("ping", attempt: 3, maxAttempts: 3), hardStop.Token);
         await hardStop.CancelAsync();
         await run.WaitAsync(TimeSpan.FromSeconds(10), Ct);
 
         var completion = Assert.Single(completer.Completions);
-        Assert.Equal(JobState.Retryable, completion.State);
-        Assert.Equal("The client stopped before the job finished.", completion.Error!.Error);
+        Assert.Equal((JobState.Available, (int?)2, time.GetUtcNow()), (completion.State, completion.Attempt, completion.ScheduledAt!.Value));
+        Assert.Null(completion.Error);
+        Assert.Null(completion.FinalizedAt);
+    }
+
+    [Fact]
+    public async Task An_error_other_than_a_cancellation_during_a_hard_stop_is_still_an_error()
+    {
+        var (completer, time) = (new RecordingCompleter(), new FakeTimeProvider());
+        using var hardStop = new CancellationTokenSource();
+        var executor = Executor(new WorkerRegistry().Add(new LambdaWorker<PingArgs>(async (_, ct) =>
+        {
+            await hardStop.CancelAsync();
+            throw new InvalidOperationException("cleanup failed");
+        })), completer, time);
+
+        await executor.ExecuteAsync(Row("ping"), hardStop.Token);
+
+        Assert.Equal("cleanup failed", Assert.Single(completer.Completions).Error!.Error);
     }
 
     [Fact]
@@ -187,7 +226,7 @@ public sealed class JobExecutorTests
         await executor.ExecuteAsync(Row("from_the_future", attempt: 1), Ct);
         await executor.ExecuteAsync(Row("from_the_future", attempt: 25, maxAttempts: 25), Ct);
 
-        Assert.Equal([JobState.Retryable, JobState.Discarded], completer.Completions.Select(c => c.State));
+        Assert.Equal([JobState.Available, JobState.Discarded], completer.Completions.Select(c => c.State));
         Assert.Equal(time.GetUtcNow() + TimeSpan.FromSeconds(1), completer.Completions[0].ScheduledAt);
         Assert.Equal("No worker is registered for kind 'from_the_future' on this client.", completer.Completions[0].Error!.Error);
         Assert.Null(completer.Completions[0].Error!.Trace);
@@ -208,7 +247,7 @@ public sealed class JobExecutorTests
 
         Assert.False(ran);
         var completion = Assert.Single(completer.Completions);
-        Assert.Equal(JobState.Retryable, completion.State);
+        Assert.Equal(JobState.Available, completion.State);
         Assert.Contains("JsonException", completion.Error!.Trace, StringComparison.Ordinal);
     }
 
@@ -259,11 +298,11 @@ public sealed class JobExecutorTests
     [InlineData(3, 81)]
     [InlineData(5, 625)]
     [InlineData(10, 10_000)]
-    public void The_default_backoff_is_attempt_to_the_fourth_seconds_with_ten_percent_jitter(int attempt, double seconds)
+    public void The_default_backoff_is_the_error_count_to_the_fourth_seconds_with_ten_percent_jitter(int errorCount, double seconds)
     {
-        Assert.Equal(seconds, RetryBackoff.Delay(attempt, 0.5).TotalSeconds, 6);
-        Assert.Equal(seconds * 0.9, RetryBackoff.Delay(attempt, 0).TotalSeconds, 6);
-        Assert.InRange(RetryBackoff.Delay(attempt, 0.999999).TotalSeconds, seconds * 1.0999, seconds * 1.1);
+        Assert.Equal(seconds, RetryBackoff.Delay(errorCount, 0.5).TotalSeconds, 6);
+        Assert.Equal(seconds * 0.9, RetryBackoff.Delay(errorCount, 0).TotalSeconds, 6);
+        Assert.InRange(RetryBackoff.Delay(errorCount, 0.999999).TotalSeconds, seconds * 1.0999, seconds * 1.1);
     }
 
     [Fact]
@@ -286,11 +325,12 @@ public sealed class JobExecutorTests
 
     private static Task Throw(Exception exception) => throw exception;
 
-    private static JobRow Row(string kind, string args = "{}", int attempt = 1, int maxAttempts = 25, string metadata = "{}") => new()
+    private static JobRow Row(string kind, string args = "{}", int attempt = 1, int maxAttempts = 25, string metadata = "{}", int errors = 0) => new()
     {
         Id = 7, Kind = kind, Queue = "default", State = JobState.Running, Priority = 1, ArgsJson = args, MetadataJson = metadata,
         Tags = [], Attempt = attempt, MaxAttempts = maxAttempts, CreatedAt = DateTimeOffset.UnixEpoch, ScheduledAt = DateTimeOffset.UnixEpoch,
         AttemptedAt = DateTimeOffset.UnixEpoch, AttemptedBy = ["c"],
+        Errors = [.. Enumerable.Range(1, errors).Select(i => new AttemptError(DateTimeOffset.UnixEpoch, i, "earlier", null))],
     };
 
     [JobKind("ping")]
