@@ -31,6 +31,7 @@ internal sealed class NpgsqlStatements
         JobInsertNotify = Load("job_insert_notify.sql");
         JobInsertFast = Load("job_insert_fast.sql").Trim();
         JobGetAvailable = Load("job_get_available.sql");
+        JobSetStateIfRunningMany = Load("job_set_state_if_running_many.sql");
     }
 
     /// <summary>The configured schema, unquoted, or <c>null</c> for the connection's current schema.</summary>
@@ -43,6 +44,8 @@ internal sealed class NpgsqlStatements
     public string JobInsertNotify { get; }
 
     public string JobGetAvailable { get; }
+
+    public string JobSetStateIfRunningMany { get; }
 
     /// <summary>The binary <c>COPY</c> command of the fast insert path. Its columns match <see cref="NpgsqlExecutor.JobInsertFastAsync"/>.</summary>
     public string JobInsertFast { get; }
@@ -240,6 +243,73 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
         return rows;
     }
 
+    public async Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(jobs);
+        if (jobs.Count == 0)
+        {
+            return [];
+        }
+
+        var ids = new long[jobs.Count];
+        var attempts = new int?[jobs.Count];
+        var errors = new string?[jobs.Count];
+        var finalizedAt = new DateTimeOffset?[jobs.Count];
+        var metadata = new string?[jobs.Count];
+        var scheduledAt = new DateTimeOffset?[jobs.Count];
+        var states = new string[jobs.Count];
+        for (var i = 0; i < jobs.Count; i++)
+        {
+            var job = jobs[i] ?? throw new ArgumentException($"Outcome {i} is null.", nameof(jobs));
+            if (job.State is JobState.Running or JobState.Pending)
+            {
+                throw new ArgumentException($"Outcome {i} sets job {job.Id} to {job.State}, which an outcome cannot.", nameof(jobs));
+            }
+
+            ids[i] = job.Id;
+            attempts[i] = job.Attempt;
+            errors[i] = job.Error is null ? null : FormatError(job.Error);
+            finalizedAt[i] = job.FinalizedAt?.ToUniversalTime();
+            metadata[i] = job.MetadataUpdates;
+            scheduledAt[i] = job.ScheduledAt?.ToUniversalTime();
+            states[i] = ToDatabase(job.State);
+        }
+
+        return await QueryAsync(
+            statements.JobSetStateIfRunningMany,
+            [
+                Array(NpgsqlDbType.Bigint, ids),
+                Array(NpgsqlDbType.Integer, attempts),
+                Array(NpgsqlDbType.Jsonb, errors),
+                Array(NpgsqlDbType.TimestampTz, finalizedAt),
+                Array(NpgsqlDbType.Jsonb, metadata),
+                Array(NpgsqlDbType.TimestampTz, scheduledAt),
+                Array(NpgsqlDbType.Text, states),
+            ],
+            then: null,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Formats an error as River stores it: <c>{"at": ..., "attempt": n, "error": "...", "trace": "..."}</c>, with the
+    /// time in UTC as Go's RFC 3339 with up to nanosecond fractions, and an empty trace when there is none.
+    /// </summary>
+    internal static string FormatError(AttemptError error)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("at", error.At.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'", CultureInfo.InvariantCulture));
+            writer.WriteNumber("attempt", error.Attempt);
+            writer.WriteString("error", error.Error);
+            writer.WriteString("trace", error.Trace ?? string.Empty);
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
     /// <summary>The fetch order (FR-EXE-02): <c>priority, scheduled_at, id</c>.</summary>
     private static int FetchOrder(JobRow a, JobRow b)
     {
@@ -371,7 +441,10 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
             : default;
         var attempt = root.TryGetProperty("attempt", out var n) && n.TryGetInt32(out var value) ? value : 0;
         var error = root.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString()! : string.Empty;
-        var trace = root.TryGetProperty("trace", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
+        // River stores an empty trace when there is none.
+        var trace = root.TryGetProperty("trace", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() is { Length: > 0 } text
+            ? text
+            : null;
         return new AttemptError(at, attempt, error, trace);
     }
 
