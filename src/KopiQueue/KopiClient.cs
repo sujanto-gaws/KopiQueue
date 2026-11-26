@@ -1,8 +1,7 @@
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
-using System.Text.Json;
-using System.Text.Json.Serialization.Metadata;
 using KopiQueue.Drivers;
+using KopiQueue.Serialization;
 
 namespace KopiQueue;
 
@@ -25,6 +24,7 @@ public interface IKopiClient
     /// <returns>The inserted job.</returns>
     /// <exception cref="ArgumentException">An insert option is not valid.</exception>
     /// <exception cref="KopiQueueConfigurationException"><typeparamref name="TArgs"/> has no valid <see cref="JobKindAttribute"/>.</exception>
+    /// <exception cref="NotSupportedException">The args serialiser has no JSON metadata for <typeparamref name="TArgs"/>.</exception>
     Task<InsertResult<TArgs>> InsertAsync<TArgs>(TArgs args, InsertOptions? options = null, CancellationToken cancellationToken = default)
         where TArgs : IJobArgs;
 
@@ -132,6 +132,20 @@ public sealed class InsertResult<TArgs> : InsertResult
     public TArgs Args { get; }
 }
 
+/// <summary>Options for <see cref="KopiClient"/>. Every option has a default.</summary>
+public sealed class KopiClientOptions
+{
+    /// <summary>
+    /// Serialises job args (design §9). Default: <see cref="SystemTextJsonArgsSerializer.Default"/>, which uses reflection.
+    /// Trimmed and Native AOT apps set a <see cref="SystemTextJsonArgsSerializer"/> created from their
+    /// <c>JsonSerializerContext</c> (NFR-COMP-06).
+    /// </summary>
+    public IJobArgsSerializer? ArgsSerializer { get; init; }
+
+    /// <summary>The clock used to tell whether <see cref="InsertOptions.ScheduledAt"/> is in the future. Default: the system clock.</summary>
+    public TimeProvider? TimeProvider { get; init; }
+}
+
 /// <summary>The KopiQueue client (design §6.3).</summary>
 /// <example>
 /// <code>
@@ -141,8 +155,8 @@ public sealed class InsertResult<TArgs> : InsertResult
 /// </example>
 /// <remarks>
 /// <para>
-/// Thread-safe. Args are serialised with <c>System.Text.Json</c> and its web defaults (camel-case names); configurable
-/// serialisation, including <c>JsonSerializerContext</c> for AOT, arrives with plan task 1.10.
+/// Thread-safe. Args are serialised by <see cref="KopiClientOptions.ArgsSerializer"/>: <c>System.Text.Json</c> with its web
+/// defaults (camel-case names) unless configured, for example with a <c>JsonSerializerContext</c> for Native AOT.
 /// </para>
 /// <para>
 /// Inserting needs no queues, workers or start step (FR-INS-08), so the client suits insert-only processes such as web
@@ -154,16 +168,18 @@ public sealed class InsertResult<TArgs> : InsertResult
 public sealed class KopiClient : IKopiClient
 {
     private readonly IKopiDriver _driver;
+    private readonly IJobArgsSerializer _serializer;
     private readonly TimeProvider _timeProvider;
 
     /// <summary>Creates a client on <paramref name="driver"/>.</summary>
     /// <param name="driver">The database driver, for example <c>new NpgsqlDriver(dataSource)</c>.</param>
-    /// <param name="timeProvider">The clock used to tell whether <see cref="InsertOptions.ScheduledAt"/> is in the future. Default: the system clock.</param>
-    public KopiClient(IKopiDriver driver, TimeProvider? timeProvider = null)
+    /// <param name="options">Serialiser and clock. <c>null</c> uses the defaults.</param>
+    public KopiClient(IKopiDriver driver, KopiClientOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(driver);
         _driver = driver;
-        _timeProvider = timeProvider ?? TimeProvider.System;
+        _serializer = options?.ArgsSerializer ?? SystemTextJsonArgsSerializer.Default;
+        _timeProvider = options?.TimeProvider ?? TimeProvider.System;
     }
 
 #pragma warning disable RS0026 // See IKopiClient.
@@ -223,7 +239,7 @@ public sealed class KopiClient : IKopiClient
             var request = requests[i] ?? throw new ArgumentException($"Job {i} is null.", nameof(jobs));
             var type = request.Args.GetType();
             inserts[i] = JobValidation.ToInsertParams(
-                JobKindRegistry.GetKind(type), JobArgsSerializer.Serialize(request.Args, type), request.Options, now, $"Job {i}: ", nameof(jobs));
+                JobKindRegistry.GetKind(type), _serializer.Serialize(request.Args, type), request.Options, now, $"Job {i}: ", nameof(jobs));
         }
 
         return inserts;
@@ -234,7 +250,7 @@ public sealed class KopiClient : IKopiClient
     {
         ArgumentNullException.ThrowIfNull(args);
         var kind = JobKindRegistry.GetKind<TArgs>();
-        var insert = JobValidation.ToInsertParams(kind, JobArgsSerializer.Serialize(args), options, _timeProvider.GetUtcNow());
+        var insert = JobValidation.ToInsertParams(kind, _serializer.Serialize(args, typeof(TArgs)), options, _timeProvider.GetUtcNow());
 
         var results = await executor.JobInsertManyAsync([insert], cancellationToken).ConfigureAwait(false);
         var result = results.Count == 1
@@ -242,37 +258,4 @@ public sealed class KopiClient : IKopiClient
             : throw new InvalidOperationException($"The driver returned {results.Count} rows for one insert.");
         return new InsertResult<TArgs>(result.Job, result.UniqueSkippedAsDuplicate, args);
     }
-}
-
-/// <summary>Serialises job args (design §9). Plan task 1.10 replaces this with configurable serialisation.</summary>
-internal static class JobArgsSerializer
-{
-    /// <summary>Web defaults with reflection, or <c>null</c> where the app disabled reflection-based JSON (trimmed and AOT apps).</summary>
-    private static readonly JsonSerializerOptions? ReflectionOptions = CreateReflectionOptions();
-
-    /// <exception cref="NotSupportedException">Reflection-based JSON is disabled, as in an AOT app, so <typeparamref name="TArgs"/> cannot be serialised yet.</exception>
-    public static string Serialize<TArgs>(TArgs args)
-    {
-        var options = ReflectionOptions ?? throw new NotSupportedException(
-            $"Cannot serialise {typeof(TArgs).FullName}: reflection-based JSON is disabled (for example in a trimmed or AOT app). JsonSerializerContext support arrives with plan task 1.10.");
-#pragma warning disable CA2263 // GetTypeInfo<T>() exists only from .NET 11; this also builds for .NET 10.
-        return JsonSerializer.Serialize(args, (JsonTypeInfo<TArgs>)options.GetTypeInfo(typeof(TArgs)));
-#pragma warning restore CA2263
-    }
-
-    /// <summary>Serialises <paramref name="args"/> as its runtime type <paramref name="type"/>, for bulk inserts.</summary>
-    /// <exception cref="NotSupportedException">Reflection-based JSON is disabled, as in an AOT app.</exception>
-    public static string Serialize(object args, Type type)
-    {
-        var options = ReflectionOptions ?? throw new NotSupportedException(
-            $"Cannot serialise {type.FullName}: reflection-based JSON is disabled (for example in a trimmed or AOT app). JsonSerializerContext support arrives with plan task 1.10.");
-        return JsonSerializer.Serialize(args, options.GetTypeInfo(type));
-    }
-
-    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
-        Justification = "Used only when JsonSerializer.IsReflectionEnabledByDefault is true, which trimmed and AOT apps turn off.")]
-    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
-        Justification = "Used only when JsonSerializer.IsReflectionEnabledByDefault is true, which AOT apps turn off.")]
-    private static JsonSerializerOptions? CreateReflectionOptions() =>
-        JsonSerializer.IsReflectionEnabledByDefault ? JsonSerializerOptions.Web : null;
 }

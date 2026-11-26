@@ -694,7 +694,7 @@ Once M2 adds queues and workers, a client without them must keep this behaviour:
 - **PostgreSQL:** `InsertManyAsync` is the `unnest` batch insert. `InsertManyFastAsync` is a binary `COPY` of the nine insertable columns, plus `SELECT now()` for jobs without `ScheduledAt` and the notify statement, in one transaction. The binary format writes an enum as its label's text and checks array element types, so the state goes as text and the tags as `varchar[]`.
 - **Measured locally (PostgreSQL 18, 50,000 jobs, one client):** `COPY` about 32,000 jobs/s and the `unnest` insert about 20,000 jobs/s. Preparing the jobs on the client takes about 2 µs each. With River's secondary indexes dropped, `COPY` reaches 100,000–140,000 jobs/s. Index maintenance in the River-compatible schema, not the client, keeps a single COPY below NFR-PERF-02's 50,000 jobs/s. Task 7.1 re-measures on CI hardware and decides between accepting the gap and options that keep the schema, such as parallel COPY on several connections (which gives up all-or-nothing).
 
-`KopiClient` (plan task 1.6) implements `InsertAsync`: `new KopiClient(driver, timeProvider?)`. It reads the kind, serialises the args (`System.Text.Json` web defaults until task 1.10 makes this configurable), validates and resolves the options, and makes one `JobInsertManyAsync` call on the pooled or the transaction executor. The two `InsertAsync` overloads both have optional parameters (analyzer rule RS0026 is suppressed): they differ by a required `DbTransaction`, so a call can't be ambiguous. Where reflection-based JSON is disabled (trimmed and AOT apps), inserting throws `NotSupportedException` until task 1.10.
+`KopiClient` (plan task 1.6) implements `InsertAsync`: `new KopiClient(driver, new KopiClientOptions { ArgsSerializer, TimeProvider })`, both optional. It reads the kind, serialises the args (§9), validates and resolves the options, and makes one `JobInsertManyAsync` call on the pooled or the transaction executor. The two `InsertAsync` overloads both have optional parameters (analyzer rule RS0026 is suppressed): they differ by a required `DbTransaction`, so a call can't be ambiguous.
 
 `InsertAsync` with a transaction requires the transaction type of the configured driver at runtime: `NpgsqlTransaction` or `SqlTransaction`. Any other type throws `ArgumentException`. We accept `DbTransaction` in the signature so the core takes no dependency on either database client.
 
@@ -707,7 +707,7 @@ The commit interceptor described next needs the LocalWaker, so it arrives with t
 | Seam | Interface | Default |
 |------|-----------|---------|
 | Driver | `IKopiDriver` (marked `[Experimental]` until 2.0) | `NpgsqlDriver` |
-| Args serialisation | `IJobArgsSerializer` | `System.Text.Json` + optional `JsonSerializerContext` |
+| Args serialisation | `IJobArgsSerializer` (`KopiClientOptions.ArgsSerializer`) | `SystemTextJsonArgsSerializer.Default`; or one made from a `JsonSerializerContext` |
 | Retry | `IRetryPolicy` | `DefaultRetryPolicy` |
 | Insert middleware | `IJobInsertMiddleware` | Tracing propagation (when OTel is on) |
 | Worker middleware | `IWorkerMiddleware` (`InvokeAsync(JobContext, next, ct)`) | Logging scope, tracing, metrics |
@@ -900,9 +900,16 @@ SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'de
 
 ## 9. Serialisation
 
-- Args are stored as `jsonb`. The default serialiser is `System.Text.Json` with `JsonSerializerDefaults.Web`.
+- Args are stored as `jsonb`. The default serialiser is `System.Text.Json` with `JsonSerializerDefaults.Web` (camel-case names, case-insensitive reading).
+- **`IJobArgsSerializer`** (plan task 1.10, namespace `KopiQueue.Serialization`) has `Serialize(args, argsType)` and `Deserialize(json, argsType)`. Both take a `Type`, because a bulk insert serialises each item as its runtime type and a worker reads the type registered for the job's kind. `KopiClientOptions.ArgsSerializer` sets it.
+- **`SystemTextJsonArgsSerializer`** can be built three ways:
+  - from a `JsonSerializerContext`, using the context's own options, so declare it with `[JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]` to keep the default JSON;
+  - from `JsonSerializerOptions`, which must have a `TypeInfoResolver`;
+  - or as `Default`, which uses reflection.
+- Behind `Default`: reflection is used only while `JsonSerializer.IsReflectionEnabledByDefault` is true; trimmed and Native AOT apps turn it off. There it throws a `NotSupportedException` that points to `KopiClientOptions.ArgsSerializer`. A type missing from a context throws one that names the `[JsonSerializable(typeof(...))]` line to add.
+- The unit-test project runs with `JsonSerializerIsReflectionEnabledByDefault=false`, so the core's insert path is tested without reflection on every build. Publishing a real Native AOT app is task 7.5.
 - **Kind → type registry** is built at startup from the registered workers, plus explicit `AddJobArgs<T>()` for insert-only clients. An unknown kind at execution time sends the job to `discarded`, unless `UnknownKindBehavior = Retry` (useful during rolling deploys).
-- AOT: users pass a `JsonSerializerContext`. If a registered type has no `JsonTypeInfo`, startup fails with a clear error when `IsAotCompatible` mode is detected.
+- AOT: users pass a `JsonSerializerContext`. Today a type with no `JsonTypeInfo` fails on its first insert, before any SQL. Once hosting registers args types (task 2.8), startup checks every registered type and fails with the same clear error.
 - Field order for unique-by-args: canonicalised by serialising, then re-ordering keys with `JsonNode`, so that property declaration order does not matter.
 
 ## 10. Observability

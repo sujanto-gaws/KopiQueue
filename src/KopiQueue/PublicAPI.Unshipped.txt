@@ -100,7 +100,13 @@ KopiQueue.KopiClient.InsertAsync<TArgs>(TArgs args, KopiQueue.InsertOptions? opt
 KopiQueue.KopiClient.InsertAsync<TArgs>(TArgs args, System.Data.Common.DbTransaction! transaction, KopiQueue.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.InsertResult<TArgs>!>!
 KopiQueue.KopiClient.InsertManyAsync(System.Collections.Generic.IEnumerable<KopiQueue.InsertRequest!>! jobs, System.Data.Common.DbTransaction? transaction = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.InsertResult!>!>!
 KopiQueue.KopiClient.InsertManyFastAsync(System.Collections.Generic.IEnumerable<KopiQueue.InsertRequest!>! jobs, System.Data.Common.DbTransaction? transaction = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!
-KopiQueue.KopiClient.KopiClient(KopiQueue.Drivers.IKopiDriver! driver, System.TimeProvider? timeProvider = null) -> void
+KopiQueue.KopiClient.KopiClient(KopiQueue.Drivers.IKopiDriver! driver, KopiQueue.KopiClientOptions? options = null) -> void
+KopiQueue.KopiClientOptions
+KopiQueue.KopiClientOptions.ArgsSerializer.get -> KopiQueue.Serialization.IJobArgsSerializer?
+KopiQueue.KopiClientOptions.ArgsSerializer.init -> void
+KopiQueue.KopiClientOptions.KopiClientOptions() -> void
+KopiQueue.KopiClientOptions.TimeProvider.get -> System.TimeProvider?
+KopiQueue.KopiClientOptions.TimeProvider.init -> void
 KopiQueue.KopiQueueConfigurationException
 KopiQueue.KopiQueueConfigurationException.KopiQueueConfigurationException() -> void
 KopiQueue.KopiQueueConfigurationException.KopiQueueConfigurationException(string? message) -> void
@@ -154,6 +160,14 @@ KopiQueue.Migrations.MigrationVersion.IsApplied.get -> bool
 KopiQueue.Migrations.MigrationVersion.IsKnown.get -> bool
 KopiQueue.Migrations.MigrationVersion.Name.get -> string?
 KopiQueue.Migrations.MigrationVersion.Version.get -> int
+KopiQueue.Serialization.IJobArgsSerializer
+KopiQueue.Serialization.IJobArgsSerializer.Deserialize(string! json, System.Type! argsType) -> KopiQueue.IJobArgs!
+KopiQueue.Serialization.IJobArgsSerializer.Serialize(KopiQueue.IJobArgs! args, System.Type! argsType) -> string!
+KopiQueue.Serialization.SystemTextJsonArgsSerializer
+KopiQueue.Serialization.SystemTextJsonArgsSerializer.Deserialize(string! json, System.Type! argsType) -> KopiQueue.IJobArgs!
+KopiQueue.Serialization.SystemTextJsonArgsSerializer.Serialize(KopiQueue.IJobArgs! args, System.Type! argsType) -> string!
+KopiQueue.Serialization.SystemTextJsonArgsSerializer.SystemTextJsonArgsSerializer(System.Text.Json.JsonSerializerOptions! options) -> void
+KopiQueue.Serialization.SystemTextJsonArgsSerializer.SystemTextJsonArgsSerializer(System.Text.Json.Serialization.JsonSerializerContext! context) -> void
 [KQ0001]KopiQueue.Drivers.DriverCapabilities
 [KQ0001]KopiQueue.Drivers.DriverCapabilities.BulkCopy.get -> bool
 [KQ0001]KopiQueue.Drivers.DriverCapabilities.BulkCopy.init -> void
@@ -220,4 +234,5 @@ static KopiQueue.AttemptError.operator !=(KopiQueue.AttemptError? left, KopiQueu
 static KopiQueue.AttemptError.operator ==(KopiQueue.AttemptError? left, KopiQueue.AttemptError? right) -> bool
 static KopiQueue.JobKindRegistry.GetKind(System.Type! argsType) -> string!
 static KopiQueue.JobKindRegistry.GetKind<TArgs>() -> string!
+static KopiQueue.Serialization.SystemTextJsonArgsSerializer.Default.get -> KopiQueue.Serialization.SystemTextJsonArgsSerializer!
 static readonly KopiQueue.Migrations.MigrateOptions.DefaultLockTimeout -> System.TimeSpan
