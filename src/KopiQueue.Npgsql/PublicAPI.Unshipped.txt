@@ -10,3 +10,7 @@ KopiQueue.Npgsql.NpgsqlDriverOptions.Schema.get -> string?
 KopiQueue.Npgsql.NpgsqlDriverOptions.Schema.init -> void
 KopiQueue.Npgsql.NpgsqlDriverOptions.TablePrefix.get -> string!
 KopiQueue.Npgsql.NpgsqlDriverOptions.TablePrefix.init -> void
+KopiQueue.Npgsql.NpgsqlDriverOptions.NotifierConnectionString.get -> string?
+KopiQueue.Npgsql.NpgsqlDriverOptions.NotifierConnectionString.init -> void
+KopiQueue.Npgsql.NpgsqlDriverOptions.NotifierKeepAlive.get -> System.TimeSpan
+KopiQueue.Npgsql.NpgsqlDriverOptions.NotifierKeepAlive.init -> void

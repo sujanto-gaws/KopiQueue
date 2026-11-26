@@ -267,3 +267,26 @@ KopiQueue.WorkerRegistry.WorkerRegistry() -> void
 abstract KopiQueue.Worker<TArgs>.WorkAsync(KopiQueue.Job<TArgs>! job, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 virtual KopiQueue.Worker<TArgs>.NextRetry(KopiQueue.Job<TArgs>! job) -> System.TimeSpan?
 virtual KopiQueue.Worker<TArgs>.Timeout(KopiQueue.Job<TArgs>! job) -> System.TimeSpan?
+[KQ0001]KopiQueue.Drivers.IKopiDriver.CreateListener() -> KopiQueue.Drivers.IKopiListener?
+[KQ0001]KopiQueue.Drivers.IKopiListener
+[KQ0001]KopiQueue.Drivers.IKopiListener.ConnectAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<KopiQueue.Drivers.IKopiListenerConnection!>!
+[KQ0001]KopiQueue.Drivers.IKopiListenerConnection
+[KQ0001]KopiQueue.Drivers.IKopiListenerConnection.WaitForNotificationAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<KopiQueue.Drivers.KopiNotification!>!
+[KQ0001]KopiQueue.Drivers.KopiNotification
+[KQ0001]KopiQueue.Drivers.KopiNotification.<Clone>$() -> KopiQueue.Drivers.KopiNotification!
+[KQ0001]KopiQueue.Drivers.KopiNotification.Deconstruct(out KopiQueue.Drivers.NotificationTopic Topic, out string! Payload) -> void
+[KQ0001]KopiQueue.Drivers.KopiNotification.Equals(KopiQueue.Drivers.KopiNotification? other) -> bool
+[KQ0001]KopiQueue.Drivers.KopiNotification.KopiNotification(KopiQueue.Drivers.NotificationTopic Topic, string! Payload) -> void
+[KQ0001]KopiQueue.Drivers.KopiNotification.Payload.get -> string!
+[KQ0001]KopiQueue.Drivers.KopiNotification.Payload.init -> void
+[KQ0001]KopiQueue.Drivers.KopiNotification.Topic.get -> KopiQueue.Drivers.NotificationTopic
+[KQ0001]KopiQueue.Drivers.KopiNotification.Topic.init -> void
+[KQ0001]KopiQueue.Drivers.NotificationTopic
+[KQ0001]KopiQueue.Drivers.NotificationTopic.Control = 1 -> KopiQueue.Drivers.NotificationTopic
+[KQ0001]KopiQueue.Drivers.NotificationTopic.Insert = 0 -> KopiQueue.Drivers.NotificationTopic
+[KQ0001]KopiQueue.Drivers.NotificationTopic.Leadership = 2 -> KopiQueue.Drivers.NotificationTopic
+[KQ0001]override KopiQueue.Drivers.KopiNotification.Equals(object? obj) -> bool
+[KQ0001]override KopiQueue.Drivers.KopiNotification.GetHashCode() -> int
+[KQ0001]override KopiQueue.Drivers.KopiNotification.ToString() -> string!
+[KQ0001]static KopiQueue.Drivers.KopiNotification.operator !=(KopiQueue.Drivers.KopiNotification? left, KopiQueue.Drivers.KopiNotification? right) -> bool
+[KQ0001]static KopiQueue.Drivers.KopiNotification.operator ==(KopiQueue.Drivers.KopiNotification? left, KopiQueue.Drivers.KopiNotification? right) -> bool

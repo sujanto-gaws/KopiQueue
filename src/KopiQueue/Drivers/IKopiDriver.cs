@@ -36,6 +36,13 @@ public interface IKopiDriver
     /// <summary>Creates a migrator for the driver's schema (FR-MIG-02).</summary>
     /// <param name="loggerFactory">Logs each migration. <c>null</c> disables logging.</param>
     KopiMigrator CreateMigrator(ILoggerFactory? loggerFactory = null);
+
+    /// <summary>
+    /// Creates the listener that the client's notifier connects through (design §3, FR-EXE-03), or returns <c>null</c>
+    /// when the database cannot notify other processes, so the client polls (FR-DB-04). Returns <c>null</c> exactly
+    /// when <see cref="DriverCapabilities.ListenNotify"/> is <c>false</c>.
+    /// </summary>
+    IKopiListener? CreateListener();
 }
 
 /// <summary>Database operations, typed: no SQL reaches the core (design §8).</summary>

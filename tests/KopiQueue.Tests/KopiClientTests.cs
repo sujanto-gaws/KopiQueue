@@ -220,6 +220,42 @@ public sealed class KopiClientTests
         public IJobArgs Deserialize(string json, Type argsType) => throw new NotSupportedException();
     }
 
+    [Fact]
+    public async Task Pooled_inserts_of_available_jobs_wake_the_clients_own_producers()
+    {
+        var client = new KopiClient(new RecordingDriver(), new KopiClientOptions { TimeProvider = new FakeTimeProvider(Now), ArgsSerializer = Json });
+        var woken = new List<string>();
+        using var email = client.LocalWaker.Subscribe("email", () => woken.Add("email"));
+        using var other = client.LocalWaker.Subscribe("other", () => woken.Add("other"));
+        var args = new SendEmailArgs("a", "t", []);
+
+        await client.InsertAsync(args, new InsertOptions { Queue = "email" }, Ct);
+        await client.InsertAsync(args, new InsertOptions { Queue = "email", ScheduledAt = Now.AddHours(1) }, Ct);
+        await client.InsertManyAsync([new InsertRequest(args, new InsertOptions { Queue = "email" }), new InsertRequest(args, new InsertOptions { Queue = "email" })], cancellationToken: Ct);
+        await client.InsertManyFastAsync([new InsertRequest(args, new InsertOptions { Queue = "other" })], cancellationToken: Ct);
+
+        Assert.Equal(["email", "email", "other"], woken);
+    }
+
+    [Fact]
+    public async Task Inserts_in_a_caller_transaction_and_skipped_duplicates_wake_nobody()
+    {
+        var tx = new FakeTransaction();
+        var args = new SendEmailArgs("a", "t", []);
+        var client = new KopiClient(new RecordingDriver(), new KopiClientOptions { ArgsSerializer = Json });
+        var duplicates = new KopiClient(new RecordingDriver { SkipAsDuplicate = true }, new KopiClientOptions { ArgsSerializer = Json });
+        var woken = 0;
+        using var a = client.LocalWaker.Subscribe("default", () => woken++);
+        using var b = duplicates.LocalWaker.Subscribe("default", () => woken++);
+
+        await client.InsertAsync(args, tx, cancellationToken: Ct);
+        await client.InsertManyAsync([new InsertRequest(args)], tx, Ct);
+        await client.InsertManyFastAsync([new InsertRequest(args)], tx, Ct);
+        await duplicates.InsertAsync(args, cancellationToken: Ct);
+
+        Assert.Equal(0, woken);
+    }
+
     private sealed record NoKindArgs : IJobArgs;
 
     private sealed class RecordingDriver : IKopiDriver, IKopiExecutor
@@ -248,6 +284,8 @@ public sealed class KopiClientTests
 
         public KopiQueue.Migrations.KopiMigrator CreateMigrator(Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null) =>
             throw new NotSupportedException();
+
+        public IKopiListener? CreateListener() => null;
 
         public Task<long> JobInsertFastAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken)
         {

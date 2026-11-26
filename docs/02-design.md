@@ -106,6 +106,14 @@ Each runs a single long-lived loop on `Task.Run`, with its own `CancellationToke
 The client starts them in this order: notifier → elector → queue maintainer → completer → producers.
 It stops them in reverse order. The completer is stopped last among the execution components, so that every result is flushed.
 
+### 3.3 Notifier and LocalWaker (plan task 2.2)
+
+- **Driver contract** (`KopiQueue.Drivers`, experimental): `IKopiDriver.CreateListener()` returns an `IKopiListener`, or `null` exactly when `Capabilities.ListenNotify` is false (a conformance case checks this). `ConnectAsync` opens one connection subscribed to every `NotificationTopic` (`Insert`, `Control`, `Leadership`); its `WaitForNotificationAsync` returns `KopiNotification(topic, payload)`. The listener only connects: reconnecting, backoff and resync belong to the core, so every driver gets the same rules. A `KopiQueueConfigurationException` from `ConnectAsync` means retrying cannot help.
+- **Notifier** (internal, one per client that works jobs): runs one loop that connects, raises **resync** on every subscriber, then fans notifications out by topic. A lost connection is reconnected after a delay that starts at 100 ms, doubles per failed attempt, is capped at 30 s, and is then shortened by up to 20% at random, so clients that lost the database together do not reconnect in lockstep, even at the cap; a successful connect resets it. The broken connection is disposed in the background with a 5 s timeout and never delays the reconnect. A configuration error disables the notifier for good (`IsDisabled`), and the client then only polls. Subscriber callbacks run on the loop, must only signal, and are isolated from each other. `IsConnected` is the health signal for task 6.5.
+- **PostgreSQL listener:** a connection made with `CloneWithAsync` from the data source, which carries its credentials over although `NpgsqlDataSource.ConnectionString` leaves the password out, with `Pooling=false`, `Keepalive=NotifierKeepAlive` (default 5 s) and `Enlist=false`. `NpgsqlDriverOptions.NotifierConnectionString` replaces the data source for this connection (PgBouncer in transaction mode, proxies). Without a configured schema it reads `current_schema()` after connecting. Every channel is checked against the 63-byte limit before `LISTEN` (schema ≤ 46 bytes), and each `LISTEN` quotes its channel. Measured in `NpgsqlNotifierTests`: a terminated backend is replaced and resynced at once; a black-holed connection with `Keepalive=1` is detected in about 2 s.
+- **LocalWaker** (internal, owned by `KopiClient`): after a pooled insert, whose commit the client knows about, it wakes this client's subscribers of each queue that received available jobs. Inserts in a caller's transaction are not announced: the client cannot see their commit (on PostgreSQL the `pg_notify` covers them; on SQL Server the EF commit interceptor, task 5.7, will). Skipped duplicates wake nobody.
+- **Modes:** `PollOnly` means no notifier; `Auto` means a notifier whenever the driver has a listener; `ListenNotify` requires one. The option arrives with the client options in task 2.7; until then only the mechanics exist.
+
 ## 4. Data model
 
 > **PostgreSQL (River-compatible, OQ-1 decided):** the table names and columns below MUST match River's schema at the pinned version: **migration line `main`, version 8, as created by River v0.51.2**.
@@ -283,7 +291,7 @@ How the PostgreSQL driver sends it (plan task 1.6):
 - It notifies each queue that received `available` jobs once per call; scheduled jobs are announced later by the scheduler.
 - The payload is `jsonb_build_object('queue', ...)::text`, that is `{"queue": "email"}`, the same text River sends.
 - With no schema configured, the channel uses `current_schema()`, as River's `public.river_insert` does.
-- A channel over 63 bytes is skipped rather than failing the insert. Startup validation of the schema length belongs to the notifier (M2).
+- A channel over 63 bytes is skipped rather than failing the insert. The notifier refuses such a schema when it connects (§3.3), which disables notifications for that client.
 Insert notifications are **debounced** per queue: at most one per queue per transaction, and producers coalesce wake-ups within the fetch cooldown.
 
 On SQL Server none of these channels exist. Each one is replaced as follows (FR-DB-04/05):
@@ -741,8 +749,8 @@ The commit interceptor described next needs the LocalWaker, so it arrives with t
 | `ElectInterval` / `LeaderTtl` | 5 s / 15 s | |
 | `SchedulerInterval` | 5 s | |
 | `NotificationMode` | `Auto` | `Auto` \| `ListenNotify` \| `PollOnly`. SQL Server is always `PollOnly` (plus LocalWaker) |
-| `NotifierConnectionString` | `null` (derived from the data source) | PostgreSQL: a direct connection for LISTEN when the data source goes through PgBouncer in transaction mode or a proxy. KQ always forces `Pooling=false` on it |
-| `NotifierKeepAlive` | 5 s | Npgsql `Keepalive` on the notifier connection. A silently dead connection is detected after about 2× this value; without it, it is never detected (spike 0.7) |
+| `NotifierConnectionString` | `null` (derived from the data source) | PostgreSQL, on `NpgsqlDriverOptions` (task 2.2): a direct connection for LISTEN when the data source goes through PgBouncer in transaction mode or a proxy. KQ always forces `Pooling=false` on it |
+| `NotifierKeepAlive` | 5 s | PostgreSQL, on `NpgsqlDriverOptions` (task 2.2), 1 s to 1 day, rounded up to whole seconds: Npgsql `Keepalive` on the notifier connection. A silently dead connection is detected after about 2× this value; without it, it is never detected (spike 0.7) |
 | `SoftStopTimeout` | null (use host token) | |
 | `CompleterMode` | `Batch` | `Batch` \| `Async` \| `Inline` |
 
@@ -760,7 +768,7 @@ public interface IKopiDriver
     IKopiExecutor GetExecutor();                         // a pooled connection per operation
     IKopiExecutor GetExecutor(DbTransaction tx);         // the caller's transaction (FR-INS-02); the caller owns it
     KopiMigrator CreateMigrator(ILoggerFactory? loggerFactory = null);
-    // M2: IKopiListener? CreateListener();               // null => poll-only (SQL Server, FR-DB-04)
+    IKopiListener? CreateListener();                     // null => poll-only (SQL Server, FR-DB-04); task 2.2, §3.3
 }
 
 public interface IKopiExecutor   // typed operations; no SQL leaks to the core
@@ -787,7 +795,7 @@ public sealed record JobInsertResult(JobRow Job, bool UniqueSkippedAsDuplicate);
 |---------|-------------------------|
 | No statement may touch more than 2,000 rows (0.9 D4); batched inserts use ≤ 1,000 rows per statement (0.10 D3) | `DriverCapabilities.MaxRowsPerStatement`. Executors split larger batches themselves, in one transaction, so a bulk insert stays all-or-nothing even on a pooled connection (revised in task 1.7: the core cannot open a transaction around several executor calls). The core uses the value to cap its own batch sizes, such as `FetchBatchMax`. PostgreSQL reports `null`, SQL Server 1,000 |
 | `SqlBulkCopy` dropped; the fast path uses batched inserts (0.10 D3, ADR-014) | `DriverCapabilities.BulkCopy`: `true` for PostgreSQL (`COPY`), `false` for SQL Server, whose fast path is the batched insert |
-| No LISTEN/NOTIFY; poll-only across processes (FR-DB-04) | `DriverCapabilities.ListenNotify`, and `CreateListener` returning `null` when it arrives in M2 |
+| No LISTEN/NOTIFY; poll-only across processes (FR-DB-04) | `DriverCapabilities.ListenNotify`, and `CreateListener` returning `null` (task 2.2) |
 | A failed statement must not detect duplicates, because with `XACT_ABORT ON` it dooms the caller's transaction; unique inserts return the existing job (0.10 D1, D2) | Inserts return `JobInsertResult` with `UniqueSkippedAsDuplicate` instead of throwing on a duplicate |
 | Unique inserts take a transaction-owned `sp_getapplock`; without a caller transaction the batch opens its own (0.10 D1) | Driver-internal: both `GetExecutor` overloads keep the same contract, so the core never manages transactions for the driver |
 | READPAST statements start with `SET TRANSACTION ISOLATION LEVEL READ COMMITTED` because SNAPSHOT leaks through the pool (0.9 D2), and the connection string gets `Application Name=KopiQueue` (0.9 D3) | Driver-internal: no isolation level or connection options in the interface. The caller's transaction can use any isolation level |
@@ -960,7 +968,7 @@ SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'de
   - *Transactions and errors:* caller-transaction visibility, commit and rollback, pooled commit, all-or-nothing on a database error, missing IDs, unique keys rejected, foreign and completed transactions.
   - *Client:* inserts through `KopiClient`.
   - *Migration:* a new schema has every version pending; up once, idempotently; down to 0 and back; step by step; dry run; four concurrent migrators apply each version once; insert after migrating.
-- Notifications are not part of `IKopiDriver` until the M2 listener, so they stay in the PostgreSQL tests for now.
+- **M2 listener cases (task 2.2):** a listener exists exactly when `ListenNotify` is set; on such a driver a committed pooled insert reaches a listener connection as an `Insert` notification for its queue. Reconnects, keep-alive and channel limits stay in `NpgsqlNotifierTests`.
 - SQL Server joins when its driver lands (M3). PostgreSQL-specific behaviour (River catalog equality, `pg_notify`, `COPY` details, constraint names) stays in `KopiQueue.Npgsql.Tests`.
 
 ## 12. Decision log (ADRs)
