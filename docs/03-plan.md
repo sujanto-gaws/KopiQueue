@@ -322,10 +322,11 @@ nuget.org's documentation does not say whether a trusted publishing policy cover
 
 1. ~~Reserve the `KopiQueue` NuGet prefix~~ → **publish first, reserve later** (OQ-2, §6.1). Publish workflow added. Before the first release:
    - create the nuget.org account or organization;
-   - add the trusted publishing policy and the `NUGET_USER` variable;
-   - create the `nuget` environment.
-   First release: `v0.1.0-alpha.1` at the end of M1.
+   - add the trusted publishing policy and the `NUGET_USER` variable (`NUGET_USER` set 2026-11-26);
+   - ~~create the `nuget` environment~~ (done 2026-11-26).
+   First release: `v0.1.0-alpha.1` at the end of M1 ([#81](https://github.com/sujanto-gaws/KopiQueue/issues/81)).
 2. ~~M0 tasks 0.1–0.6~~: **done 2026-11-26.** Solution skeleton (8 src projects, `net10.0;net11.0`), central packages, MinVer, PublicApiAnalyzers, repo-local `nuget.config`, CI workflow, DB fixtures, licence and contributor docs. Tests run on Microsoft.Testing.Platform (xunit.v3 4.x requires it). CI first ran green on 2026-11-26 (github.com/sujanto-gaws/KopiQueue).
 3. ~~Spikes 0.9–0.10 (SQL Server)~~: **done 2026-11-26** ([0.9](spikes/0.9-sqlserver-fetch-and-locking.md), [0.10](spikes/0.10-sqlserver-unique-bulk-poll.md)). Design updated (§8.1, ADR-011 revised, ADR-014), NFR-PERF-07 set.
 4. ~~Spikes 0.7–0.8 (PostgreSQL)~~: **done 2026-11-26** ([0.7](spikes/0.7-npgsql-listen-notify.md), [0.8](spikes/0.8-river-schema-and-unique-keys.md)). River schema pinned at `main` v8 (v0.51.2); unique-key algorithm reconstructed and verified on 22 golden vectors; notifier rules (non-pooled, Keepalive, resync). Design updated (§3, §4.1, §4.3, §5.6, §7, ADR-002, DQ-4 closed, DQ-8 new). **PgBouncer not run** (no Docker): moved to task 2.11.
-5. **M0 is complete**; the PgBouncer check moved to M2. Next: M1 (migrations, Npgsql driver, insert API).
+5. ~~M0~~: **done**; the PgBouncer check moved to M2 (task 2.11).
+6. ~~M1 tasks 1.1–1.11~~: **done 2026-11-26** (migrations, Npgsql driver, insert and bulk insert, EF Core insert, args serialisation, conformance suite; DQ-2 closed). `CHANGELOG.md` cut for `0.1.0-alpha.1`. Next: tag the release, then M2 (execution engine), starting with task 2.1 and DQ-1/DQ-3.
