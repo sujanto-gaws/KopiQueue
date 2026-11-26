@@ -276,6 +276,14 @@ Channel rules (spikes 0.7 and 0.8):
 - Commit-to-delivery latency was p50 0.22 ms locally. Postgres collapses identical channel + payload pairs within one transaction, and delivers nothing on rollback or for a rolled-back savepoint.
 
 Because `pg_notify` is called inside the caller's transaction, Postgres delivers the notification only on commit. This satisfies FR-INS-07 for free.
+
+How the PostgreSQL driver sends it (plan task 1.6):
+
+- `JobInsertManyAsync` sends the `INSERT` and one `pg_notify` statement as a single Npgsql batch. Without a caller transaction, PostgreSQL runs a batch as one implicit transaction, so a pooled insert and its notification also commit or fail together.
+- It notifies each queue that received `available` jobs once per call; scheduled jobs are announced later by the scheduler.
+- The payload is `jsonb_build_object('queue', ...)::text`, that is `{"queue": "email"}`, the same text River sends.
+- With no schema configured, the channel uses `current_schema()`, as River's `public.river_insert` does.
+- A channel over 63 bytes is skipped rather than failing the insert. Startup validation of the schema length belongs to the notifier (M2).
 Insert notifications are **debounced** per queue: at most one per queue per transaction, and producers coalesce wake-ups within the fetch cooldown.
 
 On SQL Server none of these channels exist. Each one is replaced as follows (FR-DB-04/05):
@@ -670,6 +678,8 @@ await db.SaveChangesAsync(ct);
 await kopi.InsertAsync(new SendEmailArgs(...), db, ct: ct);   // uses db's current connection/tx
 await tx.CommitAsync(ct);
 ```
+
+`KopiClient` (plan task 1.6) implements `InsertAsync`: `new KopiClient(driver, timeProvider?)`. It reads the kind, serialises the args (`System.Text.Json` web defaults until task 1.10 makes this configurable), validates and resolves the options, and makes one `JobInsertManyAsync` call on the pooled or the transaction executor. The two `InsertAsync` overloads both have optional parameters (analyzer rule RS0026 is suppressed): they differ by a required `DbTransaction`, so a call can't be ambiguous. Where reflection-based JSON is disabled (trimmed and AOT apps), inserting throws `NotSupportedException` until task 1.10.
 
 `InsertAsync` with a transaction requires the transaction type of the configured driver at runtime: `NpgsqlTransaction` or `SqlTransaction`. Any other type throws `ArgumentException`. We accept `DbTransaction` in the signature so the core takes no dependency on either database client.
 

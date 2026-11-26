@@ -14,6 +14,9 @@ KopiQueue.AttemptError.Trace.get -> string?
 KopiQueue.AttemptError.Trace.init -> void
 KopiQueue.Drivers.DiagnosticIds
 KopiQueue.IJobArgs
+KopiQueue.IKopiClient
+KopiQueue.IKopiClient.InsertAsync<TArgs>(TArgs args, KopiQueue.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.InsertResult<TArgs>!>!
+KopiQueue.IKopiClient.InsertAsync<TArgs>(TArgs args, System.Data.Common.DbTransaction! transaction, KopiQueue.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.InsertResult<TArgs>!>!
 KopiQueue.InsertDefaults
 KopiQueue.InsertOptions
 KopiQueue.InsertOptions.InsertOptions() -> void
@@ -29,6 +32,11 @@ KopiQueue.InsertOptions.ScheduledAt.get -> System.DateTimeOffset?
 KopiQueue.InsertOptions.ScheduledAt.init -> void
 KopiQueue.InsertOptions.Tags.get -> System.Collections.Generic.IReadOnlyList<string!>?
 KopiQueue.InsertOptions.Tags.init -> void
+KopiQueue.InsertResult
+KopiQueue.InsertResult.Job.get -> KopiQueue.JobRow!
+KopiQueue.InsertResult.UniqueSkippedAsDuplicate.get -> bool
+KopiQueue.InsertResult<TArgs>
+KopiQueue.InsertResult<TArgs>.Args.get -> TArgs
 KopiQueue.JobKindAttribute
 KopiQueue.JobKindAttribute.JobKindAttribute(string! kind) -> void
 KopiQueue.JobKindAttribute.Kind.get -> string!
@@ -81,6 +89,10 @@ KopiQueue.JobState.Pending = 4 -> KopiQueue.JobState
 KopiQueue.JobState.Retryable = 5 -> KopiQueue.JobState
 KopiQueue.JobState.Running = 6 -> KopiQueue.JobState
 KopiQueue.JobState.Scheduled = 7 -> KopiQueue.JobState
+KopiQueue.KopiClient
+KopiQueue.KopiClient.InsertAsync<TArgs>(TArgs args, KopiQueue.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.InsertResult<TArgs>!>!
+KopiQueue.KopiClient.InsertAsync<TArgs>(TArgs args, System.Data.Common.DbTransaction! transaction, KopiQueue.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.InsertResult<TArgs>!>!
+KopiQueue.KopiClient.KopiClient(KopiQueue.Drivers.IKopiDriver! driver, System.TimeProvider? timeProvider = null) -> void
 KopiQueue.KopiQueueConfigurationException
 KopiQueue.KopiQueueConfigurationException.KopiQueueConfigurationException() -> void
 KopiQueue.KopiQueueConfigurationException.KopiQueueConfigurationException(string? message) -> void

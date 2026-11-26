@@ -47,6 +47,11 @@ public interface IKopiExecutor
     /// Inserts jobs in one statement and returns them as stored, in the order given.
     /// The core splits larger batches using <see cref="DriverCapabilities.MaxRowsPerStatement"/>.
     /// </summary>
+    /// <remarks>
+    /// On a driver with <see cref="DriverCapabilities.ListenNotify"/>, the insert also notifies each queue that received
+    /// <see cref="JobState.Available"/> jobs, once, in the same transaction, so the notification is delivered only if the
+    /// insert commits (FR-INS-07).
+    /// </remarks>
     /// <exception cref="ArgumentException">A job is malformed in a way the database cannot represent, for example a tag containing a comma.</exception>
     /// <exception cref="NotSupportedException">A job has a unique key: unique jobs are not supported yet.</exception>
     Task<IReadOnlyList<JobInsertResult>> JobInsertManyAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken);

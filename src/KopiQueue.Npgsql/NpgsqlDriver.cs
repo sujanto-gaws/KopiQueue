@@ -56,7 +56,7 @@ public sealed class NpgsqlDriver : IKopiDriver
         options ??= new NpgsqlDriverOptions();
         _dataSource = dataSource;
         _migrationDriver = new NpgsqlMigrationDriver(dataSource, options.Schema, options.TablePrefix);
-        _statements = new NpgsqlStatements(_migrationDriver.SchemaQualifier, _migrationDriver.TablePrefix);
+        _statements = new NpgsqlStatements(options.Schema, _migrationDriver.SchemaQualifier, _migrationDriver.TablePrefix);
         Schema = options.Schema;
         TablePrefix = options.TablePrefix;
     }
