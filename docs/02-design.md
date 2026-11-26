@@ -698,7 +698,9 @@ Once M2 adds queues and workers, a client without them must keep this behaviour:
 
 `InsertAsync` with a transaction requires the transaction type of the configured driver at runtime: `NpgsqlTransaction` or `SqlTransaction`. Any other type throws `ArgumentException`. We accept `DbTransaction` in the signature so the core takes no dependency on either database client.
 
-With EF Core, the `KopiQueue.EntityFrameworkCore` package also registers a `DbTransactionInterceptor`. It sends the LocalWaker signal after `TransactionCommitted`, so EF inserts get low-latency pickup even on SQL Server. A raw `SqlTransaction` has no commit hook, so those jobs are picked up on the next poll.
+**EF Core (plan task 1.9, FR-INS-03).** `KopiQueue.EntityFrameworkCore` adds `InsertAsync`, `InsertManyAsync` and `InsertManyFastAsync` extension methods on `IKopiClient` that take a `DbContext`. They use `Database.CurrentTransaction.GetDbTransaction()` and pass it to the transaction overloads, so they depend only on EF Core Relational and work with any provider whose transaction type the configured driver accepts. A context with no current transaction throws `InvalidOperationException`. Inserting separately would quietly break the promise that jobs commit with the context's changes. Tested with the Npgsql EF provider, including a transaction shared through `UseTransaction`. The SQL Server EF provider is tested with the SQL Server driver in M3.
+
+The commit interceptor described next needs the LocalWaker, so it arrives with the producers in M2 and the SQL Server driver in M3. With EF Core, the `KopiQueue.EntityFrameworkCore` package also registers a `DbTransactionInterceptor`. It sends the LocalWaker signal after `TransactionCommitted`, so EF inserts get low-latency pickup even on SQL Server. A raw `SqlTransaction` has no commit hook, so those jobs are picked up on the next poll.
 
 ### 6.4 Extensibility points
 
