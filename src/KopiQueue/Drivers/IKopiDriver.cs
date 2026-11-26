@@ -75,6 +75,18 @@ public interface IKopiExecutor
 
     /// <summary>Reads a job by ID, or returns <c>null</c> if there is none.</summary>
     Task<JobRow?> JobGetByIdAsync(long id, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Locks and starts up to <see cref="JobGetAvailableParams.Max"/> jobs of one queue for one client (design §5.1):
+    /// jobs that are <see cref="JobState.Available"/> and due by the database's clock, in the order
+    /// <c>priority, scheduled_at, id</c> (FR-EXE-02). Each returned job is <see cref="JobState.Running"/>, its
+    /// <see cref="JobRow.Attempt"/> is one higher, <see cref="JobRow.AttemptedAt"/> is the database's now, and the client
+    /// ID is appended to <see cref="JobRow.AttemptedBy"/>, which keeps the newest
+    /// <see cref="JobGetAvailableParams.MaxAttemptedBy"/> entries. Jobs locked by another transaction are skipped, so
+    /// concurrent fetchers never get the same job (FR-EXE-01).
+    /// </summary>
+    /// <returns>The started jobs, in fetch order. Empty when nothing is due.</returns>
+    Task<IReadOnlyList<JobRow>> JobGetAvailableAsync(JobGetAvailableParams parameters, CancellationToken cancellationToken);
 }
 
 /// <summary>What a database supports. The core reads these instead of checking the driver type (FR-DB-03).</summary>
@@ -101,6 +113,24 @@ public sealed class DriverCapabilities
     /// 2,000-row lock-escalation cap (spike 0.9).
     /// </summary>
     public int? MaxRowsPerStatement { get; init; }
+}
+
+/// <summary>What <see cref="IKopiExecutor.JobGetAvailableAsync"/> fetches.</summary>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed class JobGetAvailableParams
+{
+    /// <summary>The queue to fetch from.</summary>
+    public required string Queue { get; init; }
+
+    /// <summary>The most jobs to fetch: at least 1, and no more than <see cref="DriverCapabilities.MaxRowsPerStatement"/>.</summary>
+    public required int Max { get; init; }
+
+    /// <summary>The fetching client, recorded in <see cref="JobRow.AttemptedBy"/>.</summary>
+    public required string ClientId { get; init; }
+
+    /// <summary>How many entries <see cref="JobRow.AttemptedBy"/> keeps, newest last. Default: 100, as River.</summary>
+    public int MaxAttemptedBy { get; init; } = 100;
 }
 
 /// <summary>A job to insert, already serialised and validated by the core.</summary>

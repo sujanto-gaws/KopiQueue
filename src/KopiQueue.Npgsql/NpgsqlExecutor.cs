@@ -30,6 +30,7 @@ internal sealed class NpgsqlStatements
         JobGetById = Load("job_get_by_id.sql");
         JobInsertNotify = Load("job_insert_notify.sql");
         JobInsertFast = Load("job_insert_fast.sql").Trim();
+        JobGetAvailable = Load("job_get_available.sql");
     }
 
     /// <summary>The configured schema, unquoted, or <c>null</c> for the connection's current schema.</summary>
@@ -40,6 +41,8 @@ internal sealed class NpgsqlStatements
     public string JobGetById { get; }
 
     public string JobInsertNotify { get; }
+
+    public string JobGetAvailable { get; }
 
     /// <summary>The binary <c>COPY</c> command of the fast insert path. Its columns match <see cref="NpgsqlExecutor.JobInsertFastAsync"/>.</summary>
     public string JobInsertFast { get; }
@@ -213,6 +216,41 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
     {
         var rows = await QueryAsync(statements.JobGetById, [new NpgsqlParameter { Value = id }], then: null, cancellationToken).ConfigureAwait(false);
         return rows.Count == 0 ? null : rows[0];
+    }
+
+    public async Task<IReadOnlyList<JobRow>> JobGetAvailableAsync(JobGetAvailableParams parameters, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentException.ThrowIfNullOrEmpty(parameters.Queue, nameof(parameters));
+        ArgumentException.ThrowIfNullOrEmpty(parameters.ClientId, nameof(parameters));
+        ArgumentOutOfRangeException.ThrowIfLessThan(parameters.Max, 1, nameof(parameters));
+        ArgumentOutOfRangeException.ThrowIfLessThan(parameters.MaxAttemptedBy, 1, nameof(parameters));
+
+        var rows = await QueryAsync(
+            statements.JobGetAvailable,
+            [
+                new() { NpgsqlDbType = NpgsqlDbType.Text, Value = parameters.Queue },
+                new() { NpgsqlDbType = NpgsqlDbType.Text, Value = parameters.ClientId },
+                new() { NpgsqlDbType = NpgsqlDbType.Integer, Value = parameters.Max },
+                new() { NpgsqlDbType = NpgsqlDbType.Integer, Value = parameters.MaxAttemptedBy },
+            ],
+            then: null,
+            cancellationToken).ConfigureAwait(false);
+        rows.Sort(FetchOrder);
+        return rows;
+    }
+
+    /// <summary>The fetch order (FR-EXE-02): <c>priority, scheduled_at, id</c>.</summary>
+    private static int FetchOrder(JobRow a, JobRow b)
+    {
+        var byPriority = a.Priority.CompareTo(b.Priority);
+        if (byPriority != 0)
+        {
+            return byPriority;
+        }
+
+        var byScheduled = a.ScheduledAt.CompareTo(b.ScheduledAt);
+        return byScheduled != 0 ? byScheduled : a.Id.CompareTo(b.Id);
     }
 
     private static NpgsqlParameter Array<T>(NpgsqlDbType elementType, T[] values) =>

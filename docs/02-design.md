@@ -114,6 +114,14 @@ It stops them in reverse order. The completer is stopped last among the executio
 - **LocalWaker** (internal, owned by `KopiClient`): after a pooled insert, whose commit the client knows about, it wakes this client's subscribers of each queue that received available jobs. Inserts in a caller's transaction are not announced: the client cannot see their commit (on PostgreSQL the `pg_notify` covers them; on SQL Server the EF commit interceptor, task 5.7, will). Skipped duplicates wake nobody.
 - **Modes:** `PollOnly` means no notifier; `Auto` means a notifier whenever the driver has a listener; `ListenNotify` requires one. The option arrives with the client options in task 2.7; until then only the mechanics exist.
 
+### 3.4 Producer (plan task 2.3)
+
+- **Driver contract:** `IKopiExecutor.JobGetAvailableAsync(JobGetAvailableParams)` locks and starts up to `Max` due, available jobs of one queue for one client, in fetch order, skipping rows other transactions hold (§5.1). Each returned row is `running`, one attempt further, and records the client in `attempted_by`, which keeps the newest `MaxAttemptedBy` (default 100, as River) entries.
+- **Producer** (internal, one per configured queue): one loop, woken by an `Insert` notification naming its queue, a notifier resync, the client's LocalWaker, a freed slot while the queue is full, or the poll interval (default 1 s) passing without any of these. A wake-up is coalescing: any number of signals before a fetch begins are answered by that one fetch. Fetches are at least `FetchCooldown` (default 100 ms) apart. A fetch asks for the free slots, capped at `FetchBatchMax` (default 1,000) and the driver's `MaxRowsPerStatement`; a full batch asks for another fetch at once. The first fetch happens on start.
+- **Slots:** each fetched job runs through the run function (the executor, task 2.4) on its own task, with a token that a hard stop cancels, and holds its slot until the function returns. The producer never runs more than `MaxWorkers` at once (FR-EXE-04).
+- **Failures:** a failed fetch is logged and tried again at the next wake-up or poll; the loop never ends on an error. A run function that throws is logged and its slot freed.
+- **Stop** (§5.9 steps 1–3 for one queue): unsubscribe and stop fetching; a fetch in progress completes, since the database already marked its jobs running. Then wait for the running jobs (soft stop). If the stop token fires first, cancel every job's token and wait at most `HardStopGrace` (default 5 s); jobs still running stay `running` and are rescued later.
+
 ## 4. Data model
 
 > **PostgreSQL (River-compatible, OQ-1 decided):** the table names and columns below MUST match River's schema at the pinned version: **migration line `main`, version 8, as created by River v0.51.2**.
@@ -437,7 +445,9 @@ loop:
   if jobs.Count == limit: schedule an immediate refetch (more work is likely)
 ```
 
-Concurrency control: a `SemaphoreSlim(MaxWorkers)` per producer. A slot is released after the completer has *accepted* the result, not after it has been written to the database. This keeps the semaphore from blocking on database writes.
+`UPDATE ... RETURNING` returns rows in no particular order, so the driver sorts them into fetch order. `attempted_by` keeps its newest 100 entries, as River's does.
+
+Concurrency control: each producer tracks its running jobs and fetches no more than `MaxWorkers` minus the running count. A slot is released after the completer has *accepted* the result, not after it has been written to the database. This keeps slots from waiting on database writes.
 
 ### 5.2 Execute (executor)
 
@@ -776,6 +786,7 @@ public interface IKopiExecutor   // typed operations; no SQL leaks to the core
     Task<IReadOnlyList<JobInsertResult>> JobInsertManyAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken ct);
     Task<long> JobInsertFastAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken ct);   // COPY; no rows read back
     Task<JobRow?> JobGetByIdAsync(long id, CancellationToken ct);
+    Task<IReadOnlyList<JobRow>> JobGetAvailableAsync(JobGetAvailableParams p, CancellationToken ct);   // §5.1, SKIP LOCKED
     // Later: JobFetchAsync, JobSetStateManyAsync, JobScheduleAsync, LeaderAttemptElectAsync,
     // NotifyAsync, ... about 35 operations in total, mirroring the needs of the components above
 }
@@ -969,6 +980,7 @@ SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'de
   - *Client:* inserts through `KopiClient`.
   - *Migration:* a new schema has every version pending; up once, idempotently; down to 0 and back; step by step; dry run; four concurrent migrators apply each version once; insert after migrating.
 - **M2 listener cases (task 2.2):** a listener exists exactly when `ListenNotify` is set; on such a driver a committed pooled insert reaches a listener connection as an `Insert` notification for its queue. Reconnects, keep-alive and channel limits stay in `NpgsqlNotifierTests`.
+- **M2 fetch cases (task 2.3):** only due, available jobs of the asked queue, in `priority, scheduled_at, id` order, come back running with one more attempt and the client recorded; at most `Max` per fetch; eight concurrent fetchers never get the same job; limits below 1 are rejected. The `attempted_by` cap and skipping a row another transaction locked stay in `NpgsqlDriverTests`.
 - SQL Server joins when its driver lands (M3). PostgreSQL-specific behaviour (River catalog equality, `pg_notify`, `COPY` details, constraint names) stays in `KopiQueue.Npgsql.Tests`.
 
 ## 12. Decision log (ADRs)

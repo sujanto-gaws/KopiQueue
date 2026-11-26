@@ -354,6 +354,54 @@ public sealed class NpgsqlDriverTests(PostgresFixture db) : IClassFixture<Postgr
         MaxAttempts = 25,
     };
 
+    [Theory]
+    [InlineData(0, 3, new[] { "me" })]
+    [InlineData(2, 3, new[] { "h1", "h2", "me" })]
+    [InlineData(3, 3, new[] { "h2", "h3", "me" })]
+    [InlineData(5, 3, new[] { "h4", "h5", "me" })]
+    [InlineData(5, 1, new[] { "me" })]
+    public async Task Fetch_appends_the_client_and_keeps_the_newest_attempted_by_entries(int previous, int keep, string[] expected)
+    {
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var (driver, schema) = await MigratedDriverWithSchemaAsync(ds);
+        var id = (await driver.GetExecutor().JobInsertManyAsync([Job("retried")], Ct))[0].Job.Id;
+        var hosts = string.Join(", ", Enumerable.Range(1, previous).Select(i => $"'h{i}'"));
+        await using (var cmd = ds.CreateCommand(
+            $"UPDATE {schema}.river_job SET attempt = {previous}, attempted_by = {(previous == 0 ? "NULL" : $"ARRAY[{hosts}]")} WHERE id = {id}"))
+        {
+            await cmd.ExecuteNonQueryAsync(Ct);
+        }
+
+        var job = Assert.Single(await driver.GetExecutor().JobGetAvailableAsync(
+            new JobGetAvailableParams { Queue = "default", Max = 1, ClientId = "me", MaxAttemptedBy = keep }, Ct));
+
+        Assert.Equal(previous + 1, job.Attempt);
+        Assert.Equal(expected, job.AttemptedBy);
+    }
+
+    [Fact]
+    public async Task Fetch_skips_a_job_another_transaction_has_locked()
+    {
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var (driver, schema) = await MigratedDriverWithSchemaAsync(ds);
+        var ids = (await driver.GetExecutor().JobInsertManyAsync([Job("a"), Job("b")], Ct)).Select(r => r.Job.Id).ToArray();
+        await using var other = await ds.OpenConnectionAsync(Ct);
+        await using var lockTx = await other.BeginTransactionAsync(Ct);
+        await using (var cmd = new NpgsqlCommand($"SELECT id FROM {schema}.river_job WHERE id = {ids[0]} FOR UPDATE", other, lockTx))
+        {
+            await cmd.ExecuteScalarAsync(Ct);
+        }
+
+        var fetched = await driver.GetExecutor().JobGetAvailableAsync(new JobGetAvailableParams { Queue = "default", Max = 10, ClientId = "c" }, Ct);
+        await lockTx.RollbackAsync(Ct);
+        var after = await driver.GetExecutor().JobGetAvailableAsync(new JobGetAvailableParams { Queue = "default", Max = 10, ClientId = "c" }, Ct);
+
+        Assert.Equal([ids[1]], fetched.Select(j => j.Id));
+        Assert.Equal([ids[0]], after.Select(j => j.Id));
+    }
+
     private static async Task<IKopiDriver> MigratedDriverAsync(NpgsqlDataSource ds) => (await MigratedDriverWithSchemaAsync(ds)).Driver;
 
     private static async Task<(IKopiDriver Driver, string Schema)> MigratedDriverWithSchemaAsync(NpgsqlDataSource ds)
