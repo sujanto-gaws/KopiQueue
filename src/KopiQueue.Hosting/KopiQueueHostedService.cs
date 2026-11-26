@@ -62,5 +62,6 @@ internal static class KopiQueueClientFactory
         HardStopGrace = options.HardStopGrace,
         ElectInterval = options.ElectInterval,
         LeaderTtl = options.LeaderTtl,
+        QueueRetention = options.QueueRetention,
     };
 }

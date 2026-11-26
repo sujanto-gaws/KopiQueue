@@ -35,6 +35,7 @@ internal sealed class NpgsqlStatements
         LeaderAttemptElect = Load("leader_attempt_elect.sql");
         LeaderAttemptReelect = Load("leader_attempt_reelect.sql");
         LeaderResign = Load("leader_resign.sql");
+        QueueDeleteExpired = Load("queue_delete_expired.sql");
     }
 
     /// <summary>The configured schema, unquoted, or <c>null</c> for the connection's current schema.</summary>
@@ -55,6 +56,8 @@ internal sealed class NpgsqlStatements
     public string LeaderAttemptReelect { get; }
 
     public string LeaderResign { get; }
+
+    public string QueueDeleteExpired { get; }
 
     /// <summary>The binary <c>COPY</c> command of the fast insert path. Its columns match <see cref="NpgsqlExecutor.JobInsertFastAsync"/>.</summary>
     public string JobInsertFast { get; }
@@ -315,6 +318,49 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
                 new() { NpgsqlDbType = NpgsqlDbType.Text, Value = leaderId },
             ],
             cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<string>> QueueDeleteExpiredAsync(QueueDeleteExpiredParams parameters, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(parameters.Retention, TimeSpan.Zero, nameof(parameters));
+        ArgumentOutOfRangeException.ThrowIfLessThan(parameters.Max, 1, nameof(parameters));
+
+        var connection = transaction?.Connection;
+        var ownConnection = connection is null;
+        if (ownConnection)
+        {
+            connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            var command = new NpgsqlCommand(statements.QueueDeleteExpired, connection, transaction);
+            await using (command.ConfigureAwait(false))
+            {
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Interval, Value = parameters.Retention });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = parameters.Max });
+                var names = new List<string>();
+                var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                await using (reader.ConfigureAwait(false))
+                {
+                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        names.Add(reader.GetString(0));
+                    }
+                }
+
+                names.Sort(StringComparer.Ordinal);
+                return names;
+            }
+        }
+        finally
+        {
+            if (ownConnection)
+            {
+                await connection!.DisposeAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     private static NpgsqlParameter[] LeaderParameters(LeaderElectParams parameters)

@@ -437,3 +437,14 @@ KopiQueue.KopiQueueOptions.LeaderTtl.set -> void
 [KQ0001]KopiQueue.Drivers.LeaderElectParams.LeaderId.init -> void
 [KQ0001]KopiQueue.Drivers.LeaderElectParams.Ttl.get -> System.TimeSpan
 [KQ0001]KopiQueue.Drivers.LeaderElectParams.Ttl.init -> void
+KopiQueue.KopiClientOptions.QueueRetention.get -> System.TimeSpan?
+KopiQueue.KopiClientOptions.QueueRetention.init -> void
+KopiQueue.KopiQueueOptions.QueueRetention.get -> System.TimeSpan?
+KopiQueue.KopiQueueOptions.QueueRetention.set -> void
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.QueueDeleteExpiredAsync(KopiQueue.Drivers.QueueDeleteExpiredParams! parameters, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<string!>!>!
+[KQ0001]KopiQueue.Drivers.QueueDeleteExpiredParams
+[KQ0001]KopiQueue.Drivers.QueueDeleteExpiredParams.Max.get -> int
+[KQ0001]KopiQueue.Drivers.QueueDeleteExpiredParams.Max.init -> void
+[KQ0001]KopiQueue.Drivers.QueueDeleteExpiredParams.QueueDeleteExpiredParams() -> void
+[KQ0001]KopiQueue.Drivers.QueueDeleteExpiredParams.Retention.get -> System.TimeSpan
+[KQ0001]KopiQueue.Drivers.QueueDeleteExpiredParams.Retention.init -> void
