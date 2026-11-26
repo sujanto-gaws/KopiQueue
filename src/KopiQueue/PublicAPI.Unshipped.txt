@@ -290,3 +290,14 @@ virtual KopiQueue.Worker<TArgs>.Timeout(KopiQueue.Job<TArgs>! job) -> System.Tim
 [KQ0001]override KopiQueue.Drivers.KopiNotification.ToString() -> string!
 [KQ0001]static KopiQueue.Drivers.KopiNotification.operator !=(KopiQueue.Drivers.KopiNotification? left, KopiQueue.Drivers.KopiNotification? right) -> bool
 [KQ0001]static KopiQueue.Drivers.KopiNotification.operator ==(KopiQueue.Drivers.KopiNotification? left, KopiQueue.Drivers.KopiNotification? right) -> bool
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobGetAvailableAsync(KopiQueue.Drivers.JobGetAvailableParams! parameters, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.JobRow!>!>!
+[KQ0001]KopiQueue.Drivers.JobGetAvailableParams
+[KQ0001]KopiQueue.Drivers.JobGetAvailableParams.ClientId.get -> string!
+[KQ0001]KopiQueue.Drivers.JobGetAvailableParams.ClientId.init -> void
+[KQ0001]KopiQueue.Drivers.JobGetAvailableParams.JobGetAvailableParams() -> void
+[KQ0001]KopiQueue.Drivers.JobGetAvailableParams.Max.get -> int
+[KQ0001]KopiQueue.Drivers.JobGetAvailableParams.Max.init -> void
+[KQ0001]KopiQueue.Drivers.JobGetAvailableParams.MaxAttemptedBy.get -> int
+[KQ0001]KopiQueue.Drivers.JobGetAvailableParams.MaxAttemptedBy.init -> void
+[KQ0001]KopiQueue.Drivers.JobGetAvailableParams.Queue.get -> string!
+[KQ0001]KopiQueue.Drivers.JobGetAvailableParams.Queue.init -> void
