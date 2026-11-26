@@ -3,7 +3,10 @@ using Microsoft.Data.SqlClient;
 
 namespace KopiQueue.SqlServer.Tests;
 
-/// <summary>Proves the SQL Server test fixture works (M0 task 0.4). Replaced by the conformance suite from M1.</summary>
+/// <summary>
+/// Proves the SQL Server test fixture works (M0 task 0.4). Replaced by <c>DriverConformanceTests</c> once the SQL Server
+/// driver exists (M3).
+/// </summary>
 public sealed class InfrastructureSmokeTests(SqlServerFixture db) : IClassFixture<SqlServerFixture>
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
