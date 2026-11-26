@@ -5,7 +5,7 @@ namespace KopiQueue.Migrations;
 
 /// <summary>
 /// Migrates the KopiQueue schema of one migration line (FR-MIG-02). Get one from a driver package, for example
-/// <c>NpgsqlKopiMigrator.Create(dataSource)</c> in <c>KopiQueue.Npgsql</c>.
+/// <c>new NpgsqlDriver(dataSource).CreateMigrator()</c> in <c>KopiQueue.Npgsql</c>, or <c>IKopiDriver.CreateMigrator</c>.
 /// </summary>
 /// <remarks>
 /// <para>

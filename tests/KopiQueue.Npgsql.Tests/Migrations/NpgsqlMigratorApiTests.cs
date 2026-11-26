@@ -4,8 +4,8 @@ using Npgsql;
 
 namespace KopiQueue.Npgsql.Tests.Migrations;
 
-/// <summary>The public migrator API against a real PostgreSQL (plan task 1.3: FR-MIG-02).</summary>
-public sealed class NpgsqlKopiMigratorTests(PostgresFixture db) : IClassFixture<PostgresFixture>
+/// <summary>The public migrator API, created from <see cref="NpgsqlDriver"/>, against a real PostgreSQL (plan tasks 1.3, 1.4: FR-MIG-02).</summary>
+public sealed class NpgsqlMigratorApiTests(PostgresFixture db) : IClassFixture<PostgresFixture>
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -14,7 +14,7 @@ public sealed class NpgsqlKopiMigratorTests(PostgresFixture db) : IClassFixture<
     {
         db.SkipIfUnavailable();
         await using var ds = db.CreateDataSource();
-        var migrator = NpgsqlKopiMigrator.Create(ds, new NpgsqlMigratorOptions { Schema = await CreateSchemaAsync(ds) });
+        var migrator = new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = await CreateSchemaAsync(ds) }).CreateMigrator();
 
         var before = await migrator.ValidateAsync(Ct);
         Assert.Equal((0, 8, false), (before.CurrentVersion, before.LatestVersion, before.IsCurrent));
@@ -45,7 +45,7 @@ public sealed class NpgsqlKopiMigratorTests(PostgresFixture db) : IClassFixture<
         db.SkipIfUnavailable();
         await using var ds = db.CreateDataSource();
         var schema = await CreateSchemaAsync(ds);
-        var migrator = NpgsqlKopiMigrator.Create(ds, new NpgsqlMigratorOptions { Schema = schema });
+        var migrator = new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = schema }).CreateMigrator();
 
         await migrator.MigrateAsync(MigrationDirection.Up, new MigrateOptions { TargetVersion = 2 }, Ct);
         var original = await migrator.GetVersionsAsync(Ct);
@@ -62,7 +62,7 @@ public sealed class NpgsqlKopiMigratorTests(PostgresFixture db) : IClassFixture<
     {
         db.SkipIfUnavailable();
         await using var ds = db.CreateDataSource();
-        var migrator = NpgsqlKopiMigrator.Create(ds, new NpgsqlMigratorOptions { Schema = await CreateSchemaAsync(ds) });
+        var migrator = new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = await CreateSchemaAsync(ds) }).CreateMigrator();
         await migrator.MigrateAsync(MigrationDirection.Up, cancellationToken: Ct);
 
         var planned = await migrator.MigrateAsync(MigrationDirection.Down, new MigrateOptions { TargetVersion = 0, DryRun = true }, Ct);
@@ -80,7 +80,7 @@ public sealed class NpgsqlKopiMigratorTests(PostgresFixture db) : IClassFixture<
         db.SkipIfUnavailable();
         await using var ds = db.CreateDataSource();
         var schema = await CreateSchemaAsync(ds);
-        var migrator = NpgsqlKopiMigrator.Create(ds, new NpgsqlMigratorOptions { Schema = schema });
+        var migrator = new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = schema }).CreateMigrator();
         await migrator.MigrateAsync(MigrationDirection.Up, cancellationToken: Ct);
         await using (var cmd = ds.CreateCommand($"INSERT INTO {schema}.river_migration (line, version) VALUES ('main', 9)"))
         {
@@ -107,7 +107,7 @@ public sealed class NpgsqlKopiMigratorTests(PostgresFixture db) : IClassFixture<
         }
 
         await using var ds = NpgsqlDataSource.Create(new NpgsqlConnectionStringBuilder(db.ConnectionString) { SearchPath = schema }.ConnectionString);
-        var migrator = NpgsqlKopiMigrator.Create(ds);
+        var migrator = new NpgsqlDriver(ds).CreateMigrator();
 
         await migrator.MigrateAsync(MigrationDirection.Up, cancellationToken: Ct);
 
@@ -116,13 +116,13 @@ public sealed class NpgsqlKopiMigratorTests(PostgresFixture db) : IClassFixture<
     }
 
     [Fact]
-    public void Create_rejects_unsafe_options()
+    public void The_driver_rejects_unsafe_options()
     {
         using var ds = NpgsqlDataSource.Create("Host=unused");
 
-        Assert.Throws<ArgumentException>(() => NpgsqlKopiMigrator.Create(ds, new NpgsqlMigratorOptions { Schema = "a;b" }));
-        Assert.Throws<ArgumentException>(() => NpgsqlKopiMigrator.Create(ds, new NpgsqlMigratorOptions { TablePrefix = "Bad" }));
-        Assert.Throws<ArgumentNullException>(() => NpgsqlKopiMigrator.Create(null!));
+        Assert.Throws<ArgumentException>(() => new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = "a;b" }));
+        Assert.Throws<ArgumentException>(() => new NpgsqlDriver(ds, new NpgsqlDriverOptions { TablePrefix = "Bad" }));
+        Assert.Throws<ArgumentNullException>(() => new NpgsqlDriver(null!));
     }
 
     private static async Task<string> CreateSchemaAsync(NpgsqlDataSource ds)

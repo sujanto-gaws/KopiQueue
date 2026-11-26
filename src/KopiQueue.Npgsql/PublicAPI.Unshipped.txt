@@ -1,9 +1,12 @@
 #nullable enable
-KopiQueue.Npgsql.NpgsqlKopiMigrator
-KopiQueue.Npgsql.NpgsqlMigratorOptions
-KopiQueue.Npgsql.NpgsqlMigratorOptions.NpgsqlMigratorOptions() -> void
-KopiQueue.Npgsql.NpgsqlMigratorOptions.Schema.get -> string?
-KopiQueue.Npgsql.NpgsqlMigratorOptions.Schema.init -> void
-KopiQueue.Npgsql.NpgsqlMigratorOptions.TablePrefix.get -> string!
-KopiQueue.Npgsql.NpgsqlMigratorOptions.TablePrefix.init -> void
-static KopiQueue.Npgsql.NpgsqlKopiMigrator.Create(Npgsql.NpgsqlDataSource! dataSource, KopiQueue.Npgsql.NpgsqlMigratorOptions? options = null, Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null) -> KopiQueue.Migrations.KopiMigrator!
+KopiQueue.Npgsql.NpgsqlDriver
+KopiQueue.Npgsql.NpgsqlDriver.CreateMigrator(Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null) -> KopiQueue.Migrations.KopiMigrator!
+KopiQueue.Npgsql.NpgsqlDriver.NpgsqlDriver(Npgsql.NpgsqlDataSource! dataSource, KopiQueue.Npgsql.NpgsqlDriverOptions? options = null) -> void
+KopiQueue.Npgsql.NpgsqlDriver.Schema.get -> string?
+KopiQueue.Npgsql.NpgsqlDriver.TablePrefix.get -> string!
+KopiQueue.Npgsql.NpgsqlDriverOptions
+KopiQueue.Npgsql.NpgsqlDriverOptions.NpgsqlDriverOptions() -> void
+KopiQueue.Npgsql.NpgsqlDriverOptions.Schema.get -> string?
+KopiQueue.Npgsql.NpgsqlDriverOptions.Schema.init -> void
+KopiQueue.Npgsql.NpgsqlDriverOptions.TablePrefix.get -> string!
+KopiQueue.Npgsql.NpgsqlDriverOptions.TablePrefix.init -> void
