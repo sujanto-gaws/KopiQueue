@@ -6,6 +6,7 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ### Added
 
+- `KopiQueue.EntityFrameworkCore`: `InsertAsync`, `InsertManyAsync` and `InsertManyFastAsync` extension methods that insert jobs in a `DbContext`'s current transaction, so they commit or roll back with its changes. Provider-neutral (EF Core Relational only); a context without a transaction is rejected. ([#19](https://github.com/sujanto-gaws/KopiQueue/issues/19))
 - Insert-only use (FR-INS-08): `KopiClient` inserts with no queues, workers or start step, and holds no connection or background work between inserts, so a web front-end can share one client or create one per request. ([#18](https://github.com/sujanto-gaws/KopiQueue/issues/18))
 - Bulk insert: `InsertManyAsync` returns the stored jobs in order, and `InsertManyFastAsync` uses PostgreSQL binary `COPY` and returns the count. Both take `InsertRequest(args, options)` items of any job types, validate every job before inserting any, are all-or-nothing, and notify each queue once on commit. ([#17](https://github.com/sujanto-gaws/KopiQueue/issues/17))
 - `KopiClient` and `IKopiClient` with `InsertAsync`, on a pooled connection or inside the caller's transaction, returning `InsertResult<TArgs>`. On PostgreSQL the insert notifies `<schema>.river_insert` for each queue with available jobs, in the same transaction, so listeners hear of it only on commit. ([#16](https://github.com/sujanto-gaws/KopiQueue/issues/16))

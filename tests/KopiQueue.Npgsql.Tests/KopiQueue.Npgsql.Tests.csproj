@@ -8,10 +8,12 @@
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
     <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\KopiQueue.Npgsql\KopiQueue.Npgsql.csproj" />
+    <ProjectReference Include="..\..\src\KopiQueue.EntityFrameworkCore\KopiQueue.EntityFrameworkCore.csproj" />
     <ProjectReference Include="..\KopiQueue.TestInfrastructure\KopiQueue.TestInfrastructure.csproj" />
   </ItemGroup>
 
