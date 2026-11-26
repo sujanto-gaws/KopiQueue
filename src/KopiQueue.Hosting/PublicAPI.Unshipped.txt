@@ -1,1 +1,4 @@
 #nullable enable
+Microsoft.Extensions.DependencyInjection.KopiQueueServiceCollectionExtensions
+static Microsoft.Extensions.DependencyInjection.KopiQueueServiceCollectionExtensions.AddKopiQueue(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<KopiQueue.KopiQueueBuilder!>! configure) -> KopiQueue.KopiQueueBuilder!
+static Microsoft.Extensions.DependencyInjection.KopiQueueServiceCollectionExtensions.BindConfiguration(this KopiQueue.KopiQueueBuilder! builder, string! configSectionPath) -> KopiQueue.KopiQueueBuilder!

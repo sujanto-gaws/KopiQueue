@@ -380,3 +380,43 @@ KopiQueue.QueueOptions
 KopiQueue.QueueOptions.MaxWorkers.get -> int
 KopiQueue.QueueOptions.MaxWorkers.init -> void
 KopiQueue.QueueOptions.QueueOptions() -> void
+KopiQueue.KopiQueueBuilder
+KopiQueue.KopiQueueBuilder.AddQueue(string! name, int maxWorkers) -> KopiQueue.KopiQueueBuilder!
+KopiQueue.KopiQueueBuilder.AddWorker<TArgs, TWorker>() -> KopiQueue.KopiQueueBuilder!
+KopiQueue.KopiQueueBuilder.AddWorker<TArgs>(KopiQueue.IWorker<TArgs>! worker) -> KopiQueue.KopiQueueBuilder!
+KopiQueue.KopiQueueBuilder.AddWorker<TWorker>() -> KopiQueue.KopiQueueBuilder!
+KopiQueue.KopiQueueBuilder.ArgsSerializer.get -> KopiQueue.Serialization.IJobArgsSerializer?
+KopiQueue.KopiQueueBuilder.Configure(System.Action<KopiQueue.KopiQueueOptions!>! configure) -> KopiQueue.KopiQueueBuilder!
+KopiQueue.KopiQueueBuilder.KopiQueueBuilder(Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> void
+KopiQueue.KopiQueueBuilder.RetryPolicy.get -> KopiQueue.IRetryPolicy?
+KopiQueue.KopiQueueBuilder.Services.get -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+KopiQueue.KopiQueueBuilder.UseArgsSerializer(KopiQueue.Serialization.IJobArgsSerializer! serializer) -> KopiQueue.KopiQueueBuilder!
+KopiQueue.KopiQueueBuilder.UseJsonContext(System.Text.Json.Serialization.JsonSerializerContext! context) -> KopiQueue.KopiQueueBuilder!
+KopiQueue.KopiQueueBuilder.UseRetryPolicy(KopiQueue.IRetryPolicy! policy) -> KopiQueue.KopiQueueBuilder!
+KopiQueue.KopiQueueBuilder.Workers.get -> KopiQueue.WorkerRegistry!
+KopiQueue.KopiQueueOptions
+KopiQueue.KopiQueueOptions.ClientId.get -> string?
+KopiQueue.KopiQueueOptions.ClientId.set -> void
+KopiQueue.KopiQueueOptions.CompleterMode.get -> KopiQueue.CompleterMode
+KopiQueue.KopiQueueOptions.CompleterMode.set -> void
+KopiQueue.KopiQueueOptions.FetchBatchMax.get -> int
+KopiQueue.KopiQueueOptions.FetchBatchMax.set -> void
+KopiQueue.KopiQueueOptions.FetchCooldown.get -> System.TimeSpan
+KopiQueue.KopiQueueOptions.FetchCooldown.set -> void
+KopiQueue.KopiQueueOptions.FetchPollInterval.get -> System.TimeSpan
+KopiQueue.KopiQueueOptions.FetchPollInterval.set -> void
+KopiQueue.KopiQueueOptions.HardStopGrace.get -> System.TimeSpan
+KopiQueue.KopiQueueOptions.HardStopGrace.set -> void
+KopiQueue.KopiQueueOptions.JobTimeout.get -> System.TimeSpan
+KopiQueue.KopiQueueOptions.JobTimeout.set -> void
+KopiQueue.KopiQueueOptions.KopiQueueOptions() -> void
+KopiQueue.KopiQueueOptions.NotificationMode.get -> KopiQueue.NotificationMode
+KopiQueue.KopiQueueOptions.NotificationMode.set -> void
+KopiQueue.KopiQueueOptions.Queues.get -> System.Collections.Generic.Dictionary<string!, KopiQueue.QueueSettings!>!
+KopiQueue.KopiQueueOptions.SoftStopTimeout.get -> System.TimeSpan?
+KopiQueue.KopiQueueOptions.SoftStopTimeout.set -> void
+KopiQueue.QueueSettings
+KopiQueue.QueueSettings.MaxWorkers.get -> int
+KopiQueue.QueueSettings.MaxWorkers.set -> void
+KopiQueue.QueueSettings.QueueSettings() -> void
+[KQ0001]KopiQueue.KopiQueueBuilder.UseDriver(System.Func<System.IServiceProvider!, KopiQueue.Drivers.IKopiDriver!>! factory) -> KopiQueue.KopiQueueBuilder!

@@ -9,11 +9,13 @@
     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
     <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\KopiQueue.Npgsql\KopiQueue.Npgsql.csproj" />
     <ProjectReference Include="..\..\src\KopiQueue.EntityFrameworkCore\KopiQueue.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="..\..\src\KopiQueue.Hosting\KopiQueue.Hosting.csproj" />
     <ProjectReference Include="..\KopiQueue.TestInfrastructure\KopiQueue.TestInfrastructure.csproj" />
   </ItemGroup>
 

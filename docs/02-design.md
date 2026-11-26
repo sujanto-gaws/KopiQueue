@@ -33,14 +33,16 @@ Why split Hosting from Core: a console app or an Azure Function that only insert
 Users install `KopiQueue.Hosting` plus exactly one driver package (`KopiQueue.Npgsql` or `KopiQueue.SqlServer`).
 `KopiQueue.EntityFrameworkCore` references only the core. It finds the driver at runtime from the registered client,
 so it does not drag in both database clients.
+`KopiQueue.Hosting` references only the core too (plan task 2.8). `KopiQueueBuilder`, the object `AddKopiQueue` hands
+to its callback, lives in the core, which already depends on the DI abstractions, so each driver package adds its own
+`Use…()` method (`UseNpgsql()`) without depending on Hosting, and Hosting never drags in a database client.
 
 ### Dependency graph
 
 ```mermaid
 graph TD
   Hosting[KopiQueue.Hosting] --> Core[KopiQueue]
-  Hosting --> Npgsql[KopiQueue.Npgsql]
-  Npgsql --> Core
+  Npgsql[KopiQueue.Npgsql] --> Core
   SqlServer[KopiQueue.SqlServer] --> Core
   EF[KopiQueue.EntityFrameworkCore] --> Core
   OTel[KopiQueue.OpenTelemetry] --> Core
@@ -689,16 +691,18 @@ builder.Services.AddNpgsqlDataSource(builder.Configuration.GetConnectionString("
 builder.Services.AddKopiQueue(kq =>
 {
     kq.UseNpgsql();                                  // resolves NpgsqlDataSource from DI
-    // or: kq.UseSqlServer(builder.Configuration.GetConnectionString("Sql")!);
+    // or: kq.UseNpgsql(dataSource) / kq.UseKeyedNpgsql("jobs"); M3: kq.UseSqlServer(...)
     kq.AddQueue("default", maxWorkers: 50);
     kq.AddQueue("email",   maxWorkers: 10);
-    kq.AddWorker<SendEmailWorker>();                 // or kq.AddWorkersFromAssembly(...)
-    kq.AddPeriodicJob(Cron.Parse("0 2 * * *"), () => new RebuildIndexArgs(),
+    kq.AddWorker<SendEmailArgs, SendEmailWorker>();  // or AddWorker<SendEmailWorker>() outside trimmed/AOT apps
+    kq.AddPeriodicJob(Cron.Parse("0 2 * * *"), () => new RebuildIndexArgs(),   // M4
                       o => o.RunOnStart = false);
     kq.UseJsonContext(AppJsonContext.Default);       // AOT/trim-friendly args serialization
 })
 .BindConfiguration("KopiQueue");                     // appsettings: queues, timeouts, retention
 ```
+
+**Hosting (plan task 2.8, FR-HST-01, -02, -04).** `AddKopiQueue` registers one `KopiClient` as itself and as `IKopiClient`, and an `IHostedService` that calls `StartAsync` when the host starts and `StopAsync` with the host's shutdown token, so `HostOptions.ShutdownTimeout` ends the soft stop. The settings that suit configuration are `KopiQueueOptions` (§7; `Queues:<name>:MaxWorkers`, times as `hh:mm:ss`, modes by name), bound with `BindConfiguration(section)` through the configuration binding source generator, so binding works in trimmed and Native AOT apps. Values bound from configuration override those set in code. The rest is code only, on the builder: the driver, workers, serialiser and retry policy. `IValidateOptions<KopiQueueOptions>` with `ValidateOnStart` runs the client's own checks (`KopiClient.StartAsync`) plus "a driver is configured" when the host starts, and fails startup with every problem listed. Without queues and workers the hosted client is insert-only and starts nothing. Several clients in one process (FR-HST-05, P2) are refused for now: a second `AddKopiQueue` throws. Health checks and migrate-on-startup (FR-MIG-07) come later. `samples/WorkerService` runs the whole thing on PostgreSQL, in both `Auto` and `PollOnly` modes.
 
 ### 6.3 Inserting
 

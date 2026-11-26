@@ -8,6 +8,7 @@
     <!-- Driver contracts stay internal until the driver interface review (plan task 1.4) decides what becomes public. -->
     <InternalsVisibleTo Include="KopiQueue.Npgsql" />
     <InternalsVisibleTo Include="KopiQueue.SqlServer" />
+    <InternalsVisibleTo Include="KopiQueue.Hosting" />
     <InternalsVisibleTo Include="KopiQueue.Npgsql.Tests" />
     <InternalsVisibleTo Include="KopiQueue.SqlServer.Tests" />
   </ItemGroup>

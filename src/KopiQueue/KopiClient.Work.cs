@@ -152,43 +152,84 @@ public sealed partial class KopiClient
         LogStopped(running.Logger, ClientId);
     }
 
+    /// <summary>
+    /// Everything wrong with <paramref name="options"/> on its own, without the driver (FR-DEF-06): queues and workers
+    /// configured together, queue names and concurrency, the workers, and the times. Empty when it is valid. An insert-only
+    /// configuration (no queues and no workers) only has its times checked.
+    /// </summary>
+    internal static List<string> ConfigurationErrors(KopiClientOptions options)
+    {
+        var errors = new List<string>();
+        var queues = options.Queues ?? new Dictionary<string, QueueOptions>();
+        var workers = options.Workers;
+        var hasWorkers = workers is not null && workers.Kinds.Count > 0;
+        if (queues.Count > 0 || hasWorkers)
+        {
+            if (queues.Count == 0)
+            {
+                errors.Add("Workers are registered but no queues are configured; set KopiClientOptions.Queues.");
+            }
+
+            if (workers is null)
+            {
+                errors.Add("Queues are configured but no workers are registered; set KopiClientOptions.Workers.");
+            }
+            else
+            {
+                try
+                {
+                    workers.ValidateForWork();
+                }
+                catch (KopiQueueConfigurationException e)
+                {
+                    errors.Add(e.Message);
+                }
+            }
+
+            foreach (var (name, queue) in queues)
+            {
+                if (JobValidation.QueueError(name) is { } error)
+                {
+                    errors.Add($"Queue '{name}': {error}");
+                }
+
+                if (queue is null || queue.MaxWorkers is < 1 or > MaxQueueWorkers)
+                {
+                    errors.Add(
+                        $"Queue '{name}': MaxWorkers must be between 1 and {MaxQueueWorkers}, not {queue?.MaxWorkers.ToString(CultureInfo.InvariantCulture) ?? "missing"}.");
+                }
+            }
+        }
+
+        Check(options.JobTimeout > TimeSpan.Zero || options.JobTimeout == Timeout.InfiniteTimeSpan, nameof(KopiClientOptions.JobTimeout), "must be positive, or infinite");
+        Check(options.FetchPollInterval > TimeSpan.Zero, nameof(KopiClientOptions.FetchPollInterval), "must be positive");
+        Check(options.FetchCooldown >= TimeSpan.Zero, nameof(KopiClientOptions.FetchCooldown), "must not be negative");
+        Check(options.FetchBatchMax >= 1, nameof(KopiClientOptions.FetchBatchMax), "must be at least 1");
+        Check(options.SoftStopTimeout is null || options.SoftStopTimeout >= TimeSpan.Zero, nameof(KopiClientOptions.SoftStopTimeout), "must not be negative");
+        Check(options.HardStopGrace >= TimeSpan.Zero, nameof(KopiClientOptions.HardStopGrace), "must not be negative");
+        Check(options.ClientId is null || !string.IsNullOrWhiteSpace(options.ClientId), nameof(KopiClientOptions.ClientId), "must not be empty");
+        Check(Enum.IsDefined(options.NotificationMode), nameof(KopiClientOptions.NotificationMode), "is not a known mode");
+        Check(Enum.IsDefined(options.CompleterMode), nameof(KopiClientOptions.CompleterMode), "is not a known mode");
+        return errors;
+
+        void Check(bool valid, string option, string rule)
+        {
+            if (!valid)
+            {
+                errors.Add($"KopiClientOptions.{option} {rule}.");
+            }
+        }
+    }
+
     /// <summary>Checks the configuration and builds the components, starting none of them.</summary>
     private Running Build(IReadOnlyDictionary<string, QueueOptions> queues)
     {
-        var workers = _options.Workers;
-        if (queues.Count == 0)
+        if (ConfigurationErrors(_options) is [_, ..] errors)
         {
-            throw new KopiQueueConfigurationException("Workers are registered but no queues are configured; set KopiClientOptions.Queues.");
+            throw new KopiQueueConfigurationException(string.Join(Environment.NewLine, errors));
         }
 
-        if (workers is null)
-        {
-            throw new KopiQueueConfigurationException("Queues are configured but no workers are registered; set KopiClientOptions.Workers.");
-        }
-
-        workers.ValidateForWork();
-        foreach (var (name, queue) in queues)
-        {
-            if (JobValidation.QueueError(name) is { } error)
-            {
-                throw new KopiQueueConfigurationException($"Queue '{name}': {error}");
-            }
-
-            if (queue is null || queue.MaxWorkers is < 1 or > MaxQueueWorkers)
-            {
-                throw new KopiQueueConfigurationException(
-                    $"Queue '{name}': MaxWorkers must be between 1 and {MaxQueueWorkers}, not {queue?.MaxWorkers.ToString(CultureInfo.InvariantCulture) ?? "missing"}.");
-            }
-        }
-
-        Check(_options.JobTimeout > TimeSpan.Zero || _options.JobTimeout == Timeout.InfiniteTimeSpan, nameof(KopiClientOptions.JobTimeout), "must be positive, or infinite");
-        Check(_options.FetchPollInterval > TimeSpan.Zero, nameof(KopiClientOptions.FetchPollInterval), "must be positive");
-        Check(_options.FetchCooldown >= TimeSpan.Zero, nameof(KopiClientOptions.FetchCooldown), "must not be negative");
-        Check(_options.FetchBatchMax >= 1, nameof(KopiClientOptions.FetchBatchMax), "must be at least 1");
-        Check(_options.SoftStopTimeout is null || _options.SoftStopTimeout >= TimeSpan.Zero, nameof(KopiClientOptions.SoftStopTimeout), "must not be negative");
-        Check(_options.HardStopGrace >= TimeSpan.Zero, nameof(KopiClientOptions.HardStopGrace), "must not be negative");
-        Check(!string.IsNullOrWhiteSpace(ClientId), nameof(KopiClientOptions.ClientId), "must not be empty");
-
+        var workers = _options.Workers!;
         var listener = _options.NotificationMode == NotificationMode.PollOnly ? null : _driver.CreateListener();
         if (_options.NotificationMode == NotificationMode.ListenNotify && listener is null)
         {
@@ -236,14 +277,6 @@ public sealed partial class KopiClient
                 loggers.CreateLogger<Producer>()))
             .ToArray();
         return new Running(producers, completer, notifier, loggers.CreateLogger<KopiClient>());
-
-        static void Check(bool valid, string option, string rule)
-        {
-            if (!valid)
-            {
-                throw new KopiQueueConfigurationException($"KopiClientOptions.{option} {rule}.");
-            }
-        }
     }
 
     [LoggerMessage(EventId = 1000, Level = LogLevel.Information, Message = "Client {ClientId} started working queues {Queues} (notifications: {Listening})")]
