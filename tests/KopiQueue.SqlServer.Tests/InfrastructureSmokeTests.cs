@@ -58,18 +58,27 @@ public sealed class InfrastructureSmokeTests(SqlServerFixture db) : IClassFixtur
             await setup.ExecuteNonQueryAsync(Ct);
         }
 
-        // Non-occupied duplicates and NULL keys are allowed; then a second occupied row with the same key is rejected.
-        await using (var ok = new SqlCommand(
-            """
-            INSERT INTO dbo.smoke_slot (state, k) VALUES
-              ('available', 0x01), ('completed', 0x01), ('completed', 0x01), ('available', NULL), ('available', NULL);
-            """, conn))
+        // Tests in a class share one database and run in any order: leave it empty for the freshness check.
+        try
         {
-            Assert.Equal(5, await ok.ExecuteNonQueryAsync(Ct));
-        }
+            // Non-occupied duplicates and NULL keys are allowed; then a second occupied row with the same key is rejected.
+            await using (var ok = new SqlCommand(
+                """
+                INSERT INTO dbo.smoke_slot (state, k) VALUES
+                  ('available', 0x01), ('completed', 0x01), ('completed', 0x01), ('available', NULL), ('available', NULL);
+                """, conn))
+            {
+                Assert.Equal(5, await ok.ExecuteNonQueryAsync(Ct));
+            }
 
-        await using var duplicate = new SqlCommand("INSERT INTO dbo.smoke_slot (state, k) VALUES ('available', 0x01)", conn);
-        var ex = await Assert.ThrowsAsync<SqlException>(() => duplicate.ExecuteNonQueryAsync(Ct));
-        Assert.Equal(2601, ex.Number);
+            await using var duplicate = new SqlCommand("INSERT INTO dbo.smoke_slot (state, k) VALUES ('available', 0x01)", conn);
+            var ex = await Assert.ThrowsAsync<SqlException>(() => duplicate.ExecuteNonQueryAsync(Ct));
+            Assert.Equal(2601, ex.Number);
+        }
+        finally
+        {
+            await using var drop = new SqlCommand("DROP TABLE IF EXISTS dbo.smoke_slot", conn);
+            await drop.ExecuteNonQueryAsync(CancellationToken.None);
+        }
     }
 }
