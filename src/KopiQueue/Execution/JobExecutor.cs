@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using KopiQueue.Drivers;
 using KopiQueue.Serialization;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,8 +24,8 @@ internal sealed class JobExecutorOptions
     /// </summary>
     public TimeSpan SchedulerInterval { get; init; } = TimeSpan.FromSeconds(5);
 
-    /// <summary>Picks retry jitter: returns a number in [0, 1). Default: <see cref="Random.Shared"/>.</summary>
-    public Func<double>? Random { get; init; }
+    /// <summary>When a failed job runs again, unless its worker says (FR-ERR-02). Default: <see cref="DefaultRetryPolicy"/>.</summary>
+    public IRetryPolicy? RetryPolicy { get; init; }
 }
 
 /// <summary>
@@ -33,10 +36,11 @@ internal sealed class JobExecutorOptions
 /// <para>
 /// Each job gets a new DI scope, in which its worker is resolved (or created) after its args are deserialised. The
 /// worker runs with a token that its timeout and the client's hard stop cancel. Returning means the job completed.
-/// A cancellation caused by the client stopping interrupts the attempt: the job is made available again and the
-/// attempt does not count. Any other exception, a timeout included, is an error: recorded in the job's <c>errors</c>
-/// with its message and stack trace, and retried after the worker's <c>NextRetry</c> or the default backoff until the
-/// job's attempts run out, when it is discarded. Nothing a worker does escapes to the host. These rules are River's
+/// <see cref="JobControl.Cancel"/> cancels it for good and <see cref="JobControl.Snooze"/> reschedules it without using
+/// an attempt. A cancellation caused by the client stopping interrupts the attempt: the job is made available again and
+/// the attempt does not count. Any other exception, a timeout included, is an error: recorded in the job's
+/// <c>errors</c> with its message and stack trace, and retried after the worker's <c>NextRetry</c> or the retry policy
+/// until the job's attempts run out, when it is discarded. Nothing a worker does escapes to the host. These rules are River's
 /// (v0.51.2 <c>jobexecutor.reportError</c>), so jobs move the same way whichever library works them.
 /// </para>
 /// <para>
@@ -54,7 +58,7 @@ internal sealed partial class JobExecutor
     private readonly IServiceScopeFactory? _scopes;
     private readonly JobExecutorOptions _options;
     private readonly TimeProvider _time;
-    private readonly Func<double> _random;
+    private readonly IRetryPolicy _retryPolicy;
     private readonly ILogger _logger;
 
     public JobExecutor(
@@ -81,7 +85,7 @@ internal sealed partial class JobExecutor
         _services = services ?? EmptyServiceProvider.Instance;
         _scopes = _services.GetService<IServiceScopeFactory>();
         _time = timeProvider ?? TimeProvider.System;
-        _random = _options.Random ?? System.Random.Shared.NextDouble;
+        _retryPolicy = _options.RetryPolicy ?? DefaultRetryPolicy.Instance;
         _logger = (ILogger?)logger ?? NullLogger.Instance;
     }
 
@@ -90,6 +94,8 @@ internal sealed partial class JobExecutor
         Completed,
         Interrupted,
         Failed,
+        Cancelled,
+        Snoozed,
     }
 
     /// <summary>
@@ -177,6 +183,15 @@ internal sealed partial class JobExecutor
             await unit.WorkAsync(linked.Token).ConfigureAwait(false);
             return Outcome.Completed;
         }
+        catch (Exception e) when (Find<JobCancelException>(e) is { } cancel)
+        {
+            LogCancelled(job.Id, job.Kind, cancel.Reason);
+            return new Outcome(OutcomeKind.Cancelled, new AttemptError(startedAt, job.Attempt, cancel.Reason, null));
+        }
+        catch (Exception e) when (Find<JobSnoozeException>(e) is { } snooze)
+        {
+            return new Outcome(OutcomeKind.Snoozed, RetryDelay: snooze.Delay);
+        }
         catch (OperationCanceledException) when (hardStop.IsCancellationRequested)
         {
             LogInterrupted(job.Id, job.Kind);
@@ -226,18 +241,113 @@ internal sealed partial class JobExecutor
             return new JobCompletion(job, JobState.Available, null, now, null, duration, Attempt: Math.Max(job.Attempt - 1, 0));
         }
 
+        if (outcome.Kind == OutcomeKind.Snoozed)
+        {
+            // River: JobSetStateSnoozed(Available): the attempt does not count, and metadata.snoozes counts the snoozes.
+            var delay = outcome.RetryDelay!.Value;
+            var snoozes = NextSnoozeCount(job.MetadataJson);
+            LogSnoozed(job.Id, job.Kind, delay, snoozes);
+            return new JobCompletion(
+                job,
+                delay <= _options.SchedulerInterval ? JobState.Available : JobState.Scheduled,
+                null,
+                now + delay,
+                null,
+                duration,
+                Attempt: Math.Max(job.Attempt - 1, 0),
+                MetadataUpdates: new JsonObject { ["snoozes"] = snoozes }.ToJsonString());
+        }
+
         var error = outcome.Error!;
+        if (outcome.Kind == OutcomeKind.Cancelled)
+        {
+            return new JobCompletion(job, JobState.Cancelled, now, null, error, duration);
+        }
+
         if (job.Attempt >= job.MaxAttempts)
         {
             LogDiscarded(job.Id, job.Kind, job.Attempt, error.Error);
             return new JobCompletion(job, JobState.Discarded, now, null, error, duration);
         }
 
-        // A worker delay that lands in the past (it was negative) falls back to the default, as in River.
-        var delay = outcome.RetryDelay is { } d && d >= TimeSpan.Zero ? d : RetryBackoff.Delay(job.Errors.Count + 1, _random());
-        LogRetrying(job.Id, job.Kind, job.Attempt, delay, error.Error);
-        var state = delay <= _options.SchedulerInterval ? JobState.Available : JobState.Retryable;
-        return new JobCompletion(job, state, null, now + delay, error, duration);
+        var retryAt = NextRetry(job, outcome.RetryDelay, now);
+        LogRetrying(job.Id, job.Kind, job.Attempt, retryAt - now, error.Error);
+        var state = retryAt - now <= _options.SchedulerInterval ? JobState.Available : JobState.Retryable;
+        return new JobCompletion(job, state, null, retryAt, error, duration);
+    }
+
+    /// <summary>
+    /// The worker's delay, else the retry policy's time; a time in the past (a negative delay, or a policy that got it
+    /// wrong) falls back to <see cref="DefaultRetryPolicy"/>, as in River.
+    /// </summary>
+    private DateTimeOffset NextRetry(JobRow job, TimeSpan? workerDelay, DateTimeOffset now)
+    {
+        DateTimeOffset at;
+        try
+        {
+            at = workerDelay is { } delay ? now + delay : _retryPolicy.NextRetry(job, now);
+        }
+#pragma warning disable CA1031 // A retry policy that throws must not lose the outcome.
+        catch (Exception e)
+#pragma warning restore CA1031
+        {
+            LogRetryPolicyFailed(e, job.Id, job.Kind);
+            at = DateTimeOffset.MinValue;
+        }
+
+        if (at < now)
+        {
+            LogRetryInThePast(job.Id, job.Kind);
+            at = DefaultRetryPolicy.Instance.NextRetry(job, now);
+        }
+
+        return at;
+    }
+
+    /// <summary>The job's <c>snoozes</c> metadata plus one, read leniently as River does; 1 when absent.</summary>
+    internal static long NextSnoozeCount(string metadataJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(metadataJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("snoozes", out var snoozes))
+            {
+                return 1;
+            }
+
+            return snoozes.ValueKind switch
+            {
+                JsonValueKind.Number when snoozes.TryGetInt64(out var n) => n + 1,
+                JsonValueKind.Number => (long)snoozes.GetDouble() + 1,
+                JsonValueKind.String when long.TryParse(snoozes.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) => n + 1,
+                _ => 1,
+            };
+        }
+        catch (JsonException)
+        {
+            return 1;
+        }
+    }
+
+    /// <summary>Finds a <typeparamref name="T"/> in <paramref name="exception"/> or the exceptions it wraps.</summary>
+    private static T? Find<T>(Exception exception)
+        where T : Exception
+    {
+        for (var e = exception; e is not null; e = e.InnerException)
+        {
+            if (e is T found)
+            {
+                return found;
+            }
+
+            if (e is AggregateException { InnerExceptions.Count: > 1 } aggregate)
+            {
+                return aggregate.InnerExceptions.Select(Find<T>).FirstOrDefault(f => f is not null);
+            }
+        }
+
+        return null;
     }
 
     [LoggerMessage(EventId = 2100, Level = LogLevel.Warning, Message = "Job {JobId} has kind {Kind}, which has no worker on this client; it will be retried")]
@@ -257,6 +367,18 @@ internal sealed partial class JobExecutor
 
     [LoggerMessage(EventId = 2105, Level = LogLevel.Information, Message = "Job {JobId} ({Kind}) was interrupted by the client stopping; it will run again")]
     private partial void LogInterrupted(long jobId, string kind);
+
+    [LoggerMessage(EventId = 2106, Level = LogLevel.Information, Message = "Job {JobId} ({Kind}) was cancelled by its worker: {Reason}")]
+    private partial void LogCancelled(long jobId, string kind, string reason);
+
+    [LoggerMessage(EventId = 2107, Level = LogLevel.Debug, Message = "Job {JobId} ({Kind}) was snoozed for {Delay} (snooze {Snoozes})")]
+    private partial void LogSnoozed(long jobId, string kind, TimeSpan delay, long snoozes);
+
+    [LoggerMessage(EventId = 2108, Level = LogLevel.Warning, Message = "The retry policy failed for job {JobId} ({Kind}); using the default policy")]
+    private partial void LogRetryPolicyFailed(Exception exception, long jobId, string kind);
+
+    [LoggerMessage(EventId = 2109, Level = LogLevel.Warning, Message = "The next retry of job {JobId} ({Kind}) was in the past; using the default policy")]
+    private partial void LogRetryInThePast(long jobId, string kind);
 
     /// <summary>How an attempt ended, before classification.</summary>
     private sealed record Outcome(OutcomeKind Kind, AttemptError? Error = null, TimeSpan? RetryDelay = null)
