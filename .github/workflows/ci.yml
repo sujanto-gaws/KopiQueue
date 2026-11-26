@@ -57,6 +57,8 @@ jobs:
       KOPI_TEST_PG: Host=localhost;Port=5432;Username=postgres;Password=kopi;Database=postgres
       # River's CLI at the pinned version, run as a black box: the main line must leave the same catalog (task 1.2).
       KOPI_RIVER_CLI: ${{ github.workspace }}/.river/river
+      # A River client driven through its public API, for the interop suite (task 2.10, tests/compat/go).
+      KOPI_RIVER_COMPAT: ${{ github.workspace }}/.river/kopi-river-compat
       KOPI_REQUIRE_RIVER_CLI: "1"
       RIVER_VERSION: v0.51.2
     steps:
@@ -73,6 +75,9 @@ jobs:
           cache: false
       - name: install River CLI
         run: GOBIN="$GITHUB_WORKSPACE/.river" go install "github.com/riverqueue/river/cmd/river@$RIVER_VERSION"
+      - name: build River interop harness
+        working-directory: tests/compat/go
+        run: go build -o "$KOPI_RIVER_COMPAT" .
       - run: dotnet build tests/KopiQueue.Npgsql.Tests -c $CONFIGURATION
       - run: >-
           dotnet test --project tests/KopiQueue.Npgsql.Tests -c $CONFIGURATION --no-build
