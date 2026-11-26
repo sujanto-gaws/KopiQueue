@@ -140,8 +140,16 @@ public sealed class InsertResult<TArgs> : InsertResult
 /// </code>
 /// </example>
 /// <remarks>
+/// <para>
 /// Thread-safe. Args are serialised with <c>System.Text.Json</c> and its web defaults (camel-case names); configurable
 /// serialisation, including <c>JsonSerializerContext</c> for AOT, arrives with plan task 1.10.
+/// </para>
+/// <para>
+/// Inserting needs no queues, workers or start step (FR-INS-08), so the client suits insert-only processes such as web
+/// front-ends. It holds no connection of its own and runs no background work: each insert borrows a pooled connection
+/// from the driver and returns it. One client can be shared by any number of concurrent callers, and creating one per
+/// request is cheap; there is nothing to dispose.
+/// </para>
 /// </remarks>
 public sealed class KopiClient : IKopiClient
 {
