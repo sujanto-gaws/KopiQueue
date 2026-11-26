@@ -32,6 +32,9 @@ internal sealed class NpgsqlStatements
         JobInsertFast = Load("job_insert_fast.sql").Trim();
         JobGetAvailable = Load("job_get_available.sql");
         JobSetStateIfRunningMany = Load("job_set_state_if_running_many.sql");
+        LeaderAttemptElect = Load("leader_attempt_elect.sql");
+        LeaderAttemptReelect = Load("leader_attempt_reelect.sql");
+        LeaderResign = Load("leader_resign.sql");
     }
 
     /// <summary>The configured schema, unquoted, or <c>null</c> for the connection's current schema.</summary>
@@ -46,6 +49,12 @@ internal sealed class NpgsqlStatements
     public string JobGetAvailable { get; }
 
     public string JobSetStateIfRunningMany { get; }
+
+    public string LeaderAttemptElect { get; }
+
+    public string LeaderAttemptReelect { get; }
+
+    public string LeaderResign { get; }
 
     /// <summary>The binary <c>COPY</c> command of the fast insert path. Its columns match <see cref="NpgsqlExecutor.JobInsertFastAsync"/>.</summary>
     public string JobInsertFast { get; }
@@ -288,6 +297,68 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
             ],
             then: null,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task<bool> LeaderAttemptElectAsync(LeaderElectParams parameters, CancellationToken cancellationToken) =>
+        AnyRowAsync(statements.LeaderAttemptElect, LeaderParameters(parameters), cancellationToken);
+
+    public Task<bool> LeaderAttemptReelectAsync(LeaderElectParams parameters, CancellationToken cancellationToken) =>
+        AnyRowAsync(statements.LeaderAttemptReelect, LeaderParameters(parameters), cancellationToken);
+
+    public Task<bool> LeaderResignAsync(string leaderId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(leaderId);
+        return AnyRowAsync(
+            statements.LeaderResign,
+            [
+                new() { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)statements.Schema ?? DBNull.Value },
+                new() { NpgsqlDbType = NpgsqlDbType.Text, Value = leaderId },
+            ],
+            cancellationToken);
+    }
+
+    private static NpgsqlParameter[] LeaderParameters(LeaderElectParams parameters)
+    {
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentException.ThrowIfNullOrEmpty(parameters.LeaderId, nameof(parameters));
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(parameters.Ttl, TimeSpan.Zero, nameof(parameters));
+        return
+        [
+            new() { NpgsqlDbType = NpgsqlDbType.Text, Value = parameters.LeaderId },
+            new() { NpgsqlDbType = NpgsqlDbType.Interval, Value = parameters.Ttl },
+        ];
+    }
+
+    /// <summary>Runs <paramref name="sql"/> and reports whether it returned a row.</summary>
+    private async Task<bool> AnyRowAsync(string sql, NpgsqlParameter[] parameters, CancellationToken cancellationToken)
+    {
+        var connection = transaction?.Connection;
+        var ownConnection = connection is null;
+        if (ownConnection)
+        {
+            connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            var command = new NpgsqlCommand(sql, connection, transaction);
+            await using (command.ConfigureAwait(false))
+            {
+                command.Parameters.AddRange(parameters);
+                var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                await using (reader.ConfigureAwait(false))
+                {
+                    return await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+        finally
+        {
+            if (ownConnection)
+            {
+                await connection!.DisposeAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>

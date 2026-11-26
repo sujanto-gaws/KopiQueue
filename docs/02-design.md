@@ -151,7 +151,7 @@ It stops them in reverse order. The completer is stopped last among the executio
 
 - **Configuring:** `KopiClientOptions` gains `Queues` (name → `QueueOptions { MaxWorkers }`), `Workers`, `Services` (the DI root for per-job scopes), `LoggerFactory`, `ClientId`, `JobTimeout`, `RetryPolicy`, `FetchPollInterval`, `FetchCooldown`, `FetchBatchMax`, `NotificationMode`, `CompleterMode`, `SoftStopTimeout` and `HardStopGrace`, with the defaults of §7. Hosting (task 2.8) binds these from configuration.
 - **`StartAsync`** checks the configuration before it builds anything (FR-DEF-06): queues and workers go together; each queue name follows the insert rules and has 1–10,000 workers; `WorkerRegistry.ValidateForWork` passes; the times are in range; `ListenNotify` needs a driver that can listen. Any failure throws `KopiQueueConfigurationException` and nothing starts. It then starts the completer, the notifier (unless `PollOnly`, or the driver cannot listen) and one producer per queue. A client with no queues and no workers is insert-only: `StartAsync` does nothing and the client still opens no connection (FR-INS-08). A client starts once.
-- **`StopAsync(ct)`** follows §5.9 and is idempotent; concurrent callers share one stop. Steps 2–3: the soft stop ends when `ct` fires or `SoftStopTimeout` passes; the hard stop cancels the job tokens, the executor stores interrupted jobs as `available` without using an attempt, and the producers wait at most `HardStopGrace`. Step 4: the completer gets another `HardStopGrace` to write. Step 5 (resigning leadership) arrives with the elector in M3. Inserting keeps working after a stop.
+- **`StopAsync(ct)`** follows §5.9 and is idempotent; concurrent callers share one stop. Steps 2–3: the soft stop ends when `ct` fires or `SoftStopTimeout` passes; the hard stop cancels the job tokens, the executor stores interrupted jobs as `available` without using an attempt, and the producers wait at most `HardStopGrace`. Step 4: the completer gets another `HardStopGrace` to write. Step 5: the elector steps down and resigns within another `HardStopGrace` (task 3.1, §5.5). Inserting keeps working after a stop.
 - **Not yet:** the scheduler (task 3.3) moves `scheduled` and `retryable` jobs to `available` once due; until it lands, only jobs inserted `available`, retries due within 5 s, and interrupted jobs run again.
 
 ## 4. Data model
@@ -328,7 +328,7 @@ Because `pg_notify` is called inside the caller's transaction, Postgres delivers
 Observed with a running River v0.51.2 client (plan task 2.10, `RiverInteropTests`, black box):
 
 - **Inserts:** an insert-only River client does notify on `"<schema>.river_insert"`, but only **once per queue for a burst**. Three `Insert` calls in quick succession gave one notification; a later insert and an insert into another queue each gave one. One `InsertMany` is one transaction and one notification. So a KopiQueue producer woken by River's first notification can miss the rest of a River burst until its next poll (`FetchPollInterval`, 1 s by default). Open question for M3: refetch once shortly after a notification-driven fetch.
-- **Leadership:** a running River client holds the `river_leader` row while it leads and deletes it when it stops, sending `{"leader_id": "...", "action": "resigned"}` on `"<schema>.river_leadership"`. Nothing is sent when a client is elected. The elector (task 3.1) must match this.
+- **Leadership:** a running River client holds the `river_leader` row while it leads and deletes it when it stops, sending `{"leader_id": "...", "action": "resigned"}` on `"<schema>.river_leadership"`. Nothing is sent when a client is elected. The elector (task 3.1) matches this, and the two interoperate: neither takes the other's unexpired lease, a KopiQueue follower takes over as soon as River resigns, and a River follower took over about 30 ms after KopiQueue resigned, so River reacts to KopiQueue's announcement.
 - **Control:** nothing was sent on `"<schema>.river_control"` during a client's life without admin actions.
 
 **Behind PgBouncer (plan task 2.11, NFR-COMP-04), checked in CI by `NpgsqlPgBouncerTests`:**
@@ -570,23 +570,34 @@ The worker's `NextRetry(job)` override wins over the client policy. It returns a
 ### 5.5 Leader election
 
 ```sql
--- Try to win (every ElectInterval, default 5 s, when not leader)
-INSERT INTO river_leader (leader_id, elected_at, expires_at)
+-- Try to win (every ElectInterval, default 5 s, when not leader). A row back ⇒ won.
+INSERT INTO river_leader AS l (leader_id, elected_at, expires_at)
 VALUES (@id, now(), now() + @ttl)
 ON CONFLICT (name) DO UPDATE
-  SET leader_id = EXCLUDED.leader_id, elected_at = EXCLUDED.elected_at, expires_at = EXCLUDED.expires_at
-  WHERE river_leader.expires_at < now()
-RETURNING leader_id = @id AS won;
+  SET leader_id = EXCLUDED.leader_id,
+      elected_at = CASE WHEN l.leader_id = EXCLUDED.leader_id THEN l.elected_at ELSE EXCLUDED.elected_at END,
+      expires_at = EXCLUDED.expires_at
+  WHERE l.expires_at < now() OR l.leader_id = EXCLUDED.leader_id
+RETURNING l.leader_id;
 
--- Renew (every ElectInterval when leader). 0 rows ⇒ lost leadership
-UPDATE river_leader SET expires_at = now() + @ttl WHERE leader_id = @id;
+-- Renew (every ElectInterval when leader). No row ⇒ lost leadership
+UPDATE river_leader SET expires_at = now() + @ttl WHERE leader_id = @id RETURNING leader_id;
 
--- Resign (graceful stop)
-DELETE FROM river_leader WHERE leader_id = @id;  then NOTIFY river_leadership
+-- Resign (graceful stop): delete and announce in one statement, only if this client held the lease
+WITH resigned AS (DELETE FROM river_leader WHERE leader_id = @id RETURNING leader_id)
+SELECT r.leader_id, pg_notify('<schema>.river_leadership', json_build_object('leader_id', r.leader_id, 'action', 'resigned')::text)
+FROM resigned AS r;   -- channel over 63 bytes: skipped, as for inserts
 ```
 
-- The TTL (default 15 s) is larger than ElectInterval (5 s) plus jitter, so one slow renewal does not cost leadership.
-- If a renewal fails, the leader stops maintenance services **before** its lease expires (a safety margin of TTL/3). Maintenance must also be safe when two leaders briefly overlap: every maintenance statement is idempotent and uses `SKIP LOCKED`.
+Implemented in plan task 3.1 (`Execution/Elector`, driver operations `LeaderAttemptElectAsync`, `LeaderAttemptReelectAsync`, `LeaderResignAsync`; SQL in `KopiQueue.Npgsql/Sql/leader_*.sql`):
+
+- A holder that tries to win again keeps the lease, so the attempt is safe to repeat.
+- The TTL (default 15 s, at least 2 × ElectInterval) is larger than ElectInterval (5 s) plus jitter (±10%), so one slow renewal does not cost leadership.
+- **Safety margin:** the leader steps down at TTL − TTL/3 after the start of its last successful election or renewal, measured on its own clock before the statement was sent, unless a renewal succeeds first. Each renewal is cancelled at that time, so a hung connection cannot delay it. Losing the lease to another client (renewal returns no row) steps down at once. Stepping down awaits the leadership callback, which stops the maintenance services (task 3.2) **before** the lease can pass to another client. Maintenance must also be safe when two leaders briefly overlap: every maintenance statement is idempotent and uses `SKIP LOCKED`.
+- **Waking:** a follower tries at once when another client's `resigned` notification arrives, and after the notifier reconnects. Its own resignation, and other messages, are ignored. Nothing is announced on election, as River (§4.3).
+- **Stop:** the leader steps down, then resigns, within `HardStopGrace` (§5.9 step 5). Disposing without stopping, like a crash, leaves the lease to expire.
+- Only a client that works jobs elects; an insert-only client never touches the lease (§6.2).
+- `ClientId` is at most 127 characters, the limit of `river_leader.leader_id`; the default ID shortens the machine name to fit.
 
 ### 5.6 Unique jobs
 
@@ -795,7 +806,7 @@ The commit interceptor described next needs the LocalWaker, so it arrives with t
 
 | Option | Default | Notes |
 |--------|---------|-------|
-| `ClientId` | `{machine}-{pid}-{random}` | Recorded in `attempted_by` and in the leader lease |
+| `ClientId` | `{machine}-{pid}-{random}` | Recorded in `attempted_by` and in the leader lease; at most 127 characters |
 | `Schema` | `null` (search_path) | FR-MIG-05 |
 | `TablePrefix` | `river_` (PostgreSQL) / `kopi_` (SQL Server) | OQ-1 |
 | `Queues[name].MaxWorkers` | required | 1..10,000 |
@@ -806,7 +817,7 @@ The commit interceptor described next needs the LocalWaker, so it arrives with t
 | `MaxAttempts` | 25 | |
 | `RescueStuckJobsAfter` | JobTimeout + 1 h | |
 | `CompletedJobRetention` / `Cancelled` / `Discarded` | 24 h / 24 h / 7 d | `null` = never delete |
-| `ElectInterval` / `LeaderTtl` | 5 s / 15 s | |
+| `ElectInterval` / `LeaderTtl` | 5 s / 15 s | `LeaderTtl` at least 2 × `ElectInterval` (task 3.1, §5.5) |
 | `SchedulerInterval` | 5 s | |
 | `NotificationMode` | `Auto` | `Auto` \| `ListenNotify` \| `PollOnly`. SQL Server is always `PollOnly` (plus LocalWaker) |
 | `NotifierConnectionString` | `null` (derived from the data source) | PostgreSQL, on `NpgsqlDriverOptions` (task 2.2): a direct connection for LISTEN when the data source goes through PgBouncer in transaction mode or a proxy. KQ always forces `Pooling=false` on it |
@@ -1037,6 +1048,7 @@ SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'de
 - **M2 integration tests (task 2.9)**, through working clients on PostgreSQL (`NpgsqlClientIntegrationTests`, `NpgsqlClientLifecycleTests`, `NpgsqlExecutionTests`, `NpgsqlHostingTests`): every outcome stored as River stores it; a timeout fails the attempt with its error; a job is retried until it succeeds (each error recorded) or discarded after its last attempt; a short snooze runs it again without using an attempt; three clients on one queue run 300 jobs once each within their `MaxWorkers`; a hard stop under load leaves no job `running` and loses none (finished jobs `completed`, interrupted and unstarted ones `available` at attempt 0); during a rolling deploy a job of a kind the old client lacks is retried until the new client takes it (DQ-3); LISTEN and poll-only pick-up; soft and hard stop. Tests that depend on timing insert only after every client runs, and gate jobs instead of racing them, so they hold under the full suite's load.
 - **River interop (task 2.10, NFR-COMP-05)**, `Compat/RiverInteropTests` with the Go harness `tests/compat/go` (`kopi-river-compat`), a River v0.51.2 client driven only through its public API. CI builds it and requires it (`KOPI_RIVER_COMPAT`, `KOPI_REQUIRE_RIVER_CLI=1`); locally the tests skip without it. River works KopiQueue-inserted jobs and KopiQueue works River-inserted ones, each woken by the other's notification. Both libraries store **the same row** for each way an attempt ends (completed; failed and retried; failed on the last attempt and discarded; snoozed; cancelled), compared field by field except the free-form trace. The one difference, River storing a cancelled job's error as `JobCancelError: <reason>`, is recorded in the test and left for the clean-room rewrite of the executor. The insert-notification throttle and the leadership announcements of §4.3 are asserted too.
 - **PgBouncer (task 2.11, NFR-COMP-04)**, `NpgsqlPgBouncerTests`: CI installs PgBouncer and starts a transaction-mode and a session-mode instance in front of each PostgreSQL version (`tests/pgbouncer/start.sh`; `KOPI_TEST_PGBOUNCER_TX`, `KOPI_TEST_PGBOUNCER_SESSION`, required there with `KOPI_REQUIRE_PGBOUNCER=1`; skipped locally without them). The cases are the three bullets of §4.3's PgBouncer paragraph.
+- **Leader election (task 3.1, FR-MNT-01):** `ElectorTests` (fake lease and clock: winning, renewing, stepping down before the lease can pass on, resigning, waking on another client's resignation), conformance cases for the three lease operations, `NpgsqlLeadershipTests` (several clients, handover through the resignation in both notification modes, takeover after a crashed leader's lease expires, insert-only clients never compete) and two River interop cases (neither library takes the other's lease; each takes over when the other resigns).
 - SQL Server joins when its driver lands (M3). PostgreSQL-specific behaviour (River catalog equality, `pg_notify`, `COPY` details, constraint names) stays in `KopiQueue.Npgsql.Tests`.
 
 ## 12. Decision log (ADRs)

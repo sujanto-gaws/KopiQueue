@@ -60,5 +60,7 @@ internal static class KopiQueueClientFactory
         CompleterMode = options.CompleterMode,
         SoftStopTimeout = options.SoftStopTimeout,
         HardStopGrace = options.HardStopGrace,
+        ElectInterval = options.ElectInterval,
+        LeaderTtl = options.LeaderTtl,
     };
 }
