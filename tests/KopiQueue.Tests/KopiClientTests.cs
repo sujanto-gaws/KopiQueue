@@ -1,6 +1,7 @@
 using System.Data;
 using System.Data.Common;
 using KopiQueue.Drivers;
+using KopiQueue.Serialization;
 using Microsoft.Extensions.Time.Testing;
 
 namespace KopiQueue.Tests;
@@ -10,13 +11,15 @@ public sealed class KopiClientTests
 {
     private static readonly DateTimeOffset Now = new(2026, 11, 26, 12, 0, 0, TimeSpan.Zero);
 
+    private static readonly SystemTextJsonArgsSerializer Json = new(WebJsonContext.Default);
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task Insert_serialises_the_args_with_the_kind_and_defaults()
     {
         var driver = new RecordingDriver();
-        var client = new KopiClient(driver, new FakeTimeProvider(Now));
+        var client = new KopiClient(driver, new KopiClientOptions { TimeProvider = new FakeTimeProvider(Now), ArgsSerializer = Json });
         var args = new SendEmailArgs("a@example.com", "welcome", [1, 2]);
 
         var result = await client.InsertAsync(args, cancellationToken: Ct);
@@ -34,7 +37,7 @@ public sealed class KopiClientTests
     public async Task Insert_in_a_transaction_uses_the_transaction_executor()
     {
         var driver = new RecordingDriver();
-        var client = new KopiClient(driver, new FakeTimeProvider(Now));
+        var client = new KopiClient(driver, new KopiClientOptions { TimeProvider = new FakeTimeProvider(Now), ArgsSerializer = Json });
         var tx = new FakeTransaction();
 
         await client.InsertAsync(new SendEmailArgs("b@example.com", "t", []), tx, new InsertOptions { Queue = "email" }, Ct);
@@ -48,7 +51,7 @@ public sealed class KopiClientTests
     {
         var driver = new RecordingDriver();
         var time = new FakeTimeProvider(Now);
-        var client = new KopiClient(driver, time);
+        var client = new KopiClient(driver, new KopiClientOptions { TimeProvider = time, ArgsSerializer = Json });
         var at = Now.AddMinutes(10);
 
         await client.InsertAsync(new SendEmailArgs("c", "t", []), new InsertOptions { ScheduledAt = at }, Ct);
@@ -63,7 +66,7 @@ public sealed class KopiClientTests
     public async Task Invalid_input_never_reaches_the_driver()
     {
         var driver = new RecordingDriver();
-        var client = new KopiClient(driver);
+        var client = new KopiClient(driver, new KopiClientOptions { ArgsSerializer = Json });
 
         await Assert.ThrowsAsync<ArgumentException>(() => client.InsertAsync(new SendEmailArgs("d", "t", []), new InsertOptions { Priority = 0 }, Ct));
         await Assert.ThrowsAsync<KopiQueueConfigurationException>(() => client.InsertAsync(new NoKindArgs(), cancellationToken: Ct));
@@ -78,7 +81,7 @@ public sealed class KopiClientTests
     public async Task The_driver_result_is_returned_unchanged()
     {
         var driver = new RecordingDriver { SkipAsDuplicate = true };
-        var client = new KopiClient(driver);
+        var client = new KopiClient(driver, new KopiClientOptions { ArgsSerializer = Json });
 
         var result = await client.InsertAsync(new SendEmailArgs("e", "t", []), cancellationToken: Ct);
 
@@ -89,7 +92,7 @@ public sealed class KopiClientTests
     [Fact]
     public async Task A_driver_returning_the_wrong_row_count_is_an_error()
     {
-        var client = new KopiClient(new RecordingDriver { ReturnNothing = true });
+        var client = new KopiClient(new RecordingDriver { ReturnNothing = true }, new KopiClientOptions { ArgsSerializer = Json });
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => client.InsertAsync(new SendEmailArgs("f", "t", []), cancellationToken: Ct));
     }
@@ -98,7 +101,7 @@ public sealed class KopiClientTests
     public async Task Insert_many_reads_each_kind_from_the_runtime_type_and_keeps_the_order()
     {
         var driver = new RecordingDriver();
-        var client = new KopiClient(driver, new FakeTimeProvider(Now));
+        var client = new KopiClient(driver, new KopiClientOptions { TimeProvider = new FakeTimeProvider(Now), ArgsSerializer = Json });
         IJobArgs[] args = [new SendEmailArgs("a", "t", []), new ResizeArgs(7), new SendEmailArgs("b", "t", [3])];
 
         var results = await client.InsertManyAsync(
@@ -116,7 +119,7 @@ public sealed class KopiClientTests
     public async Task Insert_many_validates_every_job_before_touching_the_database()
     {
         var driver = new RecordingDriver();
-        var client = new KopiClient(driver);
+        var client = new KopiClient(driver, new KopiClientOptions { ArgsSerializer = Json });
 
         var ex = await Assert.ThrowsAsync<ArgumentException>(() => client.InsertManyAsync(
             [new(new ResizeArgs(1)), new(new ResizeArgs(2), new InsertOptions { Tags = ["no"] })], cancellationToken: Ct));
@@ -135,7 +138,7 @@ public sealed class KopiClientTests
     public async Task An_empty_batch_does_not_touch_the_database()
     {
         var driver = new RecordingDriver();
-        var client = new KopiClient(driver);
+        var client = new KopiClient(driver, new KopiClientOptions { ArgsSerializer = Json });
 
         Assert.Empty(await client.InsertManyAsync([], cancellationToken: Ct));
         Assert.Equal(0, await client.InsertManyFastAsync(Enumerable.Empty<InsertRequest>(), cancellationToken: Ct));
@@ -146,7 +149,7 @@ public sealed class KopiClientTests
     public async Task Insert_many_fast_returns_the_drivers_count_and_uses_the_transaction()
     {
         var driver = new RecordingDriver();
-        var client = new KopiClient(driver, new FakeTimeProvider(Now));
+        var client = new KopiClient(driver, new KopiClientOptions { TimeProvider = new FakeTimeProvider(Now), ArgsSerializer = Json });
         var tx = new FakeTransaction();
 
         var count = await client.InsertManyFastAsync(Enumerable.Range(1, 3).Select(i => new InsertRequest(new ResizeArgs(i))), tx, Ct);
@@ -160,16 +163,62 @@ public sealed class KopiClientTests
     [Fact]
     public async Task Insert_many_rejects_a_driver_returning_the_wrong_row_count()
     {
-        var client = new KopiClient(new RecordingDriver { ReturnNothing = true });
+        var client = new KopiClient(new RecordingDriver { ReturnNothing = true }, new KopiClientOptions { ArgsSerializer = Json });
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => client.InsertManyAsync([new(new ResizeArgs(1))], cancellationToken: Ct));
     }
 
-    [JobKind("send_email")]
-    private sealed record SendEmailArgs(string To, string TemplateId, int[] Ids) : IJobArgs;
+    [Fact]
+    public async Task The_configured_serialiser_is_used_for_every_insert()
+    {
+        var driver = new RecordingDriver();
+        var serializer = new CountingSerializer();
+        var client = new KopiClient(driver, new KopiClientOptions { ArgsSerializer = serializer });
 
-    [JobKind("resize_image")]
-    private sealed record ResizeArgs(int Width) : IJobArgs;
+        await client.InsertAsync(new ResizeArgs(1), cancellationToken: Ct);
+        await client.InsertManyAsync([new(new LargeResizeArgs(2, "x")), new(new ResizeArgs(3))], cancellationToken: Ct);
+        await client.InsertManyFastAsync([new(new ResizeArgs(4))], cancellationToken: Ct);
+
+        Assert.Equal([typeof(ResizeArgs), typeof(LargeResizeArgs), typeof(ResizeArgs), typeof(ResizeArgs)], serializer.Types);
+        Assert.All(driver.Inserts, i => Assert.Equal("{\"custom\":true}", i.ArgsJson));
+    }
+
+    [Fact]
+    public async Task Without_reflection_the_default_serialiser_fails_before_the_database()
+    {
+        var driver = new RecordingDriver();
+        var client = new KopiClient(driver);
+
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(() => client.InsertAsync(new ResizeArgs(1), cancellationToken: Ct));
+        await Assert.ThrowsAsync<NotSupportedException>(() => client.InsertManyAsync([new(new ResizeArgs(1))], cancellationToken: Ct));
+
+        Assert.Contains("JsonSerializerContext", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(0, driver.Calls);
+    }
+
+    [Fact]
+    public async Task A_type_missing_from_the_context_fails_before_the_database()
+    {
+        var driver = new RecordingDriver();
+        var client = new KopiClient(driver, new KopiClientOptions { ArgsSerializer = Json });
+
+        await Assert.ThrowsAsync<NotSupportedException>(() => client.InsertManyAsync([new(new ResizeArgs(1)), new(new UnlistedArgs(2))], cancellationToken: Ct));
+
+        Assert.Equal(0, driver.Calls);
+    }
+
+    private sealed class CountingSerializer : IJobArgsSerializer
+    {
+        public List<Type> Types { get; } = [];
+
+        public string Serialize(IJobArgs args, Type argsType)
+        {
+            Types.Add(argsType);
+            return "{\"custom\":true}";
+        }
+
+        public IJobArgs Deserialize(string json, Type argsType) => throw new NotSupportedException();
+    }
 
     private sealed record NoKindArgs : IJobArgs;
 

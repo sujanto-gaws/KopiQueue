@@ -3,6 +3,8 @@
   <!-- Unit tests for the core library: no database needed. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <!-- Run as trimmed and Native AOT apps do: no reflection-based JSON, so args need a JsonSerializerContext (NFR-COMP-06). -->
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
   </PropertyGroup>
 
   <ItemGroup>
