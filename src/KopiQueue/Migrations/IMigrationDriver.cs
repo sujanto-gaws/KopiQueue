@@ -16,6 +16,9 @@ internal interface IMigrationDriver
     Task<IMigrationSession> OpenSessionAsync(CancellationToken cancellationToken);
 }
 
+/// <summary>A version recorded in the migration table.</summary>
+internal sealed record AppliedVersion(int Version, DateTimeOffset AppliedAt);
+
 /// <summary>A connection that holds the migration lock and executes steps.</summary>
 internal interface IMigrationSession : IAsyncDisposable
 {
@@ -28,8 +31,8 @@ internal interface IMigrationSession : IAsyncDisposable
     /// <summary>Releases the lock taken by <see cref="TryAcquireLockAsync"/>. Does nothing if it is not held.</summary>
     Task ReleaseLockAsync(CancellationToken cancellationToken);
 
-    /// <summary>Versions recorded for <paramref name="line"/>. Empty when the migration table does not exist yet.</summary>
-    Task<IReadOnlyList<int>> GetAppliedVersionsAsync(string line, CancellationToken cancellationToken);
+    /// <summary>Versions recorded for <paramref name="line"/>, in ascending order. Empty when the migration table does not exist yet.</summary>
+    Task<IReadOnlyList<AppliedVersion>> GetAppliedVersionsAsync(string line, CancellationToken cancellationToken);
 
     /// <summary>
     /// Executes one step and records it, atomically when <see cref="MigrationStep.InTransaction"/> is set:

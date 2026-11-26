@@ -111,7 +111,7 @@ internal sealed class NpgsqlMigrationDriver : IMigrationDriver
             }
         }
 
-        public async Task<IReadOnlyList<int>> GetAppliedVersionsAsync(string line, CancellationToken cancellationToken)
+        public async Task<IReadOnlyList<AppliedVersion>> GetAppliedVersionsAsync(string line, CancellationToken cancellationToken)
         {
             var shape = await GetTableShapeAsync(null, cancellationToken).ConfigureAwait(false);
             if (shape == TableShape.Missing || (shape == TableShape.Original && line != MainLineName))
@@ -120,8 +120,8 @@ internal sealed class NpgsqlMigrationDriver : IMigrationDriver
             }
 
             var command = shape == TableShape.Original
-                ? new NpgsqlCommand($"SELECT version FROM {migrationTable} ORDER BY version", connection)
-                : new NpgsqlCommand($"SELECT version FROM {migrationTable} WHERE line = $1 ORDER BY version", connection)
+                ? new NpgsqlCommand($"SELECT version, created_at FROM {migrationTable} ORDER BY version", connection)
+                : new NpgsqlCommand($"SELECT version, created_at FROM {migrationTable} WHERE line = $1 ORDER BY version", connection)
                 {
                     Parameters = { new() { Value = line } },
                 };
@@ -130,10 +130,10 @@ internal sealed class NpgsqlMigrationDriver : IMigrationDriver
                 var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
                 await using (reader.ConfigureAwait(false))
                 {
-                    var versions = new List<int>();
+                    var versions = new List<AppliedVersion>();
                     while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                     {
-                        versions.Add(checked((int)reader.GetInt64(0)));
+                        versions.Add(new AppliedVersion(checked((int)reader.GetInt64(0)), reader.GetFieldValue<DateTimeOffset>(1)));
                     }
 
                     return versions;

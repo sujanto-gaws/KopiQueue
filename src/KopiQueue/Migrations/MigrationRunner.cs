@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -17,31 +18,7 @@ internal sealed record MigrationRequest(
     MigrationDirection Direction,
     int? TargetVersion = null,
     TimeSpan? LockTimeout = null,
-    bool DryRun = false)
-{
-    /// <summary>Default for <see cref="LockTimeout"/>.</summary>
-    public static readonly TimeSpan DefaultLockTimeout = TimeSpan.FromSeconds(30);
-}
-
-/// <summary>Outcome of a run.</summary>
-/// <param name="Line">The migration line.</param>
-/// <param name="Direction">Up or down.</param>
-/// <param name="VersionBefore">Version of the line before the run (0 = none).</param>
-/// <param name="VersionAfter">Version after the run. For a dry run, the version the run would reach.</param>
-/// <param name="LatestVersion">Latest version this library knows for the line.</param>
-/// <param name="DryRun">Whether nothing was executed.</param>
-/// <param name="Steps">Steps executed (or, for a dry run, planned), in order.</param>
-internal sealed record MigrationResult(
-    string Line,
-    MigrationDirection Direction,
-    int VersionBefore,
-    int VersionAfter,
-    int LatestVersion,
-    bool DryRun,
-    IReadOnlyList<MigrationStepResult> Steps);
-
-/// <summary>One executed step.</summary>
-internal sealed record MigrationStepResult(MigrationStep Step, TimeSpan Duration);
+    bool DryRun = false);
 
 /// <summary>
 /// Runs migrations for one line: takes the driver's lock, reads the applied versions, plans, then executes each step
@@ -75,7 +52,7 @@ internal sealed partial class MigrationRunner
         var session = await _driver.OpenSessionAsync(cancellationToken).ConfigureAwait(false);
         await using (session.ConfigureAwait(false))
         {
-            await AcquireLockAsync(session, request.LockTimeout ?? MigrationRequest.DefaultLockTimeout, cancellationToken)
+            await AcquireLockAsync(session, request.LockTimeout ?? MigrateOptions.DefaultLockTimeout, cancellationToken)
                 .ConfigureAwait(false);
             try
             {
@@ -90,7 +67,8 @@ internal sealed partial class MigrationRunner
 
     private async Task<MigrationResult> RunLockedAsync(IMigrationSession session, MigrationRequest request, CancellationToken cancellationToken)
     {
-        var applied = await session.GetAppliedVersionsAsync(request.Line, cancellationToken).ConfigureAwait(false);
+        var recorded = await session.GetAppliedVersionsAsync(request.Line, cancellationToken).ConfigureAwait(false);
+        int[] applied = [.. recorded.Select(a => a.Version)];
         var before = MigrationPlanner.CurrentVersion(applied);
         var latest = request.Migrations.Count;
         var plan = MigrationPlanner.Plan(request.Migrations, applied, request.Direction, request.TargetVersion);
@@ -157,8 +135,9 @@ internal sealed partial class MigrationRunner
         {
             if (_timeProvider.GetElapsedTime(started) >= timeout)
             {
-                throw new KopiQueueMigrationException(
-                    $"Timed out after {timeout.TotalSeconds:0.#} s waiting for the migration lock: another process is migrating this schema.");
+                throw new KopiQueueMigrationException(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"Timed out after {timeout.TotalSeconds:0.#} s waiting for the migration lock: another process is migrating this schema."));
             }
 
             if (!waiting)

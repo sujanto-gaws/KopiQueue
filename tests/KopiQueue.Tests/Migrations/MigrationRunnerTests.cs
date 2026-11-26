@@ -1,4 +1,3 @@
-using System.Data.Common;
 using KopiQueue.Migrations;
 
 namespace KopiQueue.Tests.Migrations;
@@ -18,7 +17,7 @@ public sealed class MigrationRunnerTests
             ["lock", "applied main", "exec up 1: UP p_1", "exec up 2: UP p_2", "exec up 3: UP p_3", "unlock", "dispose"],
             driver.Log);
         Assert.Equal((0, 3, 3), (result.VersionBefore, result.VersionAfter, result.LatestVersion));
-        Assert.Equal([1, 2, 3], result.Steps.Select(s => s.Step.Version));
+        Assert.Equal([1, 2, 3], result.Steps.Select(s => s.Version));
         Assert.Equal([1, 2, 3], driver.Applied);
     }
 
@@ -121,7 +120,7 @@ public sealed class MigrationRunnerTests
             new(MigrationPlannerTests.Line(3), "main", MigrationDirection.Up, DryRun: true), Ct);
 
         Assert.True(result.DryRun);
-        Assert.Equal(["UP p_2", "UP p_3"], result.Steps.Select(s => s.Step.Sql));
+        Assert.Equal(["UP p_2", "UP p_3"], result.Steps.Select(s => s.Sql));
         Assert.Equal((1, 3), (result.VersionBefore, result.VersionAfter));
         Assert.DoesNotContain(driver.Log, l => l.StartsWith("exec", StringComparison.Ordinal));
         Assert.Equal([1], driver.Applied);
@@ -137,82 +136,4 @@ public sealed class MigrationRunnerTests
 
         Assert.IsType<FakeDbException>(ex.InnerException);
     }
-
-    private sealed class FakeDriver : IMigrationDriver
-    {
-        public List<string> Log { get; } = [];
-
-        public List<int> Applied { get; set; } = [];
-
-        public int? FailOn { get; init; }
-
-        public bool FailUnlock { get; init; }
-
-        public int LockBusyAttempts { get; init; }
-
-        public int LockAttempts { get; private set; }
-
-        public string SchemaQualifier => string.Empty;
-
-        public string TablePrefix => "p_";
-
-        public Task<IMigrationSession> OpenSessionAsync(CancellationToken cancellationToken) =>
-            Task.FromResult<IMigrationSession>(new Session(this));
-
-        private sealed class Session(FakeDriver driver) : IMigrationSession
-        {
-            public Task<bool> TryAcquireLockAsync(CancellationToken cancellationToken)
-            {
-                driver.LockAttempts++;
-                if (driver.LockAttempts <= driver.LockBusyAttempts)
-                {
-                    return Task.FromResult(false);
-                }
-
-                driver.Log.Add("lock");
-                return Task.FromResult(true);
-            }
-
-            public Task ReleaseLockAsync(CancellationToken cancellationToken)
-            {
-                driver.Log.Add("unlock");
-                return driver.FailUnlock ? throw new FakeDbException("connection broken") : Task.CompletedTask;
-            }
-
-            public Task<IReadOnlyList<int>> GetAppliedVersionsAsync(string line, CancellationToken cancellationToken)
-            {
-                driver.Log.Add($"applied {line}");
-                return Task.FromResult<IReadOnlyList<int>>([.. driver.Applied]);
-            }
-
-            public Task ExecuteAsync(MigrationStep step, CancellationToken cancellationToken)
-            {
-                var direction = step.Direction.ToString().ToLowerInvariant();
-                driver.Log.Add($"exec {direction} {step.Version}: {step.Sql}");
-                if (step.Version == driver.FailOn)
-                {
-                    throw new FakeDbException("syntax error");
-                }
-
-                if (step.Direction == MigrationDirection.Up)
-                {
-                    driver.Applied.Add(step.Version);
-                }
-                else
-                {
-                    driver.Applied.Remove(step.Version);
-                }
-
-                return Task.CompletedTask;
-            }
-
-            public ValueTask DisposeAsync()
-            {
-                driver.Log.Add("dispose");
-                return ValueTask.CompletedTask;
-            }
-        }
-    }
-
-    private sealed class FakeDbException(string message) : DbException(message);
 }

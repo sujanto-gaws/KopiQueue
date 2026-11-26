@@ -55,7 +55,7 @@ public sealed class NpgsqlMigrationTests(PostgresFixture db) : IClassFixture<Pos
 
         var down = await runner.RunAsync(new(TestLine, "main", MigrationDirection.Down, TargetVersion: 0), Ct);
 
-        Assert.Equal([3, 2, 1], down.Steps.Select(s => s.Step.Version));
+        Assert.Equal([3, 2, 1], down.Steps.Select(s => s.Version));
         Assert.Empty(await TablesAsync(ds, schema));
         var downFromNothing = await runner.RunAsync(new(TestLine, "main", MigrationDirection.Down), Ct);
         Assert.Empty(downFromNothing.Steps);
@@ -79,7 +79,7 @@ public sealed class NpgsqlMigrationTests(PostgresFixture db) : IClassFixture<Pos
 
         await runner.RunAsync(Up(), Ct);
         var down = await runner.RunAsync(new(TestLine, "main", MigrationDirection.Down), Ct);
-        Assert.Equal([3], down.Steps.Select(s => s.Step.Version));
+        Assert.Equal([3], down.Steps.Select(s => s.Version));
         Assert.Equal([1L, 2L], await RecordedAsync(ds, driver));
         Assert.False(await IndexExistsAsync(ds, schema, "river_widget_name_idx"));
     }
