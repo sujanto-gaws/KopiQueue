@@ -145,6 +145,13 @@ It stops them in reverse order. The completer is stopped last among the executio
 - **Reporting** (NFR-REL-03): `onCompleted` receives each completion with its stored row only after the write committed; this is where events (task 6.x) will hang. The row's state shows what actually happened, for example `cancelled` instead of `retryable`.
 - **Stop** (§5.9 step 4): after the producers stop, `StopAsync` writes what is pending; if its token fires first it abandons the rest. The client option that picks the completer arrives with the client options in task 2.7.
 
+### 3.7 Client lifecycle (plan task 2.7)
+
+- **Configuring:** `KopiClientOptions` gains `Queues` (name → `QueueOptions { MaxWorkers }`), `Workers`, `Services` (the DI root for per-job scopes), `LoggerFactory`, `ClientId`, `JobTimeout`, `RetryPolicy`, `FetchPollInterval`, `FetchCooldown`, `FetchBatchMax`, `NotificationMode`, `CompleterMode`, `SoftStopTimeout` and `HardStopGrace`, with the defaults of §7. Hosting (task 2.8) binds these from configuration.
+- **`StartAsync`** checks the configuration before it builds anything (FR-DEF-06): queues and workers go together; each queue name follows the insert rules and has 1–10,000 workers; `WorkerRegistry.ValidateForWork` passes; the times are in range; `ListenNotify` needs a driver that can listen. Any failure throws `KopiQueueConfigurationException` and nothing starts. It then starts the completer, the notifier (unless `PollOnly`, or the driver cannot listen) and one producer per queue. A client with no queues and no workers is insert-only: `StartAsync` does nothing and the client still opens no connection (FR-INS-08). A client starts once.
+- **`StopAsync(ct)`** follows §5.9 and is idempotent; concurrent callers share one stop. Steps 2–3: the soft stop ends when `ct` fires or `SoftStopTimeout` passes; the hard stop cancels the job tokens, the executor stores interrupted jobs as `available` without using an attempt, and the producers wait at most `HardStopGrace`. Step 4: the completer gets another `HardStopGrace` to write. Step 5 (resigning leadership) arrives with the elector in M3. Inserting keeps working after a stop.
+- **Not yet:** the scheduler (task 3.3) moves `scheduled` and `retryable` jobs to `available` once due; until it lands, only jobs inserted `available`, retries due within 5 s, and interrupted jobs run again.
+
 ## 4. Data model
 
 > **PostgreSQL (River-compatible, OQ-1 decided):** the table names and columns below MUST match River's schema at the pinned version: **migration line `main`, version 8, as created by River v0.51.2**.
@@ -789,6 +796,7 @@ The commit interceptor described next needs the LocalWaker, so it arrives with t
 | `NotifierConnectionString` | `null` (derived from the data source) | PostgreSQL, on `NpgsqlDriverOptions` (task 2.2): a direct connection for LISTEN when the data source goes through PgBouncer in transaction mode or a proxy. KQ always forces `Pooling=false` on it |
 | `NotifierKeepAlive` | 5 s | PostgreSQL, on `NpgsqlDriverOptions` (task 2.2), 1 s to 1 day, rounded up to whole seconds: Npgsql `Keepalive` on the notifier connection. A silently dead connection is detected after about 2× this value; without it, it is never detected (spike 0.7) |
 | `SoftStopTimeout` | null (use host token) | |
+| `HardStopGrace` | 5 s | After a hard stop: how long to wait for workers to unwind, and again for the completer to write |
 | `CompleterMode` | `Batch` | `Batch` \| `Async` \| `Inline` |
 
 All options are validated at startup with `IValidateOptions<KopiQueueOptions>`. Invalid configuration fails host startup.
