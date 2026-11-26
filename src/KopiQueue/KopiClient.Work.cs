@@ -275,11 +275,12 @@ public sealed partial class KopiClient
             _timeProvider,
             loggers.CreateLogger<JobExecutor>());
         var notifier = listener is null ? null : new Notifier(listener, timeProvider: _timeProvider, logger: loggers.CreateLogger<Notifier>());
+        var maintenance = new MaintenanceHost(MaintenanceServices(), timeProvider: _timeProvider, logger: loggers.CreateLogger<MaintenanceHost>());
         var elector = new Elector(
             _driver,
             new ElectorOptions { ClientId = ClientId, ElectInterval = _options.ElectInterval, LeaderTtl = _options.LeaderTtl },
             notifier,
-            onLeadershipChanged: null, // the maintenance services join with plan task 3.2
+            maintenance.OnLeadershipChangedAsync,
             _timeProvider,
             loggers.CreateLogger<Elector>());
         var producers = queues
@@ -302,8 +303,12 @@ public sealed partial class KopiClient
                 _timeProvider,
                 loggers.CreateLogger<Producer>()))
             .ToArray();
-        return new Running(producers, completer, elector, notifier, loggers.CreateLogger<KopiClient>());
+        return new Running(producers, completer, elector, maintenance, notifier, loggers.CreateLogger<KopiClient>());
     }
+
+    /// <summary>The leader-only maintenance services (design §5.7), which run while this client leads.</summary>
+    /// <remarks>The scheduler, rescuer and cleaners join with plan tasks 3.3–3.5.</remarks>
+    private static IMaintenanceService[] MaintenanceServices() => [];
 
     [LoggerMessage(EventId = 1000, Level = LogLevel.Information, Message = "Client {ClientId} started working queues {Queues} (notifications: {Listening})")]
     private static partial void LogStarted(ILogger logger, string clientId, string queues, bool listening);
@@ -315,13 +320,16 @@ public sealed partial class KopiClient
     private static partial void LogStopped(ILogger logger, string clientId);
 
     /// <summary>The components of a working client.</summary>
-    private sealed class Running(Producer[] producers, JobCompleter completer, Elector elector, Notifier? notifier, ILogger logger) : IAsyncDisposable
+    private sealed class Running(
+        Producer[] producers, JobCompleter completer, Elector elector, MaintenanceHost maintenance, Notifier? notifier, ILogger logger) : IAsyncDisposable
     {
         public Producer[] Producers { get; } = producers;
 
         public JobCompleter Completer { get; } = completer;
 
         public Elector Elector { get; } = elector;
+
+        public MaintenanceHost Maintenance { get; } = maintenance;
 
         public Notifier? Notifier { get; } = notifier;
 
@@ -336,6 +344,7 @@ public sealed partial class KopiClient
 
             await Completer.DisposeAsync().ConfigureAwait(false);
             await Elector.DisposeAsync().ConfigureAwait(false);
+            await Maintenance.DisposeAsync().ConfigureAwait(false);
             if (Notifier is not null)
             {
                 await Notifier.DisposeAsync().ConfigureAwait(false);

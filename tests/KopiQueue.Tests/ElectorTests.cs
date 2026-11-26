@@ -96,7 +96,7 @@ public sealed class ElectorTests
         await AdvanceUntil(time, () => elector.IsLeader);
         var lastRenewal = time.GetUtcNow();
 
-        lease.RenewalsFail = true;
+        lease.DatabaseDown = true;
         await AdvanceUntil(time, () => !elector.IsLeader);
 
         // Stepped down at TTL − TTL/3 after the last renewal: 5 s before the lease could pass to another client.
@@ -130,10 +130,10 @@ public sealed class ElectorTests
         await using var elector = Elector(lease, time, reports);
         await elector.StartAsync(Ct);
         await AdvanceUntil(time, () => elector.IsLeader);
-        lease.RenewalsFail = true;
+        lease.DatabaseDown = true;
         await AdvanceUntil(time, () => !elector.IsLeader);
 
-        lease.RenewalsFail = false;
+        lease.DatabaseDown = false;
         await AdvanceUntil(time, () => elector.IsLeader);
 
         Assert.Equal([true, false, true], reports);
@@ -243,6 +243,28 @@ public sealed class ElectorTests
     }
 
     [Fact]
+    public async Task Maintenance_runs_only_while_leading_and_stops_before_the_lease_can_pass_on()
+    {
+        var (lease, time) = Lease();
+        var service = new MaintenanceHostTests.FakeService(time, "cleaner");
+        await using var maintenance = new MaintenanceHost([service], new MaintenanceHostOptions { Jitter = 0 }, time);
+        await using var elector = new Elector(lease, Options(), onLeadershipChanged: maintenance.OnLeadershipChangedAsync, timeProvider: time);
+
+        await elector.StartAsync(Ct);
+        await AdvanceUntil(time, () => service.Batches >= 1);
+        Assert.True(maintenance.IsRunning);
+
+        lease.DatabaseDown = true;
+        await AdvanceUntil(time, () => !elector.IsLeader);
+
+        Assert.False(maintenance.IsRunning);
+        Assert.True(time.GetUtcNow() < lease.ExpiresAt, "Maintenance stopped while no other client could lead.");
+        var batches = service.Batches;
+        await Settle(time, Interval * 2);
+        Assert.Equal(batches, service.Batches);
+    }
+
+    [Fact]
     public void A_lease_shorter_than_two_intervals_is_refused()
     {
         var (lease, time) = Lease();
@@ -318,7 +340,8 @@ public sealed class ElectorTests
 
         public int Resignations => Volatile.Read(ref _resignations);
 
-        public volatile bool RenewalsFail;
+        /// <summary>Every election and renewal fails, as when the database is unreachable.</summary>
+        public volatile bool DatabaseDown;
 
         public volatile bool RenewalsHang;
 
@@ -345,6 +368,11 @@ public sealed class ElectorTests
         public Task<bool> LeaderAttemptElectAsync(LeaderElectParams parameters, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _attempts);
+            if (DatabaseDown)
+            {
+                return Task.FromException<bool>(new DbExceptionStub("The database is unreachable."));
+            }
+
             lock (_lock)
             {
                 var now = time.GetUtcNow();
@@ -365,7 +393,7 @@ public sealed class ElectorTests
                 await Task.Delay(Timeout.Infinite, cancellationToken);
             }
 
-            if (RenewalsFail)
+            if (DatabaseDown)
             {
                 throw new DbExceptionStub("The database is unreachable.");
             }
