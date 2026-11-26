@@ -707,6 +707,16 @@ public interface IKopiExecutor   // typed operations; no SQL leaks to the core
 - `JobRow` is materialised with a hand-written `DbDataReader` mapping per driver: no reflection, so it is AOT-safe.
 - The core never branches on the driver type. Differences are expressed through `DriverCapabilities`. For example, the producer turns off its notification subscription when `ListenNotify` is false.
 
+**Migration engine (plan task 1.1).** The core owns loading, planning and running; each driver supplies a lock and step execution.
+
+- Files: `Migrations/<line>/<NNN>_<name>.<up|down>.sql`, embedded with the logical name `kopi-migrations/<line>/...`. A line's versions run from 1 with no gaps, and every version needs both scripts. The loader rejects anything else at startup.
+- Placeholders: write table names as `{{schema}}{{prefix}}job`. `{{schema}}` becomes the quoted schema plus a dot, or nothing when no schema is configured (the connection's `search_path` or default schema applies). An unknown placeholder is an error.
+- Each script runs in its own transaction together with its version row. Up runs the SQL and then inserts the row; down deletes the row and then runs the SQL. A script whose leading comments contain `-- kopi:no-transaction` runs outside a transaction (for `CREATE INDEX CONCURRENTLY`). Such a script must hold a single statement, because PostgreSQL treats a multi-statement batch as an implicit transaction.
+- Planning: up applies the missing versions up to the target (default: the latest). Down reverts down to the target (default: one step; `0` reverts the whole line). Recorded versions must form a gap-free 1..N. A database that is newer than the library is a no-op for up and an error for down.
+- Lock: the runner polls `TryAcquireLock` every 200 ms until `LockTimeout` (default 30 s). PostgreSQL uses a session-level `pg_try_advisory_lock` whose key is the first 8 bytes of SHA-256(`kopi_migrate:<schema>.<prefix>`), so separate schemas migrate independently. SQL Server uses `sp_getapplock` (§8.1). River's CLI does not take this lock, so do not run both against the same schema at once.
+- The migration table is created by version 1 of the `main` line (River-compatible shape, §4.1), so `main` must be applied before any other line.
+- A failed step is wrapped in `KopiQueueMigrationException` with the database error as the inner exception. Earlier steps stay applied.
+
 ### 8.1 SQL Server driver: algorithm variants
 
 The Postgres SQL in §5 has these SQL Server equivalents. Fetch, complete, unique insert, bulk insert and polling were validated on SQL Server 2019 with RCSI both off and on, in spikes [0.9](spikes/0.9-sqlserver-fetch-and-locking.md) and [0.10](spikes/0.10-sqlserver-unique-bulk-poll.md). The statements below include the changes those spikes required.

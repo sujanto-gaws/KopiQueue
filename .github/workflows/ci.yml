@@ -28,6 +28,8 @@ jobs:
           dotnet-version: 10.0.x # also install the net10.0 runtime for multi-targeted tests
       - run: dotnet restore KopiQueue.slnx
       - run: dotnet build KopiQueue.slnx -c $CONFIGURATION --no-restore
+      - name: unit tests
+        run: dotnet test --project tests/KopiQueue.Tests -c $CONFIGURATION --no-build
       - run: dotnet pack KopiQueue.slnx -c $CONFIGURATION --no-build -o artifacts/packages
       - uses: actions/upload-artifact@v4
         with:
