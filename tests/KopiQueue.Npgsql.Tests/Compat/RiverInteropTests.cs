@@ -84,17 +84,15 @@ public sealed class RiverInteropTests(PostgresFixture db) : IClassFixture<Postgr
         var (_, schema) = await MigratedAsync(ds);
         await using var listener = await ListenAsync(ds, schema, "river_insert");
 
+        // Each step waits for the notification it expects (a loaded machine delivers late), then for a quiet second in
+        // which any extra notification of the same step would arrive.
         await river.InsertAsync(schema, "compat", "ok", count: 3, cancellationToken: Ct); // one process, three inserts
-        await Task.Delay(500, Ct);
-        var first = listener.Heard.Count;
-        await Task.Delay(TimeSpan.FromSeconds(3), Ct);
+        var first = await SettledCountAsync(listener, atLeast: 1);
+        await Task.Delay(TimeSpan.FromSeconds(2), Ct);
         await river.InsertAsync(schema, "compat", "ok", count: 1, cancellationToken: Ct); // a new process, later
-        await Task.Delay(500, Ct);
-        var second = listener.Heard.Count - first;
+        var second = await SettledCountAsync(listener, atLeast: first + 1) - first;
         await river.InsertAsync(schema, "other", "ok", count: 1, cancellationToken: Ct); // another queue
-        await Task.Delay(500, Ct);
-
-        var other = listener.Heard.Count - first - second;
+        var other = await SettledCountAsync(listener, atLeast: first + second + 1) - first - second;
         Report($"insert-only River: burst of 3 -> {first} notification(s); a later insert -> {second}; another queue -> {other}");
         foreach (var (_, payload) in listener.Heard)
         {
@@ -312,6 +310,29 @@ public sealed class RiverInteropTests(PostgresFixture db) : IClassFixture<Postgr
             Assert.True(DateTime.UtcNow < deadline, $"The leader is '{leader ?? "nobody"}', not '{expected}', after {limit}.");
             await Task.Delay(20, Ct);
         }
+    }
+
+    /// <summary>
+    /// Waits up to 10 s until <paramref name="listener"/> has heard at least <paramref name="atLeast"/> notifications, then
+    /// for a second without new ones, and returns how many it has heard.
+    /// </summary>
+    private static async Task<int> SettledCountAsync(Listener listener, int atLeast)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (listener.Heard.Count < atLeast && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20, Ct);
+        }
+
+        int count;
+        do
+        {
+            count = listener.Heard.Count;
+            await Task.Delay(TimeSpan.FromSeconds(1), Ct);
+        }
+        while (listener.Heard.Count != count);
+
+        return count;
     }
 
     private static async Task<Listener> ListenAsync(NpgsqlDataSource ds, string schema, params string[] topics)
