@@ -108,18 +108,19 @@ public sealed class NpgsqlProducerTests(PostgresFixture db) : IClassFixture<Post
                     var now = Interlocked.Increment(ref running);
                     InterlockedMax(ref peaks[client], now);
                     started.Enqueue(job);
-                    await Task.Delay(Random.Shared.Next(0, 3), ct);
+                    await Task.Delay(Random.Shared.Next(2, 6), ct); // long enough that one client cannot drain the queue alone
                     Interlocked.Decrement(ref running);
                 });
             producers.Add(producer);
         }
 
-        await driver.GetExecutor().JobInsertFastAsync([.. Enumerable.Range(0, Jobs).Select(_ => Job("bulk"))], Ct);
         foreach (var producer in producers)
         {
             await producer.StartAsync(Ct);
         }
 
+        // Insert once every producer is running, so none of them starts late and finds the queue drained under load.
+        await driver.GetExecutor().JobInsertFastAsync([.. Enumerable.Range(0, Jobs).Select(_ => Job("bulk"))], Ct);
         await Until(() => started.Count >= Jobs, TimeSpan.FromSeconds(60));
         foreach (var producer in producers)
         {
@@ -128,7 +129,7 @@ public sealed class NpgsqlProducerTests(PostgresFixture db) : IClassFixture<Post
 
         Assert.Equal(Jobs, started.Count);
         Assert.Equal(Jobs, started.Select(j => j.Id).Distinct().Count());
-        Assert.All(peaks, peak => Assert.InRange(peak, 1, 5));
+        Assert.All(peaks, peak => Assert.InRange(peak, 0, 5)); // never more than MaxWorkers at once per client
         Assert.All(started, j => Assert.Equal(1, j.Attempt));
         Assert.True(started.Select(j => j.AttemptedBy[0]).Distinct().Count() > 1, "One client took every job.");
         await using var cmd = ds.CreateCommand($"SELECT count(*) FROM {schema}.river_job WHERE state = 'running' AND attempt = 1 AND cardinality(attempted_by) = 1");

@@ -137,15 +137,15 @@ public sealed class KopiClientLifecycleTests
     }
 
     [JobKind("lifecycle_noop")]
-    private sealed record NoopArgs : IJobArgs;
+    internal sealed record NoopArgs : IJobArgs;
 
-    private sealed class NoopWorker : Worker<NoopArgs>
+    internal sealed class NoopWorker : Worker<NoopArgs>
     {
         public override Task WorkAsync(Job<NoopArgs> job, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     /// <summary>A database with no jobs and no listener.</summary>
-    private sealed class IdleDriver : IKopiDriver, IKopiExecutor
+    internal sealed class IdleDriver : IKopiDriver, IKopiExecutor
     {
         private int _fetches;
         private int _listenerRequests;

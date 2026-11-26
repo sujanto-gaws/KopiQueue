@@ -14,3 +14,7 @@ KopiQueue.Npgsql.NpgsqlDriverOptions.NotifierConnectionString.get -> string?
 KopiQueue.Npgsql.NpgsqlDriverOptions.NotifierConnectionString.init -> void
 KopiQueue.Npgsql.NpgsqlDriverOptions.NotifierKeepAlive.get -> System.TimeSpan
 KopiQueue.Npgsql.NpgsqlDriverOptions.NotifierKeepAlive.init -> void
+Microsoft.Extensions.DependencyInjection.NpgsqlKopiQueueBuilderExtensions
+static Microsoft.Extensions.DependencyInjection.NpgsqlKopiQueueBuilderExtensions.UseKeyedNpgsql(this KopiQueue.KopiQueueBuilder! builder, object! serviceKey, KopiQueue.Npgsql.NpgsqlDriverOptions? options = null) -> KopiQueue.KopiQueueBuilder!
+static Microsoft.Extensions.DependencyInjection.NpgsqlKopiQueueBuilderExtensions.UseNpgsql(this KopiQueue.KopiQueueBuilder! builder, KopiQueue.Npgsql.NpgsqlDriverOptions? options = null) -> KopiQueue.KopiQueueBuilder!
+static Microsoft.Extensions.DependencyInjection.NpgsqlKopiQueueBuilderExtensions.UseNpgsql(this KopiQueue.KopiQueueBuilder! builder, Npgsql.NpgsqlDataSource! dataSource, KopiQueue.Npgsql.NpgsqlDriverOptions? options = null) -> KopiQueue.KopiQueueBuilder!

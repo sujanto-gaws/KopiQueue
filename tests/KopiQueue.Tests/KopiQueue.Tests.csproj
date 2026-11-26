@@ -13,10 +13,12 @@
     <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\KopiQueue\KopiQueue.csproj" />
+    <ProjectReference Include="..\..\src\KopiQueue.Hosting\KopiQueue.Hosting.csproj" />
   </ItemGroup>
 
   <ItemGroup>
