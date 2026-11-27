@@ -34,12 +34,16 @@ public sealed class NpgsqlLeadershipTests(PostgresFixture db) : IClassFixture<Po
             await Task.Delay(TimeSpan.FromSeconds(1), Ct);
             Assert.Equal(first, await LeaderAsync(ds, schema)); // nobody else took it
 
+            // Time the handover, not the whole stop: the stop resigns first and only then closes the notifier, which may take
+            // up to its DisposeTimeout (5 s) on a busy machine. So wait for the new leader while the stop is still running.
             var stopped = Stopwatch.StartNew();
-            await clients[first!].StopAsync(Ct);
+            var stopping = clients[first!].StopAsync(Ct);
             var second = await WaitForLeaderAsync(ds, schema, l => l is not null && l != first, TimeSpan.FromSeconds(5));
+            var handedOver = stopped.Elapsed;
+            await stopping;
 
             Assert.Contains(second, clients.Keys);
-            Assert.True(stopped.Elapsed < TimeSpan.FromSeconds(5), $"Handed over after {stopped.Elapsed}.");
+            Assert.True(handedOver < TimeSpan.FromSeconds(5), $"Handed over after {handedOver}.");
         }
         finally
         {
