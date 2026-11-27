@@ -1,6 +1,6 @@
 # KopiQueue — Project Plan
 
-**Version:** 0.4 (draft) · **Date:** 2026-11-26 · **Related:** [Requirements](01-requirements.md), [Design](02-design.md)
+**Version:** 0.5 (draft) · **Date:** 2026-11-27 · **Related:** [Requirements](01-requirements.md), [Design](02-design.md)
 
 ---
 
@@ -281,7 +281,7 @@ nuget.org's documentation does not say whether a trusted publishing policy cover
 | Driver conformance | Every PR: PG 14–18 and SQL Server 2019/2022/2025. Nightly: Azure SQL | Every executor operation; transaction rollback per test | < 3 min per database version |
 | Integration | Every PR (PG 18 + SQL Server 2022), nightly (full matrix) | Host with real producers, completer and elector | < 5 min per driver |
 | Stress/chaos | Nightly, plus 72 h per driver before GA | Multi-process clients, kill -9, killed sessions (`pg_terminate_backend` / `KILL`), DB restart; invariant checker | No invariant violations |
-| River compatibility | Nightly | Go River ↔ KQ on a shared PostgreSQL database | Pass |
+| River compatibility | Every PR | Against recorded River v0.51.2 goldens (catalog per migration version, state bitmask; task 7.3 adds the rest). River itself is never run (ADR-008) | Pass |
 | Benchmarks | Weekly and before each release | BenchmarkDotNet plus `kopi bench`, per driver | Regressions > 10% fail the release checklist |
 
 **Local development:** tests read `KOPI_TEST_PG` / `KOPI_TEST_MSSQL` connection strings for existing local servers. When these are unset they start Testcontainers, which needs Docker.
@@ -328,4 +328,9 @@ nuget.org's documentation does not say whether a trusted publishing policy cover
 3. ~~Spikes 0.9–0.10 (SQL Server)~~: **done 2026-11-26** ([0.9](spikes/0.9-sqlserver-fetch-and-locking.md), [0.10](spikes/0.10-sqlserver-unique-bulk-poll.md)). Design updated (§8.1, ADR-011 revised, ADR-014), NFR-PERF-07 set.
 4. ~~Spikes 0.7–0.8 (PostgreSQL)~~: **done 2026-11-26** ([0.7](spikes/0.7-npgsql-listen-notify.md), [0.8](spikes/0.8-river-schema-and-unique-keys.md)). River schema pinned at `main` v8 (v0.51.2); unique-key algorithm reconstructed and verified on 22 golden vectors; notifier rules (non-pooled, Keepalive, resync). Design updated (§3, §4.1, §4.3, §5.6, §7, ADR-002, DQ-4 closed, DQ-8 new). **PgBouncer not run** (no Docker): moved to task 2.11.
 5. ~~M0~~: **done**; the PgBouncer check moved to M2 (task 2.11).
-6. ~~M1 tasks 1.1–1.11~~: **done 2026-11-26** (migrations, Npgsql driver, insert and bulk insert, EF Core insert, args serialisation, conformance suite; DQ-2 closed). `CHANGELOG.md` cut for `0.1.0-alpha.1`. Next: tag the release, then M2 (execution engine), starting with task 2.1 and DQ-1/DQ-3.
+6. ~~M1 tasks 1.1–1.11~~: **done 2026-11-26** (migrations, Npgsql driver, insert and bulk insert, EF Core insert, args serialisation, conformance suite; DQ-2 closed). `CHANGELOG.md` cut for `0.1.0-alpha.1`. Released as `v0.1.0-alpha.1` on 2026-11-26 ([#81](https://github.com/sujanto-gaws/KopiQueue/issues/81)).
+7. ~~M2 tasks 2.1–2.11~~: **done 2026-11-26** (#108–#118). `0.2.0-alpha.1` was skipped ([#82](https://github.com/sujanto-gaws/KopiQueue/issues/82), not planned): the executor, job control and completer (#111–#113) were written after reading River's source, are disclosed, and wait for a clean-room rewrite by another contributor. The next release (`v0.3.0-alpha.1`, [#83](https://github.com/sujanto-gaws/KopiQueue/issues/83)) waits for that rewrite too.
+8. **Clean-room, 2026-11-27 ([#123](https://github.com/sujanto-gaws/KopiQueue/pull/123)):** River is a reference only. KQ's tests and CI no longer run a River client, River's CLI or River UI; compatibility is checked against recorded goldens (task 7.3 rewritten, acceptance criterion 6, OQ-5).
+9. **M3, in progress.**
+   - Done 2026-11-27: 3.1 elector (#119), 3.2 maintenance host (#120), the queue cleaner of 3.5 (#121), 3.6 queues and pause/resume (#122). Of 3.8: the leadership, queue and pause tests, and a 3-node cluster that survives killing the leader's process (#127). The pause exit criterion is met.
+   - Waiting for a clean-room contributor (hand-off notes on each issue): 3.3 scheduler ([#35](https://github.com/sujanto-gaws/KopiQueue/issues/35)), 3.4 rescuer ([#36](https://github.com/sujanto-gaws/KopiQueue/issues/36)), the job cleaner of 3.5 ([#37](https://github.com/sujanto-gaws/KopiQueue/issues/37)), 3.7 external cancel ([#39](https://github.com/sujanto-gaws/KopiQueue/issues/39)), and of 3.8 the rescue-after-crash and job-retention tests ([#40](https://github.com/sujanto-gaws/KopiQueue/issues/40)). The exit criterion "stuck jobs are rescued" waits for 3.4.

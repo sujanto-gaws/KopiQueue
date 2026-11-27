@@ -3,7 +3,7 @@
 A transactional background job queue for .NET, backed by **PostgreSQL** or **SQL Server**.
 It follows the design of [River](https://github.com/riverqueue/river), and on PostgreSQL it is schema-compatible with River.
 
-> **Status: pre-alpha (milestone M0, foundations).** There is no usable API yet. See the [plan](docs/03-plan.md).
+> **Status: alpha, PostgreSQL only.** [`0.1.0-alpha.1`](https://github.com/sujanto-gaws/KopiQueue/releases/tag/v0.1.0-alpha.1) (schema and insert) is on NuGet. On `main`, clients also work jobs (M2) and elect a leader that runs maintenance, with queue pause and resume (M3, in progress). The API may still change until M6. See the [plan](docs/03-plan.md) §10 and the [CHANGELOG](CHANGELOG.md).
 
 ## Why
 

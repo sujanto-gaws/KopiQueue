@@ -1,6 +1,6 @@
 # KopiQueue — Requirements Specification
 
-**Version:** 0.5 (draft) · **Date:** 2026-11-26 · **Related:** [Design](02-design.md), [Plan](03-plan.md)
+**Version:** 0.5 (draft) · **Date:** 2026-11-27 · **Related:** [Design](02-design.md), [Plan](03-plan.md)
 
 ---
 
