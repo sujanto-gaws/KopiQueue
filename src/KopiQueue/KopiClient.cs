@@ -221,6 +221,13 @@ public sealed class KopiClientOptions
     /// renew steps down when a third of it is left; a crashed leader is replaced once it expires. Default: 15 s.
     /// </summary>
     public TimeSpan LeaderTtl { get; init; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// How long the leader keeps a queue's row after no client has worked the queue (FR-MNT-05). The row holds the
+    /// queue's pause state and metadata; its jobs are never deleted with it. Default: 24 hours; <c>null</c> keeps queue
+    /// rows forever.
+    /// </summary>
+    public TimeSpan? QueueRetention { get; init; } = TimeSpan.FromHours(24);
 }
 
 /// <summary>Settings of one queue (design §7).</summary>

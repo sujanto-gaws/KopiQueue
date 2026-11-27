@@ -227,6 +227,7 @@ public sealed partial class KopiClient
         Check(options.ClientId is null || options.ClientId.Length <= MaxClientIdLength, nameof(KopiClientOptions.ClientId), $"must be at most {MaxClientIdLength} characters");
         Check(options.ElectInterval > TimeSpan.Zero, nameof(KopiClientOptions.ElectInterval), "must be positive");
         Check(options.LeaderTtl >= options.ElectInterval * 2, nameof(KopiClientOptions.LeaderTtl), "must be at least twice ElectInterval");
+        Check(options.QueueRetention is null || options.QueueRetention > TimeSpan.Zero, nameof(KopiClientOptions.QueueRetention), "must be positive, or null to keep queues");
         Check(Enum.IsDefined(options.NotificationMode), nameof(KopiClientOptions.NotificationMode), "is not a known mode");
         Check(Enum.IsDefined(options.CompleterMode), nameof(KopiClientOptions.CompleterMode), "is not a known mode");
         return errors;
@@ -307,8 +308,9 @@ public sealed partial class KopiClient
     }
 
     /// <summary>The leader-only maintenance services (design §5.7), which run while this client leads.</summary>
-    /// <remarks>The scheduler, rescuer and cleaners join with plan tasks 3.3–3.5.</remarks>
-    private static IMaintenanceService[] MaintenanceServices() => [];
+    /// <remarks>The scheduler, rescuer and job cleaner join with plan tasks 3.3–3.5.</remarks>
+    private IMaintenanceService[] MaintenanceServices() =>
+        _options.QueueRetention is { } queueRetention ? [new QueueCleaner(_driver, queueRetention)] : [];
 
     [LoggerMessage(EventId = 1000, Level = LogLevel.Information, Message = "Client {ClientId} started working queues {Queues} (notifications: {Listening})")]
     private static partial void LogStarted(ILogger logger, string clientId, string queues, bool listening);

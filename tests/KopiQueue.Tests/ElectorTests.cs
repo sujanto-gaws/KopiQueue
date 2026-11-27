@@ -448,6 +448,9 @@ public sealed class ElectorTests
         public Task<IReadOnlyList<JobRow>> JobGetAvailableAsync(JobGetAvailableParams parameters, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<IReadOnlyList<string>> QueueDeleteExpiredAsync(QueueDeleteExpiredParams parameters, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+
         public Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
     }

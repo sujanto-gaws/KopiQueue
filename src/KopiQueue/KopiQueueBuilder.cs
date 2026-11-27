@@ -56,6 +56,9 @@ public sealed class KopiQueueOptions
 
     /// <inheritdoc cref="KopiClientOptions.LeaderTtl"/>
     public TimeSpan LeaderTtl { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <inheritdoc cref="KopiClientOptions.QueueRetention"/>
+    public TimeSpan? QueueRetention { get; set; } = TimeSpan.FromHours(24);
 }
 
 /// <summary>Settings of one queue in <see cref="KopiQueueOptions.Queues"/>.</summary>

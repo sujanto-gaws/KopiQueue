@@ -122,6 +122,14 @@ public interface IKopiExecutor
     /// </summary>
     /// <returns><c>true</c> when the client held the lease; nothing is announced otherwise.</returns>
     Task<bool> LeaderResignAsync(string leaderId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Deletes up to <see cref="QueueDeleteExpiredParams.Max"/> queues whose row was not updated within
+    /// <see cref="QueueDeleteExpiredParams.Retention"/>, by the database's clock (FR-MNT-05). Rows locked by another
+    /// transaction are skipped. Jobs are not touched.
+    /// </summary>
+    /// <returns>The names of the deleted queues.</returns>
+    Task<IReadOnlyList<string>> QueueDeleteExpiredAsync(QueueDeleteExpiredParams parameters, CancellationToken cancellationToken);
 }
 
 /// <summary>What a database supports. The core reads these instead of checking the driver type (FR-DB-03).</summary>
@@ -207,6 +215,18 @@ public sealed class LeaderElectParams
 
     /// <summary>How long the lease lasts after it is won or extended. Positive.</summary>
     public required TimeSpan Ttl { get; init; }
+}
+
+/// <summary>Which queues <see cref="IKopiExecutor.QueueDeleteExpiredAsync"/> deletes.</summary>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed class QueueDeleteExpiredParams
+{
+    /// <summary>How long a queue is kept after its row was last updated. Positive.</summary>
+    public required TimeSpan Retention { get; init; }
+
+    /// <summary>The most queues to delete: at least 1.</summary>
+    public required int Max { get; init; }
 }
 
 /// <summary>A job to insert, already serialised and validated by the core.</summary>
