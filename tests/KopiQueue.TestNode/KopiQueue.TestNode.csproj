@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A KopiQueue client in its own process, for tests that kill a client outright (plan task 3.8). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\KopiQueue.Npgsql\KopiQueue.Npgsql.csproj" />
+  </ItemGroup>
+
+</Project>

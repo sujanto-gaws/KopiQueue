@@ -17,6 +17,8 @@
     <ProjectReference Include="..\..\src\KopiQueue.EntityFrameworkCore\KopiQueue.EntityFrameworkCore.csproj" />
     <ProjectReference Include="..\..\src\KopiQueue.Hosting\KopiQueue.Hosting.csproj" />
     <ProjectReference Include="..\KopiQueue.TestInfrastructure\KopiQueue.TestInfrastructure.csproj" />
+    <!-- Started as separate processes by NpgsqlLeaderKillTests; built and copied next to the tests. -->
+    <ProjectReference Include="..\KopiQueue.TestNode\KopiQueue.TestNode.csproj" />
   </ItemGroup>
 
   <ItemGroup>

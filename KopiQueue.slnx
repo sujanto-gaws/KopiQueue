@@ -22,6 +22,7 @@
     <Project Path="tests/KopiQueue.TestInfrastructure/KopiQueue.TestInfrastructure.csproj" />
     <Project Path="tests/KopiQueue.Npgsql.Tests/KopiQueue.Npgsql.Tests.csproj" />
     <Project Path="tests/KopiQueue.SqlServer.Tests/KopiQueue.SqlServer.Tests.csproj" />
+    <Project Path="tests/KopiQueue.TestNode/KopiQueue.TestNode.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/WorkerService/WorkerService.csproj" />
