@@ -13,3 +13,4 @@ coverage*.xml
 *.snupkg
 .env
 .claude/settings.local.json
+.claude/worktrees/
