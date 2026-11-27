@@ -9,6 +9,9 @@
 //
 //	kopi-river-compat insert -schema S -queue Q -what ok -count 3 [-max-attempts N] [-many]
 //	kopi-river-compat work   -schema S -queue Q -expect 3 [-poll 1s] [-timeout 30s] [-id river-compat] [-min-run 0s]
+//	kopi-river-compat pause  -schema S -queue Q    (Q may be "*")
+//	kopi-river-compat resume -schema S -queue Q
+//	kopi-river-compat update -schema S -queue Q -metadata '{"k":"v"}'
 package main
 
 import (
@@ -96,7 +99,7 @@ func fail(err error) {
 
 func main() {
 	if len(os.Args) < 2 {
-		fail(errors.New("usage: kopi-river-compat <insert|work> [flags]"))
+		fail(errors.New("usage: kopi-river-compat <insert|work|pause|resume|update> [flags]"))
 	}
 
 	flags := flag.NewFlagSet(os.Args[1], flag.ExitOnError)
@@ -111,6 +114,7 @@ func main() {
 	timeout := flags.Duration("timeout", 30*time.Second, "give up after this long")
 	id := flags.String("id", "river-compat", "River client ID")
 	minRun := flags.Duration("min-run", 0, "keep the worker running at least this long (to observe leadership)")
+	metadata := flags.String("metadata", "{}", "queue metadata (JSON) for update")
 	fail(flags.Parse(os.Args[2:]))
 
 	dsn := os.Getenv("KOPI_COMPAT_PG")
@@ -187,6 +191,25 @@ func main() {
 		defer stopCancel()
 		fail(client.Stop(stop)) // waits for running jobs and writes their outcomes
 		out.emit(map[string]any{"event": "done", "worked": out.count()})
+
+	case "pause", "resume", "update":
+		// An insert-only client pausing or resuming a queue through River's public API. An error is reported as an
+		// event, not an exit code, so the tests can observe how River treats, for example, an unknown queue.
+		client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{Schema: *schema, Logger: logger})
+		fail(err)
+		switch os.Args[1] {
+		case "pause":
+			err = client.QueuePause(ctx, *queue, nil)
+		case "resume":
+			err = client.QueueResume(ctx, *queue, nil)
+		default:
+			_, err = client.QueueUpdate(ctx, *queue, &river.QueueUpdateParams{Metadata: []byte(*metadata)})
+		}
+		if err != nil {
+			out.emit(map[string]any{"event": "error", "error": err.Error()})
+		} else {
+			out.emit(map[string]any{"event": "done"})
+		}
 
 	default:
 		fail(fmt.Errorf("unknown command %q", os.Args[1]))

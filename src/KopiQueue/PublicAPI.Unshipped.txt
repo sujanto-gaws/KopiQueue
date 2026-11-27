@@ -448,3 +448,59 @@ KopiQueue.KopiQueueOptions.QueueRetention.set -> void
 [KQ0001]KopiQueue.Drivers.QueueDeleteExpiredParams.QueueDeleteExpiredParams() -> void
 [KQ0001]KopiQueue.Drivers.QueueDeleteExpiredParams.Retention.get -> System.TimeSpan
 [KQ0001]KopiQueue.Drivers.QueueDeleteExpiredParams.Retention.init -> void
+KopiQueue.IKopiClient.QueueGetAsync(string! name, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.QueueRow?>!
+KopiQueue.IKopiClient.QueueListAsync(KopiQueue.QueueListParams? parameters = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.QueueRow!>!>!
+KopiQueue.IKopiClient.QueuePauseAsync(string! name, KopiQueue.QueuePauseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+KopiQueue.IKopiClient.QueueResumeAsync(string! name, KopiQueue.QueuePauseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+KopiQueue.IKopiClient.QueueUpdateAsync(string! name, System.Text.Json.Nodes.JsonObject! metadata, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.QueueRow!>!
+KopiQueue.KopiClient.QueueGetAsync(string! name, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.QueueRow?>!
+KopiQueue.KopiClient.QueueListAsync(KopiQueue.QueueListParams? parameters = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.QueueRow!>!>!
+KopiQueue.KopiClient.QueuePauseAsync(string! name, KopiQueue.QueuePauseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+KopiQueue.KopiClient.QueueResumeAsync(string! name, KopiQueue.QueuePauseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+KopiQueue.KopiClient.QueueUpdateAsync(string! name, System.Text.Json.Nodes.JsonObject! metadata, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.QueueRow!>!
+KopiQueue.KopiQueueNotFoundException
+KopiQueue.KopiQueueNotFoundException.KopiQueueNotFoundException() -> void
+KopiQueue.KopiQueueNotFoundException.KopiQueueNotFoundException(string? message) -> void
+KopiQueue.KopiQueueNotFoundException.KopiQueueNotFoundException(string? message, System.Exception? innerException) -> void
+KopiQueue.QueueListParams
+KopiQueue.QueueListParams.After.get -> string?
+KopiQueue.QueueListParams.After.init -> void
+KopiQueue.QueueListParams.Limit.get -> int
+KopiQueue.QueueListParams.Limit.init -> void
+KopiQueue.QueueListParams.QueueListParams() -> void
+KopiQueue.QueuePauseOptions
+KopiQueue.QueuePauseOptions.LocalOnly.get -> bool
+KopiQueue.QueuePauseOptions.LocalOnly.init -> void
+KopiQueue.QueuePauseOptions.QueuePauseOptions() -> void
+KopiQueue.QueueRow
+KopiQueue.QueueRow.CreatedAt.get -> System.DateTimeOffset
+KopiQueue.QueueRow.CreatedAt.init -> void
+KopiQueue.QueueRow.MetadataJson.get -> string!
+KopiQueue.QueueRow.MetadataJson.init -> void
+KopiQueue.QueueRow.Name.get -> string!
+KopiQueue.QueueRow.Name.init -> void
+KopiQueue.QueueRow.PausedAt.get -> System.DateTimeOffset?
+KopiQueue.QueueRow.PausedAt.init -> void
+KopiQueue.QueueRow.QueueRow() -> void
+KopiQueue.QueueRow.UpdatedAt.get -> System.DateTimeOffset
+KopiQueue.QueueRow.UpdatedAt.init -> void
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.QueueCreateOrSetUpdatedAtManyAsync(System.Collections.Generic.IReadOnlyList<string!>! names, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.QueueRow!>!>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.QueueGetAsync(string! name, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<KopiQueue.QueueRow?>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.QueueListAsync(KopiQueue.Drivers.QueueListQuery! query, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.QueueRow!>!>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.QueuePauseAsync(string! name, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.QueueResumeAsync(string! name, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.QueueUpdateAsync(KopiQueue.Drivers.QueueUpdateParams! parameters, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<KopiQueue.QueueRow?>!
+[KQ0001]KopiQueue.Drivers.QueueListQuery
+[KQ0001]KopiQueue.Drivers.QueueListQuery.After.get -> string?
+[KQ0001]KopiQueue.Drivers.QueueListQuery.After.init -> void
+[KQ0001]KopiQueue.Drivers.QueueListQuery.Max.get -> int
+[KQ0001]KopiQueue.Drivers.QueueListQuery.Max.init -> void
+[KQ0001]KopiQueue.Drivers.QueueListQuery.Names.get -> System.Collections.Generic.IReadOnlyList<string!>?
+[KQ0001]KopiQueue.Drivers.QueueListQuery.Names.init -> void
+[KQ0001]KopiQueue.Drivers.QueueListQuery.QueueListQuery() -> void
+[KQ0001]KopiQueue.Drivers.QueueUpdateParams
+[KQ0001]KopiQueue.Drivers.QueueUpdateParams.MetadataJson.get -> string!
+[KQ0001]KopiQueue.Drivers.QueueUpdateParams.MetadataJson.init -> void
+[KQ0001]KopiQueue.Drivers.QueueUpdateParams.Name.get -> string!
+[KQ0001]KopiQueue.Drivers.QueueUpdateParams.Name.init -> void
+[KQ0001]KopiQueue.Drivers.QueueUpdateParams.QueueUpdateParams() -> void

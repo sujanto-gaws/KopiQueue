@@ -33,9 +33,27 @@ public sealed class WakeSignalTests
         }
 
         Assert.True(await wait);
-        var next = signal.WaitAsync(TimeSpan.FromSeconds(1), time, Ct);
-        time.Advance(TimeSpan.FromSeconds(1));
-        Assert.False(await next);
+
+        // The released wait unregisters on a pool thread, possibly while the burst is still going: Sets after that are a
+        // new wake-up, kept for the next wait. So one more wait may return at once, but never more than one.
+        var extra = 0;
+        while (true)
+        {
+            var next = signal.WaitAsync(TimeSpan.FromSeconds(1), time, Ct);
+            if (!next.IsCompleted)
+            {
+                time.Advance(TimeSpan.FromSeconds(1));
+            }
+
+            if (!await next)
+            {
+                break;
+            }
+
+            extra++;
+        }
+
+        Assert.InRange(extra, 0, 1);
     }
 
     [Fact]
