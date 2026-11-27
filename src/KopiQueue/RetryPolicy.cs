@@ -64,3 +64,48 @@ public sealed class DefaultRetryPolicy : IRetryPolicy
         return seconds >= MaxDelay.TotalSeconds ? MaxDelay : TimeSpan.FromSeconds(seconds);
     }
 }
+
+/// <summary>
+/// When a job runs again after an attempt that did not succeed (design §5.4): the worker's <c>NextRetry</c> delay, else
+/// the client's policy. A policy that throws, or a time before now, falls back to <see cref="DefaultRetryPolicy"/>, as in
+/// River. Shared by the executor and the rescuer, so a failed and a stuck attempt are retried by the same rules.
+/// </summary>
+internal static class RetrySchedule
+{
+    /// <summary>The time to run <paramref name="job"/> again.</summary>
+    /// <param name="job">The job, with the attempt that did not succeed; its errors do not include that attempt's yet.</param>
+    /// <param name="workerDelay">The worker's delay, or <c>null</c> to ask <paramref name="policy"/>.</param>
+    /// <param name="policy">The client's retry policy.</param>
+    /// <param name="now">The current time.</param>
+    /// <param name="onPolicyFailed">Called when the policy throws.</param>
+    /// <param name="onInThePast">Called when the time was before <paramref name="now"/> and the default policy is used.</param>
+    public static DateTimeOffset Next(
+        JobRow job,
+        TimeSpan? workerDelay,
+        IRetryPolicy policy,
+        DateTimeOffset now,
+        Action<Exception>? onPolicyFailed = null,
+        Action? onInThePast = null)
+    {
+        DateTimeOffset at;
+        try
+        {
+            at = workerDelay is { } delay ? now + delay : policy.NextRetry(job, now);
+        }
+#pragma warning disable CA1031 // A retry policy that throws must not lose the outcome.
+        catch (Exception e)
+#pragma warning restore CA1031
+        {
+            onPolicyFailed?.Invoke(e);
+            at = DateTimeOffset.MinValue;
+        }
+
+        if (at < now)
+        {
+            onInThePast?.Invoke();
+            at = DefaultRetryPolicy.Instance.NextRetry(job, now);
+        }
+
+        return at;
+    }
+}

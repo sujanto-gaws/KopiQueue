@@ -759,6 +759,20 @@ This spec is for the contributor who writes the rescuer (#36).
 - **Unknown kinds.** River's docs say an unknown kind "can be discarded by the leader". KopiQueue's rolling-deploy behaviour is the opposite: a job whose kind this client has no worker for is retried until a client that has the worker takes it (`NpgsqlClientIntegrationTests`, task 2.9). The spec follows KopiQueue: rescue it with the client's defaults, and don't discard it for being unknown. Confirm, or choose River's documented behaviour.
 - **The default threshold.** River's docs: "one hour, or JobTimeout plus one hour in case JobTimeout has been configured to be larger than one hour". KopiQueue's §7: `JobTimeout` + 1 h. With the default 1 min `JobTimeout`, that's 1 h 1 min instead of 1 h. Either keep KopiQueue's simpler rule, or match River's.
 
+**Implemented** (task 3.4, #36), from this spec only:
+- `Execution/Rescuer` (`rescuer`, every minute, batches of 1,000) runs on the leader beside the scheduler and the queue cleaner.
+- **Driver operations:**
+  - `JobListStuckAsync(JobListStuckParams { StuckAfter, Max })` returns the candidates and the database's now, so every later age and retry time is judged by the database's clock.
+  - `JobRescueManyAsync(JobRescueParams[] { Id, AttemptedAt, State, ScheduledAt, Error })` returns the changed rows. The driver sets a discarded job's `finalized_at` to the database's now, so it is not a parameter.
+  - PostgreSQL: `job_list_stuck.sql` and `job_rescue_many.sql`. The rescue also skips rows another transaction holds (for example a completion in flight), and the next batch tries them again.
+- **Retry rules:** shared with the executor (`RetrySchedule`), so a stuck attempt and a failed one are retried alike.
+- **Error message:** "The job was still running {threshold} after this attempt started, so the rescuer took it for stuck (its client may have stopped or crashed) and rescued it."
+- **Open questions:** both defaults are followed.
+  - Unknown kinds are rescued with the client's defaults, not discarded.
+  - The default threshold is `JobTimeout` + 1 h. With an infinite `JobTimeout` it is 1 h, since there is nothing to add to.
+- **Option:** `KopiClientOptions`/`KopiQueueOptions.RescueStuckJobsAfter` (`null` for that default) must be greater than `JobTimeout`. With an infinite `JobTimeout`, any positive value is accepted.
+- **Known limit:** candidates are listed oldest first, at most 1,000. Running jobs older than the threshold whose own timeout is longer (or infinite) stay candidates, so more than 1,000 of them would hide newer stuck jobs from the batch.
+
 #### Job cleaner: behaviour spec (plan task 3.5, FR-MNT-04)
 
 This spec is for the contributor who writes the job cleaner (the rest of #37; the queue cleaner is done, #121).
@@ -1053,7 +1067,7 @@ The commit interceptor described next needs the LocalWaker, so it arrives with t
 | `FetchCooldown` | 100 ms | |
 | `JobTimeout` | 1 min | `Timeout.InfiniteTimeSpan` allowed |
 | `MaxAttempts` | 25 | |
-| `RescueStuckJobsAfter` | JobTimeout + 1 h | |
+| `RescueStuckJobsAfter` | JobTimeout + 1 h (1 h when `JobTimeout` is infinite) | Rescuer (task 3.4, §5.7). Greater than `JobTimeout`; a worker's longer timeout wins; no timeout means no rescue by age. Also an upper bound on how long a job may run (at-least-once) |
 | `CompletedJobRetention` / `Cancelled` / `Discarded` | 24 h / 24 h / 7 d | `null` = never delete |
 | `QueueRetention` | 24 h | Queue cleaner (task 3.5): how long a queue row is kept after no client has worked the queue. At least 5 min, since clients mark their queues worked every minute (§3.8). `null` = never delete |
 | `ElectInterval` / `LeaderTtl` | 5 s / 15 s | `LeaderTtl` at least 2 × `ElectInterval` (task 3.1, §5.5) |

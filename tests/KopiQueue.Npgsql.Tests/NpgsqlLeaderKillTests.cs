@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using KopiQueue.Drivers;
 using KopiQueue.Migrations;
 using KopiQueue.TestInfrastructure;
 using Npgsql;
@@ -9,8 +10,9 @@ namespace KopiQueue.Npgsql.Tests;
 /// M3's exit criterion "a 3-node cluster survives killing the leader" (plan task 3.8: FR-MNT-01; design §5.5), with real
 /// processes: three <c>KopiQueue.TestNode</c> clients work one queue, the leader's process is killed outright, so it
 /// never resigns, and a survivor takes the lease once it expires, runs maintenance, and the cluster keeps working jobs.
-/// Each node uses a 500 ms elect interval and a 3 s lease. Rescuing jobs a killed node was running is the rescuer's
-/// part (task 3.4) and is not covered here.
+/// Each node uses a 500 ms elect interval and a 3 s lease, a 2 s job timeout and a 3 s <c>RescueStuckJobsAfter</c>.
+/// M3's exit criterion "stuck jobs are rescued" (task 3.4, FR-MNT-03, NFR-REL-02, UC-9) kills the node running a job,
+/// and a survivor rescues the job and completes it.
 /// </summary>
 public sealed class NpgsqlLeaderKillTests(PostgresFixture db) : IClassFixture<PostgresFixture>
 {
@@ -84,6 +86,84 @@ public sealed class NpgsqlLeaderKillTests(PostgresFixture db) : IClassFixture<Po
                 node.Dispose();
             }
         }
+    }
+
+    [Fact]
+    public async Task A_job_left_running_by_a_killed_node_is_rescued_by_the_new_leader_and_completed_by_a_survivor()
+    {
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var (driver, schema) = await MigratedAsync(ds);
+        var inserter = new KopiClient(driver);
+        var executor = ((IKopiDriver)driver).GetExecutor();
+
+        var nodes = new Dictionary<string, Node>(StringComparer.Ordinal);
+        try
+        {
+            // node-a starts alone, so it leads and is the only node that can fetch the job.
+            nodes["node-a"] = Node.Start(db.ConnectionString, schema, "node-a");
+            await nodes["node-a"].WaitReadyAsync(TimeSpan.FromSeconds(30));
+            await WaitForLeaderAsync(ds, schema, l => l == "node-a", TimeSpan.FromSeconds(10));
+            var job = (await inserter.InsertAsync(new HangArgs(), new InsertOptions { Queue = "node" }, Ct)).Job;
+            await WaitUntilAsync(
+                async () => await RunningOnAsync(ds, schema, job.Id) == "node-a",
+                TimeSpan.FromSeconds(10),
+                "node-a did not start the job");
+
+            foreach (var id in new[] { "node-b", "node-c" })
+            {
+                nodes[id] = Node.Start(db.ConnectionString, schema, id);
+                await nodes[id].WaitReadyAsync(TimeSpan.FromSeconds(30));
+            }
+
+            // Once the job is older than the 3 s threshold, kill the node running it: the job stays running in the table.
+            await WaitUntilAsync(async () => await AttemptAgeAsync(ds, schema, job.Id) > TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(10), "The job did not age");
+            nodes["node-a"].Kill();
+            var survivors = new HashSet<string>(["node-b", "node-c"], StringComparer.Ordinal);
+
+            // A survivor takes the lease once it expires, rescues the job at once, and a survivor completes it.
+            await WaitUntilAsync(
+                async () => (await executor.JobGetByIdAsync(job.Id, Ct))!.State == JobState.Completed,
+                TimeSpan.FromSeconds(25),
+                "The stuck job was not rescued and completed");
+
+            var done = (await executor.JobGetByIdAsync(job.Id, Ct))!;
+            Assert.Equal(2, done.Attempt); // the stuck attempt counted
+            Assert.Equal("node-a", done.AttemptedBy[0]);
+            Assert.Contains(done.AttemptedBy[^1], survivors);
+            var error = Assert.Single(done.Errors);
+            Assert.Equal((1, (string?)null), (error.Attempt, error.Trace));
+            Assert.StartsWith("The job was still running 00:00:03 after this attempt started", error.Error, StringComparison.Ordinal);
+            Assert.Contains((await LeaderAsync(ds, schema))!, survivors);
+
+            foreach (var id in survivors)
+            {
+                Assert.Equal(0, await nodes[id].StopAsync(TimeSpan.FromSeconds(30)));
+            }
+        }
+        finally
+        {
+            foreach (var node in nodes.Values)
+            {
+                node.Dispose();
+            }
+        }
+    }
+
+    /// <summary>The client running job <paramref name="id"/>, or <c>null</c> if it is not running.</summary>
+    private static async Task<string?> RunningOnAsync(NpgsqlDataSource ds, string schema, long id)
+    {
+        await using var cmd = ds.CreateCommand($"SELECT attempted_by[cardinality(attempted_by)] FROM {schema}.river_job WHERE id = $1 AND state = 'running'");
+        cmd.Parameters.Add(new() { Value = id });
+        return await cmd.ExecuteScalarAsync(Ct) as string;
+    }
+
+    /// <summary>How long ago, by the database's clock, job <paramref name="id"/>'s attempt started.</summary>
+    private static async Task<TimeSpan> AttemptAgeAsync(NpgsqlDataSource ds, string schema, long id)
+    {
+        await using var cmd = ds.CreateCommand($"SELECT now() - attempted_at FROM {schema}.river_job WHERE id = $1");
+        cmd.Parameters.Add(new() { Value = id });
+        return (TimeSpan)(await cmd.ExecuteScalarAsync(Ct))!;
     }
 
     /// <summary>Inserts jobs <paramref name="first"/>.. into the nodes' queue and waits until all are completed.</summary>
@@ -176,6 +256,10 @@ public sealed class NpgsqlLeaderKillTests(PostgresFixture db) : IClassFixture<Po
     /// <summary>The args <c>KopiQueue.TestNode</c> works; the kind must match its declaration.</summary>
     [JobKind("node_work")]
     public sealed record NodeArgs(int N) : IJobArgs;
+
+    /// <summary>The args of <c>KopiQueue.TestNode</c>'s worker that hangs in its first attempt.</summary>
+    [JobKind("node_hang")]
+    public sealed record HangArgs : IJobArgs;
 
     /// <summary>One <c>KopiQueue.TestNode</c> process.</summary>
     private sealed class Node : IDisposable

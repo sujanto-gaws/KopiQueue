@@ -64,5 +64,6 @@ internal static class KopiQueueClientFactory
         LeaderTtl = options.LeaderTtl,
         QueueRetention = options.QueueRetention,
         SchedulerInterval = options.SchedulerInterval,
+        RescueStuckJobsAfter = options.RescueStuckJobsAfter,
     };
 }

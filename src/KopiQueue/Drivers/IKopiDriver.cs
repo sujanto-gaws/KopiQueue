@@ -123,6 +123,31 @@ public interface IKopiExecutor
     Task<IReadOnlyList<JobScheduleResult>> JobScheduleAsync(JobScheduleParams parameters, CancellationToken cancellationToken);
 
     /// <summary>
+    /// The rescuer's candidates (design §5.7, FR-MNT-03): up to <see cref="JobListStuckParams.Max"/> jobs that are
+    /// <see cref="JobState.Running"/> and whose <see cref="JobRow.AttemptedAt"/> is more than
+    /// <see cref="JobListStuckParams.StuckAfter"/> before the database's now, oldest attempt first. Nothing is locked or
+    /// changed.
+    /// </summary>
+    /// <returns>The candidates, and the database's now that they were judged by.</returns>
+    Task<JobListStuckResult> JobListStuckAsync(JobListStuckParams parameters, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Rescues stuck jobs in one statement (design §5.7, FR-MNT-03, NFR-REL-02). A job changes only if it is still
+    /// <see cref="JobState.Running"/> with the <see cref="JobRow.AttemptedAt"/> the rescuer read
+    /// (<see cref="JobRescueParams.AttemptedAt"/>), so a job that finished or was fetched again since is left alone; a job
+    /// another transaction holds is skipped, never waited for. A changed job gets its new state, its
+    /// <see cref="JobRescueParams.ScheduledAt"/> if given, and <see cref="JobRescueParams.Error"/> appended to its errors;
+    /// a <see cref="JobState.Discarded"/> one is finalised at the database's now. Its attempt is kept.
+    /// </summary>
+    /// <remarks>
+    /// On a driver with <see cref="DriverCapabilities.ListenNotify"/>, each queue that got an
+    /// <see cref="JobState.Available"/> job is notified once, in the same transaction, so only on commit (design §4.3).
+    /// </remarks>
+    /// <returns>The jobs that changed, as stored afterwards, in ID order.</returns>
+    /// <exception cref="ArgumentException">A rescue sets a state other than available, retryable or discarded.</exception>
+    Task<IReadOnlyList<JobRow>> JobRescueManyAsync(IReadOnlyList<JobRescueParams> jobs, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Tries to win the leader lease (design §5.5, FR-MNT-01): takes it when nobody holds it, when its holder's lease has
     /// expired by the database's clock, or when <see cref="LeaderElectParams.LeaderId"/> already holds it, in which case
     /// the lease is extended and its election time kept. A won lease expires <see cref="LeaderElectParams.Ttl"/> after the
@@ -292,6 +317,46 @@ public sealed class JobScheduleParams
 /// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
 [Experimental(DiagnosticIds.ExperimentalDriver)]
 public sealed record JobScheduleResult(long Id, string Queue, JobState State);
+
+/// <summary>Which jobs <see cref="IKopiExecutor.JobListStuckAsync"/> lists.</summary>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed class JobListStuckParams
+{
+    /// <summary>How long ago, by the database's clock, a running job's attempt must have started. Positive.</summary>
+    public required TimeSpan StuckAfter { get; init; }
+
+    /// <summary>The most jobs to list: at least 1.</summary>
+    public required int Max { get; init; }
+}
+
+/// <summary>What <see cref="IKopiExecutor.JobListStuckAsync"/> found.</summary>
+/// <param name="Now">The database's now, by which the jobs were judged.</param>
+/// <param name="Jobs">The candidates, oldest attempt first.</param>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed record JobListStuckResult(DateTimeOffset Now, IReadOnlyList<JobRow> Jobs);
+
+/// <summary>One rescue for <see cref="IKopiExecutor.JobRescueManyAsync"/>.</summary>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed class JobRescueParams
+{
+    /// <summary>The job.</summary>
+    public required long Id { get; init; }
+
+    /// <summary>The job's <see cref="JobRow.AttemptedAt"/> as the rescuer read it; the job changes only if it still has it.</summary>
+    public required DateTimeOffset AttemptedAt { get; init; }
+
+    /// <summary>The new state: <see cref="JobState.Available"/>, <see cref="JobState.Retryable"/> or <see cref="JobState.Discarded"/>.</summary>
+    public required JobState State { get; init; }
+
+    /// <summary>When the job is due again, for a job that is retried; <c>null</c> leaves it as it is.</summary>
+    public DateTimeOffset? ScheduledAt { get; init; }
+
+    /// <summary>The error to append, saying the job was rescued.</summary>
+    public required AttemptError Error { get; init; }
+}
 
 /// <summary>A client asking for the leader lease (<see cref="IKopiExecutor.LeaderAttemptElectAsync"/>, <see cref="IKopiExecutor.LeaderAttemptReelectAsync"/>).</summary>
 /// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
