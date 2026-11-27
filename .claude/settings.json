@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Read(~/go/pkg/mod/github.com/riverqueue/**)",
+      "Read(~/go/pkg/mod/cache/download/github.com/riverqueue/**)",
+      "Read(//c/Users/*/go/pkg/mod/github.com/riverqueue/**)",
+      "Read(//c/Users/*/go/pkg/mod/cache/download/github.com/riverqueue/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-river-source.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
