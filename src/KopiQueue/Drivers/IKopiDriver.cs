@@ -160,6 +160,25 @@ public interface IKopiExecutor
     Task<IReadOnlyList<long>> JobDeleteFinalizedAsync(JobDeleteFinalizedParams parameters, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Cancels job <paramref name="id"/> from outside (design §5.8, FR-ERR-06), in one statement. A job that has not
+    /// started (<see cref="JobState.Available"/>, <see cref="JobState.Scheduled"/>, <see cref="JobState.Retryable"/>,
+    /// <see cref="JobState.Pending"/>) becomes <see cref="JobState.Cancelled"/> at once, finalised at the database's now,
+    /// with no error appended. A <see cref="JobState.Running"/> job stays running: <c>metadata.cancel_attempted_at</c> is
+    /// set to the database's now, and the control notification <c>{"action": "cancel", "job_id": …, "queue": …}</c> is
+    /// sent, delivered when the transaction commits; how it ends is then up to its worker and
+    /// <see cref="JobSetStateIfRunningManyAsync"/>'s guard. A finalised job is left as it is.
+    /// </summary>
+    /// <returns>The job as it is after the call, or <c>null</c> if no job has that ID.</returns>
+    Task<JobRow?> JobCancelAsync(long id, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// For external cancel without notifications (design §5.8, FR-DB-05): which of <paramref name="ids"/> are still
+    /// <see cref="JobState.Running"/> and carry <c>metadata.cancel_attempted_at</c>. Takes no locks.
+    /// </summary>
+    /// <returns>Their IDs, in ascending order.</returns>
+    Task<IReadOnlyList<long>> JobListCancelAttemptedAsync(IReadOnlyList<long> ids, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Tries to win the leader lease (design §5.5, FR-MNT-01): takes it when nobody holds it, when its holder's lease has
     /// expired by the database's clock, or when <see cref="LeaderElectParams.LeaderId"/> already holds it, in which case
     /// the lease is extended and its election time kept. A won lease expires <see cref="LeaderElectParams.Ttl"/> after the

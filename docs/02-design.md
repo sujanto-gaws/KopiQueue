@@ -120,7 +120,7 @@ It stops them in reverse order. The completer is stopped last among the executio
 
 - **Driver contract:** `IKopiExecutor.JobGetAvailableAsync(JobGetAvailableParams)` locks and starts up to `Max` due, available jobs of one queue for one client, in fetch order, skipping rows other transactions hold (§5.1). Each returned row is `running`, one attempt further, and records the client in `attempted_by`, which keeps the newest `MaxAttemptedBy` (default 100, as River) entries.
 - **Producer** (internal, one per configured queue): one loop, woken by an `Insert` notification naming its queue, a notifier resync, the client's LocalWaker, a freed slot while the queue is full, or the poll interval (default 1 s) passing without any of these. A wake-up is coalescing: any number of signals before a fetch begins are answered by that one fetch. Fetches are at least `FetchCooldown` (default 100 ms) apart. A fetch asks for the free slots, capped at `FetchBatchMax` (default 1,000) and the driver's `MaxRowsPerStatement`; a full batch asks for another fetch at once. The first fetch happens on start.
-- **Slots:** each fetched job runs through the run function (the executor, task 2.4) on its own task, with a token that a hard stop cancels, and holds its slot until the function returns. The producer never runs more than `MaxWorkers` at once (FR-EXE-04).
+- **Slots:** each fetched job runs through the run function (the executor, task 2.4) on its own task, with a token that a hard stop cancels and a token of its own that an external cancel cancels (§5.8), and holds its slot until the function returns. The producer never runs more than `MaxWorkers` at once (FR-EXE-04).
 - **Failures:** a failed fetch is logged and tried again at the next wake-up or poll; the loop never ends on an error. A run function that throws is logged and its slot freed.
 - **Stop** (§5.9 steps 1–3 for one queue): unsubscribe and stop fetching; a fetch in progress completes, since the database already marked its jobs running. Then wait for the running jobs (soft stop). If the stop token fires first, cancel every job's token and wait at most `HardStopGrace` (default 5 s); jobs still running stay `running` and are rescued later.
 
@@ -363,7 +363,7 @@ On SQL Server none of these channels exist. Each one is replaced as follows (FR-
 | PostgreSQL channel | SQL Server replacement |
 |--------------------|------------------------|
 | `river_insert` | LocalWaker for inserts from the same process, plus the producer poll (`FetchPollInterval`, default 1 s, minimum 100 ms) |
-| `river_control` cancel | Producers poll `cancel_attempted_at` for their running job ids on every fetch cycle (design §5.8 step 4) |
+| `river_control` cancel | Each client asks which of its running jobs carry `cancel_attempted_at` every `FetchPollInterval` while it has no connected notifier (design §5.8 step 4) |
 | `river_control` pause/resume | QueueMaintainer polls `kopi_queue.paused_at` (default every 1 s on SQL Server) |
 | `river_leadership` resigned | Electors retry at the normal elect interval. A graceful resign deletes the row, so the next attempt wins at once |
 
@@ -899,6 +899,20 @@ This spec is for the contributor who writes external cancel (#39).
 **Open questions for the owner**
 - **An error for an external cancel?** River's docs list the errors stored for an in-worker cancel, but say nothing for an external one. The spec appends nothing for a job cancelled before it started; a running job's error is the worker's exception. Alternatively, KopiQueue could append a short "cancelled by JobCancelAsync" entry in both cases, so `errors` shows why the job ended.
 - **Already-finalized jobs:** the spec returns the row without error, following River's "no changes are made". If callers should be able to tell whether the cancel took effect, the result could carry a flag instead.
+
+**Implemented** (task 3.7, #39), from this spec only:
+- **API:** `IKopiClient.JobCancelAsync(id)` and `JobCancelAsync(id, transaction)` return the job's row after the call. An unknown id throws `KopiQueueNotFoundException`.
+  - The pooled call also cancels the job's token at once if this client runs it, as a pause applies here at once. It doesn't wait for its own notification or poll.
+- **Driver operations** (experimental, `KQ0001`):
+  - `JobCancelAsync(id)`, PostgreSQL `job_cancel.sql`: one statement does (1)–(3) and, for a running job, sends the control notification with the same statement, so it is delivered on commit. It returns `null` for an unknown id.
+  - `JobListCancelAttemptedAsync(ids)`, PostgreSQL `job_list_cancel_attempted.sql`: which of the ids are still running with `cancel_attempted_at`.
+- **Telling the worker:** the `QueueMaintainer` handles `cancel` beside `pause` and `resume`, and passes it to the producer of the named queue. `Producer.CancelJob(id)` cancels that job's own token, which is separate from the hard stop's.
+  - Without a connected notifier, the maintainer's poll (every `FetchPollInterval`, and once after a reconnect) also asks `JobListCancelAttemptedAsync` about this client's running jobs, a statement per `MaxRowsPerStatement` ids.
+- **Reading the outcome:** `JobExecutor.ExecuteAsync(job, hardStop, cancel)` checks the hard stop first, which still interrupts. Then, once `cancel` is signalled, any exception the worker throws (a timeout included) records `cancelled` with that exception as the error. A worker that returns completes the job.
+  - `JobControl.Cancel` and `JobControl.Snooze` keep their own handling, and the completer's guard (already in `JobSetStateIfRunningMany` since task 2.6) turns a retry, a snooze or an interruption on a flagged row into `cancelled`.
+- **Open questions:** both defaults are followed.
+  - No error is appended for a job cancelled before it started. A running job's error is the worker's exception.
+  - A finalised job is returned unchanged, without error and without a flag.
 
 ### 5.9 Graceful shutdown
 

@@ -77,6 +77,40 @@ public interface IKopiClient
     /// <exception cref="KopiQueueConfigurationException">An args type has no valid <see cref="JobKindAttribute"/>.</exception>
     Task<long> InsertManyFastAsync(IEnumerable<InsertRequest> jobs, DbTransaction? transaction = null, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Cancels a job (FR-ERR-06, FR-ADM-05, design §5.8), on a connection the client takes from its pool.
+    /// <list type="bullet">
+    /// <item>A job that has not started (available, scheduled, retryable, pending) is cancelled at once and never runs.</item>
+    /// <item>
+    /// A running job is asked to stop: the client running it cancels the worker's <see cref="CancellationToken"/>, at once
+    /// through a notification or within its <see cref="KopiClientOptions.FetchPollInterval"/> without notifications
+    /// (FR-DB-05). If the worker then throws, the cancelled token's <see cref="OperationCanceledException"/> included, the
+    /// job is cancelled for good, whatever attempts are left, with that exception as its error; if it returns, the job is
+    /// completed. An attempt that ended before the request arrived keeps its outcome, except that a retry or a snooze
+    /// becomes a cancel. A worker that ignores its token runs on until it finishes or is rescued.
+    /// </item>
+    /// <item>A finalised job (completed, cancelled, discarded) is left as it is, without error.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="id">The job's ID.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The job as it is after the call: running is still <see cref="JobState.Running"/>.</returns>
+    /// <exception cref="KopiQueueNotFoundException">No job has that ID.</exception>
+    Task<JobRow> JobCancelAsync(long id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Cancels a job inside the caller's transaction (FR-ADM-05), as <see cref="JobCancelAsync(long, CancellationToken)"/>
+    /// does: the change commits or rolls back with the transaction, and the client running the job learns of it only if
+    /// it commits. The caller keeps ownership of the transaction.
+    /// </summary>
+    /// <param name="id">The job's ID.</param>
+    /// <param name="transaction">The caller's transaction, of the configured driver's database client.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The job as it is after the call, visible to others once the transaction commits.</returns>
+    /// <exception cref="KopiQueueNotFoundException">No job has that ID.</exception>
+    /// <exception cref="ArgumentException"><paramref name="transaction"/> belongs to another database client.</exception>
+    Task<JobRow> JobCancelAsync(long id, DbTransaction transaction, CancellationToken cancellationToken = default);
+
     /// <summary>Reads a queue (FR-ADM-04).</summary>
     /// <param name="name">The queue.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
@@ -452,6 +486,23 @@ public sealed partial class KopiClient : IKopiClient
         return count;
     }
 
+#pragma warning disable RS0026 // See IKopiClient.
+    /// <inheritdoc/>
+    public async Task<JobRow> JobCancelAsync(long id, CancellationToken cancellationToken = default)
+    {
+        var job = await CancelAsync(_driver.GetExecutor(), id, cancellationToken).ConfigureAwait(false);
+        QueueMaintainer?.CancelRunning(job); // here at once, without waiting for the notification or the poll
+        return job;
+    }
+
+    /// <inheritdoc/>
+    public Task<JobRow> JobCancelAsync(long id, DbTransaction transaction, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(transaction);
+        return CancelAsync(_driver.GetExecutor(transaction), id, cancellationToken);
+    }
+#pragma warning restore RS0026
+
     /// <inheritdoc/>
     public Task<QueueRow?> QueueGetAsync(string name, CancellationToken cancellationToken = default)
     {
@@ -512,6 +563,10 @@ public sealed partial class KopiClient : IKopiClient
 
         queues?.Apply(name, paused, locally: false); // here at once, without waiting for the notification or the poll
     }
+
+    private static async Task<JobRow> CancelAsync(IKopiExecutor executor, long id, CancellationToken cancellationToken) =>
+        await executor.JobCancelAsync(id, cancellationToken).ConfigureAwait(false)
+        ?? throw new KopiQueueNotFoundException($"Job {id} does not exist.");
 
     private void WakeIfPooled(DbTransaction? transaction, IEnumerable<JobInsertParams> inserts)
     {

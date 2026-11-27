@@ -593,3 +593,9 @@ KopiQueue.KopiQueueOptions.DiscardedJobRetention.set -> void
 [KQ0001]KopiQueue.Drivers.JobDeleteFinalizedParams.JobDeleteFinalizedParams() -> void
 [KQ0001]KopiQueue.Drivers.JobDeleteFinalizedParams.Max.get -> int
 [KQ0001]KopiQueue.Drivers.JobDeleteFinalizedParams.Max.init -> void
+KopiQueue.IKopiClient.JobCancelAsync(long id, System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow!>!
+KopiQueue.IKopiClient.JobCancelAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow!>!
+KopiQueue.KopiClient.JobCancelAsync(long id, System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow!>!
+KopiQueue.KopiClient.JobCancelAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow!>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobCancelAsync(long id, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<KopiQueue.JobRow?>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobListCancelAttemptedAsync(System.Collections.Generic.IReadOnlyList<long>! ids, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<long>!>!

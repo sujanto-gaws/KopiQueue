@@ -175,6 +175,94 @@ public sealed class JobExecutorTests
     }
 
     [Fact]
+    public async Task After_an_external_cancel_a_worker_that_throws_cancels_the_job_whatever_attempts_are_left()
+    {
+        var (completer, time) = (new RecordingCompleter(), new FakeTimeProvider());
+        var executor = Executor(new WorkerRegistry().Add(new LambdaWorker<PingArgs>((_, ct) => Task.Delay(Timeout.Infinite, ct))), completer, time);
+        using var cancel = new CancellationTokenSource();
+
+        var run = executor.ExecuteAsync(Row("ping", attempt: 1, maxAttempts: 25), Ct, cancel.Token);
+        await cancel.CancelAsync();
+        await run.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        var completion = Assert.Single(completer.Completions);
+        Assert.Equal((JobState.Cancelled, time.GetUtcNow(), (int?)null), (completion.State, completion.FinalizedAt!.Value, completion.Attempt));
+        Assert.Equal(1, completion.Error!.Attempt);
+        Assert.Contains(nameof(TaskCanceledException), completion.Error.Trace, StringComparison.Ordinal); // the worker's own exception
+    }
+
+    [Fact]
+    public async Task After_an_external_cancel_any_error_of_the_worker_cancels_the_job_with_that_error()
+    {
+        var (completer, time) = (new RecordingCompleter(), new FakeTimeProvider());
+        var executor = Executor(new WorkerRegistry().Add(new LambdaWorker<PingArgs>(async (_, ct) =>
+        {
+            await Task.Delay(Timeout.Infinite, ct).ContinueWith(_ => { }, TaskScheduler.Default);
+            throw new InvalidOperationException("the cleanup failed");
+        })), completer, time);
+        using var cancel = new CancellationTokenSource();
+
+        var run = executor.ExecuteAsync(Row("ping", attempt: 1), Ct, cancel.Token);
+        await cancel.CancelAsync();
+        await run.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        var completion = Assert.Single(completer.Completions);
+        Assert.Equal((JobState.Cancelled, "the cleanup failed"), (completion.State, completion.Error!.Error));
+    }
+
+    [Fact]
+    public async Task After_an_external_cancel_a_worker_that_returns_completes_the_job()
+    {
+        var (completer, time) = (new RecordingCompleter(), new FakeTimeProvider());
+        var executor = Executor(new WorkerRegistry().Add(new LambdaWorker<PingArgs>(async (_, ct) =>
+            await Task.Delay(Timeout.Infinite, ct).ContinueWith(_ => { }, TaskScheduler.Default))), completer, time);
+        using var cancel = new CancellationTokenSource();
+
+        var run = executor.ExecuteAsync(Row("ping"), Ct, cancel.Token);
+        await cancel.CancelAsync();
+        await run.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        var completion = Assert.Single(completer.Completions);
+        Assert.Equal(JobState.Completed, completion.State);
+        Assert.Null(completion.Error);
+    }
+
+    [Fact]
+    public async Task A_hard_stop_still_interrupts_a_job_that_was_also_cancelled_and_the_completer_settles_it()
+    {
+        var (completer, time) = (new RecordingCompleter(), new FakeTimeProvider());
+        var executor = Executor(new WorkerRegistry().Add(new LambdaWorker<PingArgs>((_, ct) => Task.Delay(Timeout.Infinite, ct))), completer, time);
+        using var hardStop = new CancellationTokenSource();
+        using var cancel = new CancellationTokenSource();
+
+        await cancel.CancelAsync();
+        await hardStop.CancelAsync();
+        await executor.ExecuteAsync(Row("ping", attempt: 2), hardStop.Token, cancel.Token).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        // Available without using the attempt; on a row with cancel_attempted_at the completer's guard writes it as cancelled.
+        var completion = Assert.Single(completer.Completions);
+        Assert.Equal((JobState.Available, (int?)1), (completion.State, completion.Attempt));
+    }
+
+    [Fact]
+    public async Task A_timeout_is_still_an_error_when_the_job_was_not_cancelled()
+    {
+        var (completer, time) = (new RecordingCompleter(), new FakeTimeProvider());
+        var executor = Executor(
+            new WorkerRegistry().Add(new LambdaWorker<PingArgs>((_, ct) => Task.Delay(Timeout.Infinite, ct))), completer, time, timeout: TimeSpan.FromSeconds(30));
+        using var cancel = new CancellationTokenSource();
+
+        var run = executor.ExecuteAsync(Row("ping"), Ct, cancel.Token);
+        await Task.Delay(50, Ct);
+        time.Advance(TimeSpan.FromSeconds(30));
+        await run.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        var completion = Assert.Single(completer.Completions);
+        Assert.Equal(JobState.Available, completion.State); // retried: the default policy's first delay is within the scheduler interval
+        Assert.Equal("The job did not finish within its timeout of 00:00:30.", completion.Error!.Error);
+    }
+
+    [Fact]
     public async Task A_hard_stop_interrupts_the_job_which_runs_again_without_using_an_attempt()
     {
         var (completer, time) = (new RecordingCompleter(), new FakeTimeProvider());
