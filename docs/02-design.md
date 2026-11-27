@@ -618,18 +618,18 @@ Implemented in plan task 3.1 (`Execution/Elector`, driver operations `LeaderAtte
   - `&args=<canonical args>` (`ByArgs`);
   - `&period=<floor(now / period) * period as RFC 3339 UTC, seconds, "Z">` (`ByPeriod`);
   - `&queue=<queue>` (`ByQueue`).
-- **Canonical args:** the top-level members of the serialised args, restricted to properties marked `[UniqueKey]` if the type has any. They are sorted bytewise by name, and each value's JSON text is copied **verbatim**; nested objects are not re-sorted. The state set and the period length are **not** part of the key.
-- Because values are copied verbatim, cross-language deduplication with Go producers needs Go-compatible JSON escaping (DQ-8).
+- **Canonical args:** the top-level members of the serialised args, restricted to properties marked `[UniqueKey]` if the type has any. They are sorted bytewise by name; nested objects are not re-sorted. The state set and the period length are **not** part of the key.
+- **Values** are written again as Go's `encoding/json` writes them (DQ-8, closed), so Go and .NET producers of the same args get the same key. `UniqueArgsEncoding.Verbatim` copies each value's JSON text as serialised instead.
 - `unique_states` is a bitmask of the states in which the key "occupies" the slot. The partial unique index enforces it only while the row's current state is in the mask. The bit order in `bit(8)` text, left to right, is `scheduled, running, retryable, pending, discarded, completed, cancelled, available`, so as an integer available = 1 and scheduled = 128, exactly as in the SQL Server `tinyint`. The default is `11110101`.
 - Insert:
 
 ```sql
-INSERT INTO river_job (...) VALUES (...)
+INSERT INTO river_job AS existing (...) SELECT ... FROM unnest(...)
 ON CONFLICT (unique_key)
   WHERE unique_key IS NOT NULL AND unique_states IS NOT NULL
         AND river_job_state_in_bitmask(unique_states, state)
-DO UPDATE SET kind = EXCLUDED.kind              -- no-op update, so RETURNING gives the existing row
-RETURNING *, (xmax <> 0) AS unique_skipped_as_duplicate;
+DO UPDATE SET kind = existing.kind              -- no-op update, so RETURNING gives the existing row
+RETURNING ..., NOT (xmax = 0) AS unique_skipped_as_duplicate, unique_key;
 ```
 
 - A job leaving the "occupied" states, for example to `discarded`, frees the slot automatically because the partial index no longer covers it.
@@ -644,6 +644,25 @@ RETURNING *, (xmax <> 0) AS unique_skipped_as_duplicate;
 - **`UniqueStates`:** the mask of a state set (`null` for the default `11110101`), FR-UNQ-04's check that available, pending, running and scheduled are included, and the `bit(8)` text for PostgreSQL.
 - **Acceptance:** `UniqueKeyTests` reproduces all 22 vectors of `spikes/RiverSchema/golden/river-v0.51.2-unique-keys.jsonl` with both encodings. The test project links that file instead of copying it.
 - **Not covered by the vectors:** Go writes U+0008 and U+000C as short escapes (`b`, `f` after a backslash) from Go 1.22 on, and so does `GoJson`. A Go producer built with an older Go would differ for strings that contain them.
+
+**Implemented** (task 4.2, #42): unique inserts, single and in bulk (FR-UNQ-02, -03, -05).
+- **Public API:**
+  - `InsertOptions.Unique` takes a `UniqueOptions` with `ByArgs`, `ByPeriod`, `ByQueue`, `ByState` and `ExcludeKind`.
+  - `[UniqueKey]` marks the args members that are part of the key.
+  - `KopiClientOptions.UniqueArgsEncoding` (and `KopiQueueOptions`) chooses the encoding; the default is `GoCompatible`.
+- **Options with nothing set enforce nothing**, as River's docs say. `ByState` alone makes the kind unique on its own.
+- **The client builds the key and states** while validating the insert, before any SQL. The period uses the client's clock, as River's docs say ("the current time is rounded down"). Errors name the option `Unique`, and the job in a batch.
+- **Marked members** are mapped to JSON names by the serialiser, through `IJobArgsSerializer.GetUniqueMemberNames`, and cached per type.
+  - `SystemTextJsonArgsSerializer` reads them from its `JsonTypeInfo`, so naming policies, `[JsonPropertyName]` and source-generated contexts all work.
+  - The default implementation, for custom serialisers, throws `NotSupportedException` for a type that marks members, rather than silently hashing all of them.
+- **PostgreSQL insert:** the batch statement above, one per batch.
+  - The no-op update keeps the existing kind (`existing.kind`, not `EXCLUDED.kind`): with `ExcludeKind`, a duplicate of another kind must not rename the job that holds the key.
+  - A key the batch repeats is sent once; the later jobs return the first one's row as skipped. Sending both would fail, because `ON CONFLICT DO UPDATE` cannot touch one row twice.
+  - Results are matched to the input by `unique_key` for unique jobs, and by ascending id for the others.
+- **The fast insert rejects unique jobs** with `NotSupportedException`: `COPY` cannot skip duplicates, and River's docs list unique options only for `Insert` and `InsertMany`.
+- **A second transaction inserting a held key waits** for the first: a commit makes it a duplicate, a rollback lets it insert. The conformance suite covers both.
+- **Acceptance:** `NpgsqlUniqueTests` stores the golden vectors' keys "field tags" and "all dims" through the client, dedupes against a row written as a River producer writes it, and stores one job from 16 concurrent clients (UC-4).
+- **Open question:** River's docs don't say from which instant periods are counted. KopiQueue counts from the Unix epoch, which matches the vectors' 15 min, 1 h and 24 h. Any period that divides a day gives the same windows from any midnight. A 7-day period, or a sub-second part, could start its windows elsewhere than River's.
 
 ### 5.7 Maintenance services (leader only)
 
@@ -977,7 +996,7 @@ public sealed class SendEmailWorker(IEmailSender sender, ILogger<SendEmailWorker
 
 - `JobKindRegistry.GetKind<TArgs>()` reads `[JobKind]` (not inherited) and caches it. A missing attribute or a kind outside 1–127 characters throws `KopiQueueConfigurationException`, naming the type. A failure is not cached, so a fixed type works without a restart.
 - A `JobKindRegistry` instance maps kinds back to args types for the client. Registering a second type with an existing kind throws `KopiQueueConfigurationException`. Kinds are compared ordinally, so `Send_Email` and `send_email` are different kinds.
-- `InsertOptions` has `Queue`, `Priority`, `ScheduledAt`, `MaxAttempts`, `Tags` and `Metadata` (a `JsonObject`). Unset options take `InsertDefaults`: queue `default`, priority 1, 25 attempts, scheduled now by the database's clock. `Unique` arrives with M4 (tasks 4.1–4.2), and args-level defaults with task 4.5.
+- `InsertOptions` has `Queue`, `Priority`, `ScheduledAt`, `MaxAttempts`, `Tags` and `Metadata` (a `JsonObject`). Unset options take `InsertDefaults`: queue `default`, priority 1, 25 attempts, scheduled now by the database's clock. `Unique` came with task 4.2 (§5.6), and args-level defaults come with task 4.5.
 - A `ScheduledAt` later than the client's clock inserts the job as `scheduled`; otherwise it is `available`.
 - Validation runs before any SQL. An invalid option throws `ArgumentException` naming the option:
 

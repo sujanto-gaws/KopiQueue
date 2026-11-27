@@ -68,12 +68,22 @@ internal static class JobValidation
     /// <param name="kind">The job's kind, already validated by <see cref="JobKindRegistry"/>.</param>
     /// <param name="argsJson">The serialised args.</param>
     /// <param name="options">The caller's options, or <c>null</c> for all defaults.</param>
-    /// <param name="now">The client's current time, used only to tell a future <see cref="InsertOptions.ScheduledAt"/>.</param>
+    /// <param name="now">
+    /// The client's current time: to tell a future <see cref="InsertOptions.ScheduledAt"/>, and the time whose period a
+    /// unique job falls in (<see cref="UniqueOptions.ByPeriod"/>).
+    /// </param>
     /// <exception cref="ArgumentException">An option is not valid. The message names it.</exception>
     /// <param name="subject">Prefixed to error messages, for example <c>"Job 3: "</c> in a batch.</param>
     /// <param name="paramName">The parameter named by an <see cref="ArgumentException"/>.</param>
+    /// <param name="unique">How to build a unique key; <c>null</c> for all members and the Go-compatible encoding.</param>
     public static JobInsertParams ToInsertParams(
-        string kind, string argsJson, InsertOptions? options, DateTimeOffset now, string subject = "", string paramName = "options")
+        string kind,
+        string argsJson,
+        InsertOptions? options,
+        DateTimeOffset now,
+        string subject = "",
+        string paramName = "options",
+        UniqueContext? unique = null)
     {
         ArgumentNullException.ThrowIfNull(kind);
         ArgumentNullException.ThrowIfNull(argsJson);
@@ -96,6 +106,24 @@ internal static class JobValidation
             Check(TagError(tag), nameof(InsertOptions.Tags), subject, paramName);
         }
 
+        byte[]? uniqueKey = null;
+        byte? uniqueStates = null;
+        if (options?.Unique is { IsEmpty: false } uniqueOptions)
+        {
+            try
+            {
+                uniqueStates = UniqueStates.ToBitmask(uniqueOptions.ByState);
+                var members = uniqueOptions.ByArgs ? unique?.Members() : null;
+                uniqueKey = UniqueKey.Compute(
+                    kind, argsJson, queue, now, uniqueOptions, members is { Count: > 0 } ? members : null,
+                    unique?.Encoding ?? UniqueArgsEncoding.GoCompatible);
+            }
+            catch (ArgumentException e)
+            {
+                Check(char.ToLowerInvariant(e.Message[0]) + e.Message[1..], nameof(InsertOptions.Unique), subject, paramName);
+            }
+        }
+
         return new JobInsertParams
         {
             Kind = kind,
@@ -107,8 +135,15 @@ internal static class JobValidation
             ScheduledAt = scheduledAt,
             MetadataJson = options?.Metadata?.ToJsonString() ?? "{}",
             Tags = [.. tags],
+            UniqueKey = uniqueKey,
+            UniqueStates = uniqueStates,
         };
     }
+
+    /// <summary>What building a unique key needs beyond the options.</summary>
+    /// <param name="Members">The JSON names of the args' members marked unique; empty when none are. Called only for <see cref="UniqueOptions.ByArgs"/>.</param>
+    /// <param name="Encoding">How arg values are written into the key.</param>
+    public sealed record UniqueContext(Func<IReadOnlySet<string>> Members, UniqueArgsEncoding Encoding);
 
     private static void Check(string? error, string option, string subject, string paramName)
     {

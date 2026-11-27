@@ -18,11 +18,19 @@ public sealed record LargeResizeArgs(int Width, string Label) : ResizeArgs(Width
 [JobKind("unlisted")]
 public sealed record UnlistedArgs(int N) : IJobArgs;
 
+[JobKind("sync_customer")]
+public sealed record SyncCustomerArgs(
+    [property: UniqueKey] long CustomerId,
+    [property: UniqueKey, JsonPropertyName("tenant")] string TenantName,
+    string RequestedBy) : IJobArgs;
+
 [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
 [JsonSerializable(typeof(SendEmailArgs))]
 [JsonSerializable(typeof(ResizeArgs))]
 [JsonSerializable(typeof(LargeResizeArgs))]
+[JsonSerializable(typeof(SyncCustomerArgs))]
 internal sealed partial class WebJsonContext : JsonSerializerContext;
 
 [JsonSerializable(typeof(SendEmailArgs))]
+[JsonSerializable(typeof(SyncCustomerArgs))]
 internal sealed partial class PlainJsonContext : JsonSerializerContext;

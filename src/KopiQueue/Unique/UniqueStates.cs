@@ -56,8 +56,7 @@ internal static class UniqueStates
         {
             var missing = string.Join(", ", FromBitmask((byte)(Required & ~mask)).Select(s => s.ToString().ToLowerInvariant()));
             throw new ArgumentException(
-                $"Unique states must include available, pending, running and scheduled; missing: {missing}.",
-                nameof(states));
+                $"Unique states must include available, pending, running and scheduled; missing: {missing}.");
         }
 
         return mask;

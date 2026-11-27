@@ -201,13 +201,18 @@ public sealed class NpgsqlDriverTests(PostgresFixture db) : IClassFixture<Postgr
     }
 
     [Fact]
-    public async Task Unique_jobs_and_comma_tags_are_rejected_before_reaching_the_database()
+    public async Task Bad_unique_fields_unique_fast_inserts_and_comma_tags_are_rejected_before_reaching_the_database()
     {
         await using var ds = NpgsqlDataSource.Create("Host=unused.invalid");
         var executor = ((IKopiDriver)new NpgsqlDriver(ds)).GetExecutor();
+        var unique = new JobInsertParams
+        {
+            Kind = "k", ArgsJson = "{}", Queue = "q", State = JobState.Available, Priority = 1, MaxAttempts = 1, UniqueKey = new byte[32], UniqueStates = 0b1111_0101,
+        };
 
-        await Assert.ThrowsAsync<NotSupportedException>(() => executor.JobInsertManyAsync(
+        await Assert.ThrowsAsync<ArgumentException>(() => executor.JobInsertManyAsync(
             [new JobInsertParams { Kind = "k", ArgsJson = "{}", Queue = "q", State = JobState.Available, Priority = 1, MaxAttempts = 1, UniqueKey = [1] }], Ct));
+        await Assert.ThrowsAsync<NotSupportedException>(() => executor.JobInsertFastAsync([unique], Ct));
         await Assert.ThrowsAsync<ArgumentException>(() => executor.JobInsertManyAsync(
             [new JobInsertParams { Kind = "k", ArgsJson = "{}", Queue = "q", State = JobState.Available, Priority = 1, MaxAttempts = 1, Tags = ["a,b"] }], Ct));
     }

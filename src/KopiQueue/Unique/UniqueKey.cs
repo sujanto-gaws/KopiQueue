@@ -5,38 +5,6 @@ using System.Text.Json;
 
 namespace KopiQueue;
 
-/// <summary>The dimensions of a unique job (design §5.6, FR-UNQ-01). Public with the unique insert (task 4.2).</summary>
-internal sealed class UniqueOptions
-{
-    /// <summary>Whether the args are part of the key: all top-level members, or only those marked unique.</summary>
-    public bool ByArgs { get; init; }
-
-    /// <summary>The time bucket the key is unique within, or <c>null</c> for none. Positive.</summary>
-    public TimeSpan? ByPeriod { get; init; }
-
-    /// <summary>Whether the queue is part of the key.</summary>
-    public bool ByQueue { get; init; }
-
-    /// <summary>The states in which the key occupies its slot, or <c>null</c> for the default (FR-UNQ-04). Not part of the key.</summary>
-    public IReadOnlyList<JobState>? ByState { get; init; }
-
-    /// <summary>Whether the kind is left out of the key, so jobs of different kinds can collide.</summary>
-    public bool ExcludeKind { get; init; }
-}
-
-/// <summary>How the values of the args are written into the key (DQ-8).</summary>
-internal enum UniqueArgsEncoding
-{
-    /// <summary>
-    /// Each value is written again as Go's <c>encoding/json</c> writes it, so the key does not depend on how the args
-    /// were serialised and a Go producer of the same args gets the same key (the default, DQ-8).
-    /// </summary>
-    GoCompatible,
-
-    /// <summary>Each value's JSON text is copied as it was serialised.</summary>
-    Verbatim,
-}
-
 /// <summary>
 /// Builds a job's unique key (design §5.6, FR-UNQ-01, FR-UNQ-06), shared by both drivers. Reproduces River v0.51.2's keys
 /// (the 22 golden vectors of spike 0.8, recorded black-box).
@@ -109,7 +77,7 @@ internal static class UniqueKey
         {
             if (period <= TimeSpan.Zero)
             {
-                throw new ArgumentException($"The unique period must be positive, not {period}.", nameof(options));
+                throw new ArgumentException($"The unique period must be positive, not {period}.");
             }
 
             text.Append("&period=").Append(PeriodStart(now, period).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture));
@@ -123,8 +91,7 @@ internal static class UniqueKey
         if (text.Length == 0)
         {
             throw new ArgumentException(
-                "A unique job that excludes its kind needs another dimension (ByArgs, ByPeriod or ByQueue); otherwise every such job of every kind would share one slot.",
-                nameof(options));
+                "A unique job that excludes its kind needs another dimension (ByArgs, ByPeriod or ByQueue); otherwise every such job of every kind would share one slot.");
         }
 
         return text.ToString();
@@ -150,7 +117,7 @@ internal static class UniqueKey
         }
         catch (JsonException e)
         {
-            throw new ArgumentException("The args are not valid JSON, so they cannot be part of a unique key.", nameof(argsJson), e);
+            throw new ArgumentException("The args are not valid JSON, so they cannot be part of a unique key.", e);
         }
 
         using (document)
@@ -158,7 +125,7 @@ internal static class UniqueKey
             if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
                 throw new ArgumentException(
-                    $"Unique by args needs args that serialise to a JSON object, not {document.RootElement.ValueKind}.", nameof(argsJson));
+                    $"Unique by args needs args that serialise to a JSON object, not {document.RootElement.ValueKind}.");
             }
 
             var members = document.RootElement.EnumerateObject()
