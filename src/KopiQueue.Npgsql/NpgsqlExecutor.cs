@@ -36,6 +36,8 @@ internal sealed class NpgsqlStatements
         JobListStuck = Load("job_list_stuck.sql");
         JobRescueMany = Load("job_rescue_many.sql");
         JobDeleteFinalized = Load("job_delete_finalized.sql");
+        JobCancel = Load("job_cancel.sql");
+        JobListCancelAttempted = Load("job_list_cancel_attempted.sql");
         LeaderAttemptElect = Load("leader_attempt_elect.sql");
         LeaderAttemptReelect = Load("leader_attempt_reelect.sql");
         LeaderResign = Load("leader_resign.sql");
@@ -68,6 +70,10 @@ internal sealed class NpgsqlStatements
     public string JobRescueMany { get; }
 
     public string JobDeleteFinalized { get; }
+
+    public string JobCancel { get; }
+
+    public string JobListCancelAttempted { get; }
 
     public string LeaderAttemptElect { get; }
 
@@ -406,6 +412,34 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
                 new() { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)statements.Schema ?? DBNull.Value },
             ],
             ReadJob,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<JobRow?> JobCancelAsync(long id, CancellationToken cancellationToken)
+    {
+        var rows = await RowsAsync(
+            statements.JobCancel,
+            [
+                new() { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)statements.Schema ?? DBNull.Value },
+                new() { NpgsqlDbType = NpgsqlDbType.Bigint, Value = id },
+            ],
+            ReadJob,
+            cancellationToken).ConfigureAwait(false);
+        return rows.Count == 0 ? null : rows[0];
+    }
+
+    public async Task<IReadOnlyList<long>> JobListCancelAttemptedAsync(IReadOnlyList<long> ids, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
+        return await RowsAsync(
+            statements.JobListCancelAttempted,
+            [new() { NpgsqlDbType = NpgsqlDbType.Array | NpgsqlDbType.Bigint, Value = ids.ToArray() }],
+            reader => reader.GetInt64(0),
             cancellationToken).ConfigureAwait(false);
     }
 

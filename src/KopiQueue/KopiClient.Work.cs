@@ -332,7 +332,7 @@ public sealed partial class KopiClient
                     FetchPollInterval = _options.FetchPollInterval,
                     HardStopGrace = _options.HardStopGrace,
                 },
-                executor.ExecuteAsync,
+                (job, hardStop, cancel) => executor.ExecuteAsync(job, hardStop, cancel),
                 notifier,
                 LocalWaker,
                 _timeProvider,

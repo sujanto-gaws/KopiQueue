@@ -257,6 +257,37 @@ public sealed class ProducerTests
     }
 
     [Fact]
+    public async Task CancelJob_cancels_only_that_jobs_own_token_and_not_the_hard_stop()
+    {
+        var (driver, time) = (new FakeDriver(), new FakeTimeProvider());
+        driver.Add("q", 2);
+        var tokens = new ConcurrentDictionary<long, (CancellationToken HardStop, CancellationToken Cancel)>();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var producer = new Producer(
+            driver,
+            new ProducerOptions { Queue = "q", ClientId = "client-1", MaxWorkers = 10 },
+            async (job, hardStop, cancel) =>
+            {
+                tokens[job.Id] = (hardStop, cancel);
+                await release.Task;
+            },
+            timeProvider: time);
+        await producer.StartAsync(Ct);
+        await AdvanceUntil(time, () => tokens.Count == 2);
+
+        Assert.True(producer.CancelJob(1));
+        Assert.True(producer.CancelJob(1)); // again: nothing more happens
+        Assert.False(producer.CancelJob(3)); // not running here
+
+        Assert.True(tokens[1].Cancel.IsCancellationRequested);
+        Assert.False(tokens[2].Cancel.IsCancellationRequested);
+        Assert.False(tokens[1].HardStop.IsCancellationRequested);
+        release.SetResult();
+        await AdvanceUntil(time, () => producer.RunningCount == 0);
+        Assert.False(producer.CancelJob(2)); // finished
+    }
+
+    [Fact]
     public async Task Starting_twice_is_rejected()
     {
         await using var producer = Create(new FakeDriver(), new FakeTimeProvider(), options => options);
@@ -465,6 +496,12 @@ public sealed class ProducerTests
             Task.FromResult<IReadOnlyList<JobRow>>([]);
 
         public Task<IReadOnlyList<long>> JobDeleteFinalizedAsync(JobDeleteFinalizedParams parameters, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<long>>([]);
+
+        public Task<JobRow?> JobCancelAsync(long id, CancellationToken cancellationToken) =>
+            Task.FromResult<JobRow?>(null);
+
+        public Task<IReadOnlyList<long>> JobListCancelAttemptedAsync(IReadOnlyList<long> ids, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<long>>([]);
 
         public Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken) =>

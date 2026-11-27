@@ -237,6 +237,12 @@ public sealed class KopiClientLifecycleTests
             return Task.FromResult(DeletedFinalized);
         }
 
+        public Task<JobRow?> JobCancelAsync(long id, CancellationToken cancellationToken) =>
+            Task.FromResult<JobRow?>(null);
+
+        public Task<IReadOnlyList<long>> JobListCancelAttemptedAsync(IReadOnlyList<long> ids, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<long>>([]);
+
         public Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<JobRow>>([]);
 

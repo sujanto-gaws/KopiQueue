@@ -19,8 +19,9 @@ internal sealed class QueueMaintainerOptions
 }
 
 /// <summary>
-/// Keeps the rows of the queues a client works and applies their pause state to its producers (design §3, plan task
-/// 3.6: FR-QUE-02..04, FR-DB-05). Runs on every client that works queues, leader or not.
+/// Keeps the rows of the queues a client works, applies their pause state to its producers, and passes external cancels
+/// of running jobs to the producer that runs them (design §3, §5.8; plan tasks 3.6, 3.7: FR-QUE-02..04, FR-ERR-06,
+/// FR-DB-05). Runs on every client that works queues, leader or not.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -32,6 +33,11 @@ internal sealed class QueueMaintainerOptions
 /// at once. While the notifier is not connected, or without one, it reads the pause state every
 /// <see cref="QueueMaintainerOptions.PollInterval"/>; after the notifier reconnects, it reads it once to catch up. A read
 /// that a notification overtook is not applied: it reads again, so a stale row cannot undo a newer pause or resume.
+/// </para>
+/// <para>
+/// A cancel arrives as <c>{"action": "cancel", "job_id": 7, "queue": "email"}</c> and cancels that job's token if it runs
+/// here. Without notifications, the same reads also ask which of this client's running jobs carry
+/// <c>metadata.cancel_attempted_at</c>, so a cancel reaches its job within the poll interval (FR-DB-05).
 /// </para>
 /// </remarks>
 internal sealed partial class QueueMaintainer : IStartStopService, IAsyncDisposable
@@ -165,11 +171,22 @@ internal sealed partial class QueueMaintainer : IStartStopService, IAsyncDisposa
         return true;
     }
 
-    /// <summary>Handles a control notification: applies a pause or resume; other actions are not this component's.</summary>
+    /// <summary>Cancels the token of <paramref name="job"/> if it is running here and was asked to cancel.</summary>
+    public void CancelRunning(JobRow job)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        if (job.State == JobState.Running && _producers.TryGetValue(job.Queue, out var producer))
+        {
+            producer.CancelJob(job.Id);
+        }
+    }
+
+    /// <summary>Handles a control notification: applies a pause or resume, or passes on a cancel; ignores the rest.</summary>
     internal void OnControlNotification(string payload)
     {
         string? action;
         string? queue;
+        long? jobId;
         try
         {
             using var json = JsonDocument.Parse(payload);
@@ -181,6 +198,7 @@ internal sealed partial class QueueMaintainer : IStartStopService, IAsyncDisposa
 
             action = root.TryGetProperty("action", out var a) && a.ValueKind == JsonValueKind.String ? a.GetString() : null;
             queue = root.TryGetProperty("queue", out var q) && q.ValueKind == JsonValueKind.String ? q.GetString() : null;
+            jobId = root.TryGetProperty("job_id", out var j) && j.ValueKind == JsonValueKind.Number && j.TryGetInt64(out var n) ? n : null;
         }
         catch (JsonException)
         {
@@ -191,6 +209,10 @@ internal sealed partial class QueueMaintainer : IStartStopService, IAsyncDisposa
         if (queue is { Length: > 0 } && action is "pause" or "resume")
         {
             Apply(queue, paused: action == "pause", locally: false);
+        }
+        else if (action == "cancel" && queue is { Length: > 0 } && jobId is { } id && _producers.TryGetValue(queue, out var producer))
+        {
+            producer.CancelJob(id);
         }
     }
 
@@ -211,6 +233,11 @@ internal sealed partial class QueueMaintainer : IStartStopService, IAsyncDisposa
                 else if (asked || _notifier is not { IsConnected: true })
                 {
                     await PollAsync(stop).ConfigureAwait(false);
+                }
+
+                if (asked || _notifier is not { IsConnected: true })
+                {
+                    await PollCancelsAsync(stop).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (stop.IsCancellationRequested)
@@ -241,6 +268,31 @@ internal sealed partial class QueueMaintainer : IStartStopService, IAsyncDisposa
             .QueueListAsync(new QueueListQuery { Max = _names.Length, Names = _names }, cancellationToken)
             .ConfigureAwait(false);
         ApplyRows(rows, version);
+    }
+
+    /// <summary>Cancels the tokens of this client's running jobs that were asked to cancel (design §5.8, step 4).</summary>
+    private async Task PollCancelsAsync(CancellationToken cancellationToken)
+    {
+        long[] running = [.. _producers.Values.SelectMany(p => p.RunningJobIds)];
+        if (running.Length == 0)
+        {
+            return;
+        }
+
+        var executor = _driver.GetExecutor();
+        foreach (var chunk in running.Chunk(_driver.Capabilities.MaxRowsPerStatement ?? int.MaxValue))
+        {
+            foreach (var id in await executor.JobListCancelAttemptedAsync(chunk, cancellationToken).ConfigureAwait(false))
+            {
+                foreach (var producer in _producers.Values)
+                {
+                    if (producer.CancelJob(id))
+                    {
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     private void ApplyRows(IReadOnlyList<QueueRow> rows, long version)

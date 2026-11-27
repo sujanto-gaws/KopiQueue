@@ -356,6 +356,12 @@ public sealed class JobCompleterTests
         public Task<IReadOnlyList<long>> JobDeleteFinalizedAsync(JobDeleteFinalizedParams parameters, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<long>>([]);
 
+        public Task<JobRow?> JobCancelAsync(long id, CancellationToken cancellationToken) =>
+            Task.FromResult<JobRow?>(null);
+
+        public Task<IReadOnlyList<long>> JobListCancelAttemptedAsync(IReadOnlyList<long> ids, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<long>>([]);
+
         public async Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _calls);

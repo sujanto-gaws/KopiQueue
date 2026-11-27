@@ -30,7 +30,7 @@ internal sealed class JobExecutorOptions
 
 /// <summary>
 /// Runs one fetched job and hands its outcome to the completer (design §5.2; FR-DEF-03, FR-EXE-05, FR-EXE-07,
-/// FR-EXE-08). <see cref="ExecuteAsync"/> is the producer's run function.
+/// FR-EXE-08). <see cref="ExecuteAsync(JobRow, CancellationToken, CancellationToken)"/> is the producer's run function.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -38,7 +38,10 @@ internal sealed class JobExecutorOptions
 /// worker runs with a token that its timeout and the client's hard stop cancel. Returning means the job completed.
 /// <see cref="JobControl.Cancel"/> cancels it for good and <see cref="JobControl.Snooze"/> reschedules it without using
 /// an attempt. A cancellation caused by the client stopping interrupts the attempt: the job is made available again and
-/// the attempt does not count. Any other exception, a timeout included, is an error: recorded in the job's
+/// the attempt does not count. After an external cancel (<c>JobCancelAsync</c>, design §5.8) signals the job's cancel
+/// token, a worker that throws anything, its token's <see cref="OperationCanceledException"/> included, cancels the job
+/// for good with that exception as its error, whatever attempts are left; a worker that returns still completes it. Any
+/// other exception, a timeout included, is an error: recorded in the job's
 /// <c>errors</c> with its message and stack trace, and retried after the worker's <c>NextRetry</c> or the retry policy
 /// until the job's attempts run out, when it is discarded. Nothing a worker does escapes to the host. These rules are River's
 /// (v0.51.2 <c>jobexecutor.reportError</c>), so jobs move the same way whichever library works them.
@@ -98,18 +101,25 @@ internal sealed partial class JobExecutor
         Snoozed,
     }
 
+    /// <summary>Runs <paramref name="job"/> without an external cancel; see <see cref="ExecuteAsync(JobRow, CancellationToken, CancellationToken)"/>.</summary>
+    public Task ExecuteAsync(JobRow job, CancellationToken hardStop) => ExecuteAsync(job, hardStop, CancellationToken.None);
+
     /// <summary>
     /// Runs <paramref name="job"/> and returns once the completer has accepted its outcome. Never throws for anything
     /// the job does; only the completer's own failures escape.
     /// </summary>
     /// <param name="job">A job the producer fetched: running, with this attempt's number.</param>
     /// <param name="hardStop">Cancelled when the client stops hard; the worker's token is cancelled with it.</param>
-    public async Task ExecuteAsync(JobRow job, CancellationToken hardStop)
+    /// <param name="cancel">
+    /// Cancelled when the job is cancelled from outside while it runs (design §5.8); the worker's token is cancelled with
+    /// it, and a failure afterwards cancels the job instead of retrying it.
+    /// </param>
+    public async Task ExecuteAsync(JobRow job, CancellationToken hardStop, CancellationToken cancel)
     {
         ArgumentNullException.ThrowIfNull(job);
         var startedAt = _time.GetUtcNow();
         var started = _time.GetTimestamp();
-        var outcome = await RunAsync(job, startedAt, hardStop).ConfigureAwait(false);
+        var outcome = await RunAsync(job, startedAt, hardStop, cancel).ConfigureAwait(false);
         var completion = Classify(job, outcome, _time.GetElapsedTime(started));
         await _completer.CompleteAsync(completion, CancellationToken.None).ConfigureAwait(false);
     }
@@ -118,7 +128,7 @@ internal sealed partial class JobExecutor
         new(startedAt, job.Attempt, exception.Message, exception.ToString());
 
     /// <summary>Runs the worker and says how the attempt ended.</summary>
-    private async Task<Outcome> RunAsync(JobRow job, DateTimeOffset startedAt, CancellationToken hardStop)
+    private async Task<Outcome> RunAsync(JobRow job, DateTimeOffset startedAt, CancellationToken hardStop, CancellationToken cancel)
     {
         if (!_workers.TryGet(job.Kind, out var registration))
         {
@@ -143,7 +153,7 @@ internal sealed partial class JobExecutor
 
             await using (unit.ConfigureAwait(false))
             {
-                var outcome = await WorkAsync(job, unit, startedAt, hardStop).ConfigureAwait(false);
+                var outcome = await WorkAsync(job, unit, startedAt, hardStop, cancel).ConfigureAwait(false);
                 return outcome.Kind == OutcomeKind.Failed ? outcome with { RetryDelay = RetryDelay(job, unit) } : outcome;
             }
         }
@@ -156,7 +166,7 @@ internal sealed partial class JobExecutor
         }
     }
 
-    private async Task<Outcome> WorkAsync(JobRow job, IWorkUnit unit, DateTimeOffset startedAt, CancellationToken hardStop)
+    private async Task<Outcome> WorkAsync(JobRow job, IWorkUnit unit, DateTimeOffset startedAt, CancellationToken hardStop, CancellationToken cancel)
     {
         TimeSpan timeout;
         try
@@ -177,16 +187,16 @@ internal sealed partial class JobExecutor
         }
 
         using var timer = timeout < TimeSpan.Zero ? new CancellationTokenSource() : new CancellationTokenSource(timeout, _time);
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(timer.Token, hardStop);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(timer.Token, hardStop, cancel);
         try
         {
             await unit.WorkAsync(linked.Token).ConfigureAwait(false);
             return Outcome.Completed;
         }
-        catch (Exception e) when (Find<JobCancelException>(e) is { } cancel)
+        catch (Exception e) when (Find<JobCancelException>(e) is { } cancelled)
         {
-            LogCancelled(job.Id, job.Kind, cancel.Reason);
-            return new Outcome(OutcomeKind.Cancelled, new AttemptError(startedAt, job.Attempt, cancel.Reason, null));
+            LogCancelled(job.Id, job.Kind, cancelled.Reason);
+            return new Outcome(OutcomeKind.Cancelled, new AttemptError(startedAt, job.Attempt, cancelled.Reason, null));
         }
         catch (Exception e) when (Find<JobSnoozeException>(e) is { } snooze)
         {
@@ -194,8 +204,16 @@ internal sealed partial class JobExecutor
         }
         catch (OperationCanceledException) when (hardStop.IsCancellationRequested)
         {
+            // Even after an external cancel: the completer writes an interrupted job that was asked to cancel as cancelled.
             LogInterrupted(job.Id, job.Kind);
             return Outcome.Interrupted;
+        }
+#pragma warning disable CA1031 // After an external cancel, whatever the worker throws (a timeout too) cancels the job (design §5.8).
+        catch (Exception e) when (cancel.IsCancellationRequested)
+#pragma warning restore CA1031
+        {
+            LogCancelledExternally(job.Id, job.Kind);
+            return new Outcome(OutcomeKind.Cancelled, Error(job, startedAt, e));
         }
         catch (OperationCanceledException e) when (timer.IsCancellationRequested)
         {
@@ -364,6 +382,9 @@ internal sealed partial class JobExecutor
 
     [LoggerMessage(EventId = 2109, Level = LogLevel.Warning, Message = "The next retry of job {JobId} ({Kind}) was in the past; using the default policy")]
     private partial void LogRetryInThePast(long jobId, string kind);
+
+    [LoggerMessage(EventId = 2110, Level = LogLevel.Information, Message = "Job {JobId} ({Kind}) stopped after it was cancelled from outside; cancelled")]
+    private partial void LogCancelledExternally(long jobId, string kind);
 
     /// <summary>How an attempt ended, before classification.</summary>
     private sealed record Outcome(OutcomeKind Kind, AttemptError? Error = null, TimeSpan? RetryDelay = null)

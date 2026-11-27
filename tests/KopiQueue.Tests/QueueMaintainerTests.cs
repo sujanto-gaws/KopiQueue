@@ -77,6 +77,74 @@ public sealed class QueueMaintainerTests
     }
 
     [Fact]
+    public async Task A_cancel_notification_cancels_only_that_job_on_the_producer_that_runs_it()
+    {
+        var time = new FakeTimeProvider();
+        var db = new FakeQueues(time);
+        db.Give("a", 1, 2);
+        db.Give("b", 3);
+        var running = new Running();
+        await using var client = await StartedAsync(db, time, ["a", "b"], run: running.RunAsync);
+        await AdvanceUntil(time, () => running.Started.Count == 3);
+
+        client.Queues.OnControlNotification("""{"action": "cancel", "job_id": 1, "queue": "a"}""");
+        client.Queues.OnControlNotification("""{"action": "cancel", "job_id": 3, "queue": "a"}"""); // not that queue's job
+        client.Queues.OnControlNotification("""{"action": "cancel", "job_id": 99, "queue": "b"}"""); // another client's job
+        client.Queues.OnControlNotification("""{"action": "cancel", "job_id": "2", "queue": "a"}""");
+        client.Queues.OnControlNotification("""{"action": "cancel", "queue": "a"}""");
+        await WaitFor(() => running.Cancelled.Contains(1));
+        await Task.Delay(50, Ct);
+        Assert.Equal([1L], running.Cancelled.Order());
+
+        client.Queues.OnControlNotification("""{"queue": "b", "job_id": 3, "action": "cancel"}""");
+        await WaitFor(() => running.Cancelled.Contains(3));
+        Assert.False(client.Producer("a").IsPaused || client.Producer("b").IsPaused); // a cancel is not a pause
+    }
+
+    [Fact]
+    public async Task Without_notifications_a_cancel_is_read_within_the_poll_interval_for_this_clients_running_jobs()
+    {
+        var time = new FakeTimeProvider();
+        var db = new FakeQueues(time);
+        db.Give("a", 1, 2);
+        var running = new Running();
+        await using var client = await StartedAsync(db, time, ["a"], run: running.RunAsync);
+        await AdvanceUntil(time, () => running.Started.Count == 2);
+        await Settle(time, TimeSpan.FromSeconds(2));
+        Assert.Empty(running.Cancelled);
+
+        db.CancelAttempted[2] = 0; // another client cancelled it; nobody notifies
+        db.CancelAttempted[7] = 0; // a job that runs elsewhere
+        var waited = await AdvanceUntil(time, () => running.Cancelled.Contains(2));
+
+        Assert.True(waited <= TimeSpan.FromSeconds(1) + Step, $"took {waited}");
+        Assert.Equal([1L, 2L], db.LastCancelRead!.Order()); // only its own running jobs are asked about
+        Assert.Equal([2L], running.Cancelled);
+    }
+
+    [Fact]
+    public async Task With_notifications_connected_running_jobs_are_not_polled_for_cancels()
+    {
+        var time = new FakeTimeProvider();
+        var db = new FakeQueues(time);
+        db.Give("a", 1);
+        var connection = new FakeConnection();
+        await using var notifier = new Notifier(new FakeListener(connection), timeProvider: time);
+        await notifier.StartAsync(Ct);
+        await WaitFor(() => notifier.IsConnected);
+        var running = new Running();
+        await using var client = await StartedAsync(db, time, ["a"], notifier, running.RunAsync);
+        await AdvanceUntil(time, () => running.Started.Count == 1);
+        var readsAtStart = db.CancelReads; // at most the catch-up read after connecting
+        db.CancelAttempted[1] = 0;
+
+        await Settle(time, TimeSpan.FromSeconds(3));
+
+        Assert.Empty(running.Cancelled);
+        Assert.Equal(readsAtStart, db.CancelReads);
+    }
+
+    [Fact]
     public async Task Without_notifications_a_pause_is_read_within_the_poll_interval()
     {
         var time = new FakeTimeProvider();
@@ -185,13 +253,18 @@ public sealed class QueueMaintainerTests
         Assert.Single(db.Refreshed);
     }
 
-    private static async Task<Working> StartedAsync(FakeQueues db, FakeTimeProvider time, string[] queues, Notifier? notifier = null)
+    private static async Task<Working> StartedAsync(
+        FakeQueues db,
+        FakeTimeProvider time,
+        string[] queues,
+        Notifier? notifier = null,
+        Func<JobRow, CancellationToken, CancellationToken, Task>? run = null)
     {
         var producers = queues
             .Select(q => new Producer(
                 db,
-                new ProducerOptions { Queue = q, MaxWorkers = 1, ClientId = "client" },
-                (_, _) => Task.CompletedTask,
+                new ProducerOptions { Queue = q, MaxWorkers = 5, ClientId = "client" },
+                run ?? ((_, _, _) => Task.CompletedTask),
                 timeProvider: time))
             .ToArray();
         var maintainer = new QueueMaintainer(db, producers, new QueueMaintainerOptions(), notifier, time);
@@ -245,6 +318,25 @@ public sealed class QueueMaintainerTests
         await Task.Delay(20, Ct);
     }
 
+    /// <summary>A run function whose jobs wait for their cancel token (or the hard stop) and record which were cancelled.</summary>
+    private sealed class Running
+    {
+        public ConcurrentBag<long> Started { get; } = [];
+
+        public ConcurrentBag<long> Cancelled { get; } = [];
+
+        public async Task RunAsync(JobRow job, CancellationToken hardStop, CancellationToken cancel)
+        {
+            Started.Add(job.Id);
+            using var either = CancellationTokenSource.CreateLinkedTokenSource(hardStop, cancel);
+            await Task.Delay(Timeout.Infinite, either.Token).ContinueWith(_ => { }, TaskScheduler.Default);
+            if (cancel.IsCancellationRequested)
+            {
+                Cancelled.Add(job.Id);
+            }
+        }
+    }
+
     private sealed class Working(QueueMaintainer queues, Producer[] producers) : IAsyncDisposable
     {
         public QueueMaintainer Queues { get; } = queues;
@@ -266,7 +358,28 @@ public sealed class QueueMaintainerTests
     private sealed class FakeQueues(TimeProvider time) : IKopiDriver, IKopiExecutor
     {
         private readonly ConcurrentDictionary<string, int> _fetches = new();
+        private readonly ConcurrentDictionary<string, ConcurrentQueue<long>> _jobs = new();
         private int _polls;
+        private int _cancelReads;
+
+        /// <summary>Running jobs whose <c>cancel_attempted_at</c> is set.</summary>
+        public ConcurrentDictionary<long, byte> CancelAttempted { get; } = new();
+
+        /// <summary>How many times running jobs were asked about.</summary>
+        public int CancelReads => Volatile.Read(ref _cancelReads);
+
+        /// <summary>The IDs of the last ask.</summary>
+        public IReadOnlyList<long>? LastCancelRead { get; private set; }
+
+        /// <summary>Jobs that the next fetches of <paramref name="queue"/> hand out, once each.</summary>
+        public void Give(string queue, params long[] ids)
+        {
+            var pending = _jobs.GetOrAdd(queue, _ => new ConcurrentQueue<long>());
+            foreach (var id in ids)
+            {
+                pending.Enqueue(id);
+            }
+        }
 
         public ConcurrentDictionary<string, DateTimeOffset?> Paused { get; } = new();
 
@@ -307,7 +420,20 @@ public sealed class QueueMaintainerTests
         public Task<IReadOnlyList<JobRow>> JobGetAvailableAsync(JobGetAvailableParams parameters, CancellationToken cancellationToken)
         {
             _fetches.AddOrUpdate(parameters.Queue, 1, (_, n) => n + 1);
-            return Task.FromResult<IReadOnlyList<JobRow>>([]);
+            var jobs = new List<JobRow>();
+            if (_jobs.TryGetValue(parameters.Queue, out var pending))
+            {
+                while (jobs.Count < parameters.Max && pending.TryDequeue(out var id))
+                {
+                    jobs.Add(new JobRow
+                    {
+                        Id = id, Kind = "k", Queue = parameters.Queue, State = JobState.Running, Priority = 1, ArgsJson = "{}", MetadataJson = "{}",
+                        Tags = [], Attempt = 1, MaxAttempts = 25, CreatedAt = time.GetUtcNow(), ScheduledAt = time.GetUtcNow(), AttemptedAt = time.GetUtcNow(),
+                    });
+                }
+            }
+
+            return Task.FromResult<IReadOnlyList<JobRow>>(jobs);
         }
 
         public IKopiExecutor GetExecutor() => this;
@@ -358,6 +484,17 @@ public sealed class QueueMaintainerTests
 
         public Task<IReadOnlyList<long>> JobDeleteFinalizedAsync(JobDeleteFinalizedParams parameters, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<long>>([]);
+
+        public Task<JobRow?> JobCancelAsync(long id, CancellationToken cancellationToken) =>
+            Task.FromResult<JobRow?>(null);
+
+        public Task<IReadOnlyList<long>> JobListCancelAttemptedAsync(IReadOnlyList<long> ids, CancellationToken cancellationToken)
+        {
+            ThrowIfDown();
+            Interlocked.Increment(ref _cancelReads);
+            LastCancelRead = [.. ids];
+            return Task.FromResult<IReadOnlyList<long>>([.. ids.Where(CancelAttempted.ContainsKey).Order()]);
+        }
 
         private QueueRow Row(string name) => new()
         {

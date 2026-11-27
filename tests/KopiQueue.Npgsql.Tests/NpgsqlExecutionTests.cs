@@ -187,7 +187,7 @@ public sealed class NpgsqlExecutionTests(PostgresFixture db) : IClassFixture<Pos
                     Queue = "work", MaxWorkers = maxWorkers, ClientId = "test-client",
                     FetchPollInterval = TimeSpan.FromMilliseconds(100), FetchCooldown = TimeSpan.FromMilliseconds(5),
                 },
-                executor.ExecuteAsync);
+                (job, hardStop, cancel) => executor.ExecuteAsync(job, hardStop, cancel));
             await pipeline._completer.StartAsync(Ct);
             await pipeline._producer.StartAsync(Ct);
             return pipeline;

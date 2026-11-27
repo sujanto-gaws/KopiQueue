@@ -43,7 +43,8 @@ internal sealed class ProducerOptions
 /// capped at the batch size; a full batch means more work is likely, so the producer fetches again at once.
 /// </para>
 /// <para>
-/// Each job runs through the run function on its own task, with a token that a hard stop cancels. The slot stays
+/// Each job runs through the run function on its own task, with a token that a hard stop cancels and a token of its own
+/// that <see cref="CancelJob"/> cancels, for an external cancel (design §5.8). The slot stays
 /// taken until the function returns, which for the executor is when the completer has accepted the outcome. The run
 /// function must not throw; if it does, the error is logged and the slot freed.
 /// </para>
@@ -57,7 +58,7 @@ internal sealed partial class Producer : IStartStopService, IAsyncDisposable
 {
     private readonly IKopiDriver _driver;
     private readonly ProducerOptions _options;
-    private readonly Func<JobRow, CancellationToken, Task> _runJob;
+    private readonly Func<JobRow, CancellationToken, CancellationToken, Task> _runJob;
     private readonly Notifier? _notifier;
     private readonly LocalWaker? _localWaker;
     private readonly TimeProvider _time;
@@ -74,10 +75,27 @@ internal sealed partial class Producer : IStartStopService, IAsyncDisposable
     private int _pausedEverywhere;
     private int _pausedLocally;
 
+    /// <summary>A producer whose run function sees only the hard stop: an external cancel does not reach it.</summary>
     public Producer(
         IKopiDriver driver,
         ProducerOptions options,
         Func<JobRow, CancellationToken, Task> runJob,
+        Notifier? notifier = null,
+        LocalWaker? localWaker = null,
+        TimeProvider? timeProvider = null,
+        ILogger<Producer>? logger = null)
+        : this(driver, options, Ignoring(runJob), notifier, localWaker, timeProvider, logger)
+    {
+    }
+
+    /// <summary>
+    /// A producer whose run function gets the hard-stop token and the job's own cancel token, which
+    /// <see cref="CancelJob"/> cancels.
+    /// </summary>
+    public Producer(
+        IKopiDriver driver,
+        ProducerOptions options,
+        Func<JobRow, CancellationToken, CancellationToken, Task> runJob,
         Notifier? notifier = null,
         LocalWaker? localWaker = null,
         TimeProvider? timeProvider = null,
@@ -106,6 +124,34 @@ internal sealed partial class Producer : IStartStopService, IAsyncDisposable
 
     /// <summary>The IDs of the jobs running now.</summary>
     public IReadOnlyCollection<long> RunningJobIds => [.. _running.Keys];
+
+    /// <summary>
+    /// Cancels the token of running job <paramref name="jobId"/> only, for an external cancel (design §5.8). How the job
+    /// ends is then up to its worker and the executor.
+    /// </summary>
+    /// <returns><c>false</c> if the job is not running here (any more).</returns>
+    public bool CancelJob(long jobId)
+    {
+        if (!_running.TryGetValue(jobId, out var running))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (!running.Cancellation.IsCancellationRequested)
+            {
+                LogCancelling(jobId, Queue);
+                running.Cancellation.Cancel();
+            }
+
+            return true;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false; // it finished meanwhile
+        }
+    }
 
     /// <summary>Asks for a fetch as soon as the cooldown allows.</summary>
     public void Wake() => _wake.Set();
@@ -359,7 +405,7 @@ internal sealed partial class Producer : IStartStopService, IAsyncDisposable
 
     private void Start(JobRow job)
     {
-        var running = new RunningJob(CancellationTokenSource.CreateLinkedTokenSource(_hardStop.Token));
+        var running = new RunningJob(new CancellationTokenSource());
 
         // Created unstarted and registered first, so a stop that looks at the running set always sees the real task.
         var run = new Task<Task>(() => RunJobAsync(job, running));
@@ -379,7 +425,7 @@ internal sealed partial class Producer : IStartStopService, IAsyncDisposable
     {
         try
         {
-            await _runJob(job, running.Cancellation.Token).ConfigureAwait(false);
+            await _runJob(job, _hardStop.Token, running.Cancellation.Token).ConfigureAwait(false);
         }
 #pragma warning disable CA1031 // The executor handles every outcome; anything that escapes it is logged so the slot is not lost.
         catch (Exception e)
@@ -422,8 +468,18 @@ internal sealed partial class Producer : IStartStopService, IAsyncDisposable
     [LoggerMessage(EventId = 2007, Level = LogLevel.Information, Message = "Queue {Queue} is resumed here")]
     private partial void LogResumed(string queue);
 
+    private static Func<JobRow, CancellationToken, CancellationToken, Task> Ignoring(Func<JobRow, CancellationToken, Task> runJob)
+    {
+        ArgumentNullException.ThrowIfNull(runJob);
+        return (job, hardStop, _) => runJob(job, hardStop);
+    }
+
+    [LoggerMessage(EventId = 2008, Level = LogLevel.Information, Message = "Job {JobId} of queue {Queue} was cancelled from outside; cancelling its token")]
+    private partial void LogCancelling(long jobId, string queue);
+
     private sealed class RunningJob(CancellationTokenSource cancellation)
     {
+        /// <summary>Cancelled by an external cancel of this job only; the hard stop has its own token.</summary>
         public CancellationTokenSource Cancellation { get; } = cancellation;
 
         public Task Task { get; set; } = Task.CompletedTask;
