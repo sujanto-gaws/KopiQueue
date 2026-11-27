@@ -355,6 +355,12 @@ public sealed class KopiClientOptions
     /// serialised.
     /// </summary>
     public UniqueArgsEncoding UniqueArgsEncoding { get; init; } = UniqueArgsEncoding.GoCompatible;
+
+    /// <summary>
+    /// Jobs the leader inserts on a schedule (FR-PER-01). Give every client that can lead the same list. They can change
+    /// at runtime through <see cref="KopiClient.PeriodicJobs"/>. An insert-only client never inserts them. Default: none.
+    /// </summary>
+    public IReadOnlyList<PeriodicJob>? PeriodicJobs { get; init; }
 }
 
 /// <summary>Settings of one queue (design §7).</summary>
@@ -439,7 +445,18 @@ public sealed partial class KopiClient : IKopiClient
         }
 
         ClientId = _options.ClientId ?? DefaultClientId();
+        PeriodicJobs = new PeriodicJobBundle();
+        if (_options.PeriodicJobs is { Count: > 0 } periodic)
+        {
+            PeriodicJobs.AddMany(periodic);
+        }
     }
+
+    /// <summary>
+    /// This client's periodic jobs (FR-PER-03): those in <see cref="KopiClientOptions.PeriodicJobs"/>, and any added since.
+    /// While this client leads, changes take effect at once; apply them on every client that can lead.
+    /// </summary>
+    public PeriodicJobBundle PeriodicJobs { get; }
 
     /// <summary>This client's name, recorded in the jobs it fetches.</summary>
     public string ClientId { get; }
@@ -604,6 +621,15 @@ public sealed partial class KopiClient : IKopiClient
 
     private IKopiExecutor Executor(DbTransaction? transaction) =>
         transaction is null ? _driver.GetExecutor() : _driver.GetExecutor(transaction);
+
+    /// <summary>Validates and resolves one request, as an insert does: for the periodic enqueuer.</summary>
+    internal JobInsertParams Prepare(InsertRequest request, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var type = request.Args.GetType();
+        return JobValidation.ToInsertParams(
+            JobKindRegistry.GetKind(type), _serializer.Serialize(request.Args, type), request.Options, now, unique: Unique(type));
+    }
 
     /// <summary>Validates and resolves every request before any SQL runs, so an invalid job inserts nothing.</summary>
     private JobInsertParams[] Prepare(IEnumerable<InsertRequest> jobs)

@@ -10,6 +10,13 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ### Added
 
+- Periodic jobs (FR-PER-01 to FR-PER-04):
+  - **Schedules:** `PeriodicSchedule.Every(interval)`, or `PeriodicSchedule.Cron(expression, timeZone)` on Cronos (5 or 6 fields, macros, River's `CRON_TZ=` prefix).
+  - **Jobs:** `PeriodicJob`, with `RunOnStart` and `Id`.
+  - **Registration:** `KopiClientOptions.PeriodicJobs` and `KopiQueueBuilder.AddPeriodicJob`. At runtime, `KopiClient.PeriodicJobs` adds and removes jobs.
+  - **Leader only:** only the leader inserts them, each tick once, also across a change of leader. A new leader catches up a recent tick the previous one may have missed.
+  - **Metadata:** inserted jobs carry `"periodic": true`.
+  - ([#43](https://github.com/sujanto-gaws/KopiQueue/issues/43))
 - Unique jobs (FR-UNQ-01 to FR-UNQ-06):
   - **Options:** `InsertOptions.Unique` takes a `UniqueOptions` (`ByArgs`, `ByPeriod`, `ByQueue`, `ByState`, `ExcludeKind`). Options with nothing set enforce nothing, as in River.
   - **Marked members:** `[UniqueKey]` limits `ByArgs` to the marked members, under the JSON names the serialiser writes (`IJobArgsSerializer.GetUniqueMemberNames`).

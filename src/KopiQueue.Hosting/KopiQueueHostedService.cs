@@ -69,5 +69,6 @@ internal static class KopiQueueClientFactory
         CancelledJobRetention = options.CancelledJobRetention,
         DiscardedJobRetention = options.DiscardedJobRetention,
         UniqueArgsEncoding = options.UniqueArgsEncoding,
+        PeriodicJobs = builder.PeriodicJobs,
     };
 }

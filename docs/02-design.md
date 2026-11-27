@@ -672,7 +672,7 @@ RETURNING ..., NOT (xmax = 0) AS unique_skipped_as_duplicate, unique_key;
 | Rescuer | 1 min | Select `running` jobs with `attempted_at < now() - RescueStuckJobsAfter` (default JobTimeout + 1 h). Retry with backoff or discard; append a "stuck" error | 1,000 |
 | Job cleaner | 30 s | `DELETE` finalised jobs past their retention, by state, via `ctid` with `SKIP LOCKED` | 1,000 |
 | Queue cleaner | 1 min | `DELETE FROM river_queue WHERE updated_at < now() - 24h` | 1,000 |
-| Periodic enqueuer | dynamic (next tick) | Computes the next run for each periodic job and inserts it as unique by `(kind, period=tick)` | n/a |
+| Periodic enqueuer | dynamic (next tick) | Computes the next tick of each periodic job and inserts its job, unique for that tick | n/a |
 | Reindexer (opt-in) | daily | `REINDEX INDEX CONCURRENTLY` on the args/metadata GIN indexes | n/a |
 
 Each service loops: run one batch, and if the batch was full, run again at once; otherwise sleep for the interval, with ±10% jitter.
@@ -858,6 +858,37 @@ This spec is for the contributor who writes the job cleaner (the rest of #37; th
 - **Options:** `CompletedJobRetention`, `CancelledJobRetention` and `DiscardedJobRetention` on `KopiClientOptions` and `KopiQueueOptions`. Each is positive or `null`.
 - **Unique slots:** the XML doc of `CompletedJobRetention` notes that a completed unique job holds its slot until it is deleted. The fuller note beside the unique options waits for M4 (#42).
 
+**Periodic enqueuer: implemented** (task 4.3, #43; FR-PER-01..04; DQ-5 closed).
+
+Sources: the requirements, and River's docs on [periodic jobs](https://riverqueue.com/docs/periodic-jobs) and [maintenance services](https://riverqueue.com/docs/maintenance-services). The docs say:
+- the leader inserts periodic jobs and holds the schedule in memory;
+- a new leader evaluates every schedule from the current time, so a tick can be skipped across a change of leader;
+- `RunOnStart` inserts a job "anytime a new leader is elected";
+- adding or removing a job wakes the enqueuer;
+- inserted jobs carry `"periodic": true` in their metadata.
+
+KopiQueue does the same, with these choices of its own:
+- **Public API:**
+  - `PeriodicSchedule.Every(interval)`, at least a second;
+  - `PeriodicSchedule.Cron(expression, timeZone)`: Cronos, 5 or 6 fields or a macro, UTC by default, and River's `CRON_TZ=` prefix;
+  - `PeriodicJob(schedule, constructor)` with `RunOnStart` and `Id`, and `PeriodicJob.Create<TArgs>`. The constructor returns an `InsertRequest`, or `null` to skip the tick;
+  - `KopiClientOptions.PeriodicJobs` and `KopiQueueBuilder.AddPeriodicJob`;
+  - at runtime, `KopiClient.PeriodicJobs`, a `PeriodicJobBundle` with `Add`, `AddMany` (all or none), `Remove`, `RemoveById` and `Clear`. IDs are unique per client.
+- **Interval ticks are anchored to the Unix epoch,** not to when a client started. Every client then computes the same ticks, so a new leader continues the series, and an interval that divides a day starts at midnight UTC. River's docs don't say how its intervals are anchored.
+- **Each tick is unique for its tick:**
+  - Unless the constructor's options set `Unique`, the job's key is the SHA-256 of its kind, queue, args and tick (`&periodic_tick=`). Its unique states are all eight, so a tick is never inserted twice, even once its job has finished.
+  - River keys never contain `&periodic_tick=`, so the two can't collide.
+  - A `RunOnStart` insert is not a tick, and is not unique unless its options say so.
+- **Catch-up:** River's docs accept a skipped tick across a change of leader. FR-PER-04 says a change "SHOULD NOT skip more than one tick", so a new leader also inserts the latest tick if it is within the catch-up window, `LeaderTtl + ElectInterval`. If the previous leader inserted it, the tick key makes the insert a duplicate.
+- **Falling behind:** an enqueuer that falls behind by more than a tick inserts the latest one and continues from now.
+- **The loop:** the enqueuer is an `IMaintenanceService` that overrides the new `WaitAsync` default: it waits until the next tick or a change to the bundle, and at most an hour.
+  - The host gives it a new cancellation token each time the client becomes leader, which is how it tells a new leadership.
+  - Ticks advance only after their batch is inserted. A failed batch is tried again after 5 s with the same tick keys, and its constructors run again.
+  - A constructor that throws, or returns invalid options, skips its tick, and the error is logged (EventId 2700).
+- **Tests:**
+  - `PeriodicJobTests`: schedules, including time zones and daylight saving; the bundle; and the enqueuer's ticks, keys, catch-up, `RunOnStart`, failures and waits.
+  - `NpgsqlPeriodicTests`: two clients insert each tick of a per-second cron schedule once, across a change of leader, with no gap over one tick; and a new leader's catch-up of a tick the previous leader inserted is a duplicate.
+
 ### 5.8 Cancellation of a running job across clients
 
 1. `JobCancelAsync(id)` runs an `UPDATE` in one statement: if the job is not running, set it to `cancelled` and finalise it. If it is running, set `metadata.cancel_attempted_at = now()` only. Then `pg_notify('river_control', {action: cancel, job_id, queue})`.
@@ -1020,8 +1051,7 @@ builder.Services.AddKopiQueue(kq =>
     kq.AddQueue("default", maxWorkers: 50);
     kq.AddQueue("email",   maxWorkers: 10);
     kq.AddWorker<SendEmailArgs, SendEmailWorker>();  // or AddWorker<SendEmailWorker>() outside trimmed/AOT apps
-    kq.AddPeriodicJob(Cron.Parse("0 2 * * *"), () => new RebuildIndexArgs(),   // M4
-                      o => o.RunOnStart = false);
+    kq.AddPeriodicJob(PeriodicJob.Create(PeriodicSchedule.Cron("0 2 * * *"), () => new RebuildIndexArgs()));
     kq.UseJsonContext(AppJsonContext.Default);       // AOT/trim-friendly args serialization
 })
 .BindConfiguration("KopiQueue");                     // appsettings: queues, timeouts, retention
@@ -1387,7 +1417,7 @@ SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'de
 | DQ-2 | ~~Should insert accept `NpgsqlBatch` so a job insert can be pipelined with the user's other commands in one round trip?~~ **Closed (not for 1.0, decided 2026-11-26):** an insert in a caller's transaction is already one round trip (the `INSERT` and its `pg_notify` go out as one Npgsql batch, §4.3), which meets NFR-PERF-01. Accepting the caller's batch would save only the round trip between their statements and the insert. The cost: a PostgreSQL-only API (against FR-DB-03), handing inserted rows back out of the caller's data reader, and more result-shape cases for unique inserts (M4). Reopen after 1.0 if users measure that round trip as a bottleneck; it would then be an opt-in `KopiQueue.Npgsql` extension |
 | DQ-3 | ~~Should "unknown kind" rows be discarded or left for other deployments?~~ **Closed (task 2.4):** neither. As in River, a fetched job whose kind has no worker on this client fails the attempt with "No worker is registered for kind …" and is retried with the normal backoff, so in a rolling deploy a client that has the worker takes it on a later attempt. A kind no client ever learns is discarded once its attempts run out. Snoozing without using an attempt was rejected: an unknown kind would then cycle forever |
 | DQ-4 | ~~Should KQ use the `river_client` and `river_client_queue` tables?~~ **Closed (spike 0.8):** they are not part of the pinned schema (main v8) |
-| DQ-5 | Cron library: write our own small parser, or depend on `Cronos` (MIT)? Leaning towards Cronos |
+| DQ-5 | ~~Cron library: write our own small parser, or depend on `Cronos` (MIT)?~~ **Closed (Cronos, decided 2026-11-27 in task 4.3):** Cronos parses 5- and 6-field expressions and macros, computes next and previous occurrences in any time zone with daylight saving handled, and has no dependencies. KopiQueue wraps it in `PeriodicSchedule.Cron`, so the dependency does not appear in the public API |
 | DQ-6 | SQL Server batch parameters: OPENJSON (no schema objects) or table-valued parameters (faster, but need a user-defined table type and `EXECUTE` permission on it)? Benchmark in M5 |
 | DQ-7 | SQL Server `state` as `varchar(16)` (readable in ad-hoc queries) or `tinyint` (smaller indexes)? The fetch index is filtered on state, so state is not in its key; leaning towards varchar |
 | DQ-8 | ~~Should the unique-key builder re-encode arg values in Go-compatible form by default?~~ **Closed (yes, decided 2026-11-27 in task 4.1):** by default each top-level value is written again as Go's `encoding/json` writes it: HTML-safe string escaping (`<`, `>`, `&`, U+2028 and U+2029 escaped, other non-ASCII as it is), short escapes for control characters, and floating-point numbers in Go's shortest `float64` form. Integer literals and nested member order are kept. So the key no longer depends on the serialiser's escaping: args written by `System.Text.Json` with its default encoder get River's key for the same values (`UniqueKeyTests`), and all 22 golden vectors match either way. The alternative, copying each value verbatim, stays available (`UniqueArgsEncoding.Verbatim`). Instead of an `IUniqueKeyEncoder` interface, the choice is these two encodings, which task 4.2 exposes as a client option; a custom encoder can follow if someone needs one |
