@@ -804,6 +804,71 @@ This spec is for the contributor who writes the job cleaner (the rest of #37; th
 3. The worker observes the cancellation. The completer sees `cancel_attempted_at` and finalises the job as `cancelled`.
 4. Poll-only mode: producers also check `cancel_attempted_at` for their running jobs on each poll. This is a cheap query by id list.
 
+#### External cancel: behaviour spec (plan task 3.7, FR-ERR-06, FR-DB-05, FR-ADM-05)
+
+This spec is for the contributor who writes external cancel (#39).
+- **Clean-room:** its author has read River's job queries, which include job cancellation (disclosed on #111–#113), so it states behaviour only. It contains no SQL, and nothing taken from River's source.
+- **Sources:** KopiQueue's requirements and design (the flow above, §4.1 `metadata.cancel_attempted_at`, §4.3 payloads), and River's public docs: [cancelling jobs](https://riverqueue.com/docs/cancelling-jobs) and [PgBouncer](https://riverqueue.com/docs/pgbouncer).
+- **The implementer** must not read River's source (CONTRIBUTING.md) or run River (ADR-008). Where this spec is silent, decide from the sources above, or ask on #39.
+
+**The API**
+- `IKopiClient.JobCancelAsync(long id, CancellationToken)`, plus a variant that takes the caller's `DbTransaction` (FR-ADM-05). It returns the job's row after the call.
+- In the transactional variant, the change and its notification take effect when the caller commits. The notification is sent inside the transaction, so it is delivered only on commit, as with inserts (FR-INS-07).
+- An unknown id throws `KopiQueueNotFoundException`, as the queue API does for an unknown queue (§3.8).
+
+**What happens, by the job's state at the time of the call** (one statement, then the notification)
+1. **Not started** (`available`, `scheduled`, `retryable`, `pending`): the job becomes `cancelled` at once, with `finalized_at` set to the database's now, and is never attempted again. River's docs: the job is "immediately and atomically marked as `cancelled`". No error is appended (see open questions).
+2. **Already finalized** (`completed`, `cancelled`, `discarded`): nothing changes, and the call returns the row unchanged without error. River's docs: "no changes are made".
+3. **Running:**
+   - The job's state stays `running`, and `metadata.cancel_attempted_at` is set to the database's now (§4.1 reserved key).
+   - The control notification `{"action":"cancel","job_id":<id>,"queue":"<queue>"}` goes out on the schema-qualified `river_control` channel (§4.3).
+   - The finished attempt's outcome then decides the final state, as described next.
+
+**How a running job ends**
+- **Telling the worker:**
+  - Every working client is subscribed to `river_control` already (the queue maintainer, #122, currently ignores `cancel`).
+  - The producer that runs the job cancels **that job's** token (each running job has its own token source, `Producer._running`). The worker sees its `CancellationToken` cancelled. River's docs (Go): the worker's context is cancelled.
+- **Reading the outcome:** the executor must tell this cancellation apart from a hard stop and from a timeout.
+  - A hard stop still **interrupts** the job (§5.2: `available`, attempt not used).
+  - A timeout is still an error.
+  - Cancellation for an external cancel feeds the rules below. The producer can record why it cancelled the token.
+- **The final state follows River's documented rules**, applied when the outcome is recorded and judged by whether `cancel_attempted_at` is set on the row:
+  - **The worker failed** (any exception, including `OperationCanceledException` from the cancelled token): `cancelled`, finalized, whatever attempts are left. Never `retryable`. River's docs: "returning an error after the signal cancels the job permanently".
+  - **The worker succeeded:** `completed`. River's docs: returning nil "completes it".
+  - **The attempt ended before the signal arrived:**
+    - A completion, an in-worker `JobControl.Cancel`, or a discard because attempts ran out stands as it is.
+    - A snooze or a retryable error becomes `cancelled`.
+    - River's docs: such jobs are "updated as usual" in the first case, and "marked cancelled" in the second.
+  - **Where to apply this:** in the completer's guarded update (§5.3): a recorded `retryable` or snooze outcome on a row that carries `cancel_attempted_at` is written as `cancelled` instead. That covers the race between the cancel and the outcome regardless of which client recorded it.
+- **A worker that ignores its token:** it runs on. After `RescueStuckJobsAfter` the rescuer treats it like any stuck job (#36), and its late outcome is then ruled by the completer's guard.
+
+**Without notifications** (PollOnly, a notifier that is down, PgBouncer transaction mode without a direct notifier connection, SQL Server) (FR-DB-05: within one poll interval)
+- On each `FetchPollInterval` while the notifier isn't connected, each producer reads `cancel_attempted_at` for its own running job ids (step 4 above; the SQL Server replacement table at the end of §4.3), and cancels the tokens of those that have it. The rules above then apply unchanged.
+- Like the queue maintainer's poll (#122), it reads only while the notifier is not connected, and once after a reconnect to catch up.
+- SQL Server's own statements follow in task 5.6 (#52). This task adds the PostgreSQL ones.
+
+**Driver operations** (experimental, `KQ0001`, KopiQueue's own names)
+- One to cancel by id: a single statement doing (1)–(3) above, returning the row, or nothing for an unknown id.
+- One to read `cancel_attempted_at` for a list of job ids that are still `running`.
+- PostgreSQL SQL goes in `src/KopiQueue.Npgsql/Sql/`; the notification is part of the cancel statement's transaction.
+
+**Tests the task needs** (with 3.8, #40)
+- **Conformance:** each starting state (not started, finalized, running, unknown id) gives the result above. A running job keeps `running` and gets `cancel_attempted_at`. The running-ids read returns only flagged running jobs.
+- **Unit:**
+  - the producer cancels only the targeted job's token and ignores other queues' and other clients' jobs;
+  - the executor tells a cancel from a hard stop and a timeout;
+  - the completer turns a retryable or snoozed outcome on a flagged row into `cancelled`, and leaves completed, cancelled and discarded outcomes alone.
+- **Npgsql:**
+  - A cancel reaches a running job on another client through the notification within about a second, and the job ends `cancelled`.
+  - The same works in PollOnly mode within `FetchPollInterval`.
+  - The transactional variant has no effect until commit, and none after a rollback.
+  - A worker that ignores the token and succeeds ends `completed`.
+  - The multi-process setup of #127 (`tests/KopiQueue.TestNode`) can run the cross-client case with real processes.
+
+**Open questions for the owner**
+- **An error for an external cancel?** River's docs list the errors stored for an in-worker cancel, but say nothing for an external one. The spec appends nothing for a job cancelled before it started; a running job's error is the worker's exception. Alternatively, KopiQueue could append a short "cancelled by JobCancelAsync" entry in both cases, so `errors` shows why the job ended.
+- **Already-finalized jobs:** the spec returns the row without error, following River's "no changes are made". If callers should be able to tell whether the cancel took effect, the result could carry a flag instead.
+
 ### 5.9 Graceful shutdown
 
 ```
