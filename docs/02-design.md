@@ -649,6 +649,51 @@ Each service loops: run one batch, and if the batch was full, run again at once;
 
 Implemented in plan task 3.2 (`Execution/MaintenanceHost`, FR-MNT-07): a service is an `IMaintenanceService` with a name, an interval, a batch size and `RunBatchAsync(ct)`, which runs **one statement** of at most the batch size and returns the rows it handled, so no lock outlives a batch. The elector's leadership callback starts one loop per service when the client wins and, on stepping down, cancels the loops and **waits for them** before the elector reports that it no longer leads (§5.5), so maintenance has stopped before the lease can pass on. A failed batch is logged and tried again after the interval; it never ends the loop. The first batch runs as soon as leadership is won. The services themselves join with tasks 3.3–3.5. The **queue cleaner** (task 3.5, FR-MNT-05) is the first: driver operation `QueueDeleteExpiredAsync`, a `DELETE … WHERE name IN (SELECT … WHERE updated_at < now() - retention ORDER BY name LIMIT n FOR UPDATE SKIP LOCKED)`, every minute in batches of 1,000, judged by the database's clock. Jobs of a deleted queue are untouched. It is off when `QueueRetention` is `null`.
 
+#### Scheduler: behaviour spec (plan task 3.3, FR-SCH-01, FR-SCH-02, FR-MNT-02)
+
+This spec is for the contributor who writes the scheduler (#35).
+- **Clean-room:** its author has read River's job queries (disclosed on #111–#113), so it states behaviour only. It contains no SQL, and nothing taken from River's source.
+- **Sources:** KopiQueue's requirements and design, and River's public docs: [scheduled jobs](https://riverqueue.com/docs/scheduled-jobs), [maintenance services](https://riverqueue.com/docs/maintenance-services#scheduler) and [unique jobs](https://riverqueue.com/docs/unique-jobs).
+- **The implementer** must not read River's source (CONTRIBUTING.md) or run River (ADR-008). Where this spec is silent, decide from the sources above, or ask on #35.
+
+**What it does**
+1. **Where it runs:** on the leader only, as an `IMaintenanceService` named `scheduler`, in the maintenance host (task 3.2). Every `SchedulerInterval` (default 5 s, ±10% jitter), and at once again after a full batch. The first batch runs as soon as leadership is won.
+2. **Which jobs:** each batch promotes up to 10,000 jobs (`BatchSize`) whose state is `scheduled` or `retryable` and whose `scheduled_at` is at or before the **database's** current time (as the queue cleaner does, so client clock skew doesn't matter). River's docs: "The scheduler makes scheduled jobs available when they are due"; "it queries for jobs that are ready to be attempted again and makes them `available`".
+3. **One statement per batch** (FR-MNT-07). A job row another transaction holds is skipped and picked up by a later batch. It never waits for a lock.
+4. **The change:** the state becomes `available`. `scheduled_at`, `attempt`, `errors`, `attempted_at`/`attempted_by` and `metadata` stay as they are. The job keeps its place in fetch order by `priority, scheduled_at, id`.
+5. **Unique conflicts.**
+   - A `scheduled` job can't conflict. FR-UNQ-04 requires every custom unique-states set to include `scheduled` and `available`, so the slot is already occupied.
+   - A `retryable` job can conflict when its unique states leave out `retryable`, and a duplicate with the same `unique_key` was inserted while it waited.
+   - River's docs: "If `retryable` is removed from the list, it's possible for an erroring job to hit a conflict when it is retried (because a duplicate has since been inserted). In this scenario, River will move the conflicting job to `discarded` since it cannot be retried."
+   - KopiQueue does the same: such a job becomes `discarded`, with `finalized_at` set to the database's now.
+   - A conflict must not fail the batch: the other jobs in it are still promoted.
+6. **Notification:** after a batch, one `river_insert` notification (§4.3, `{"queue":"<name>"}` on the schema-qualified channel) for each queue that got at least one job. It is sent in the batch's transaction, so it is delivered only on commit (as FR-INS-07 does for inserts). Discarded jobs don't notify. Poll-only clients pick the jobs up at their next `FetchPollInterval`.
+7. **Result:** the service returns the number of jobs it handled, promoted plus discarded, so a full batch runs again at once.
+
+**Configuration**
+- `KopiClientOptions.SchedulerInterval`, default 5 s, and the same on `KopiQueueOptions`, mapped in `KopiQueueHostedService.ToClientOptions`.
+- The executor already uses a `SchedulerInterval` (`JobExecutorOptions`, §5.2): a retry or snooze due within one interval goes straight to `available`. Both must take the client's single value, so a job is never left waiting for a scheduler that runs less often than the executor assumes.
+- Validation: positive.
+
+**Driver operation:** an `IKopiExecutor` method (experimental, `KQ0001`), for example `JobScheduleAsync(JobScheduleParams { Max })`. It returns the promoted and discarded jobs, or at least their ids, queues and new states, so tests and later metrics (task 6.4) can use them. SQL for PostgreSQL goes in `src/KopiQueue.Npgsql/Sql/`; SQL Server follows in task 5.6 (#52), poll-only with local wake (FR-DB-04).
+
+**Tests the task needs** (with 3.8, #40)
+- **Conformance:**
+  - due `scheduled` and `retryable` jobs become `available`;
+  - jobs not yet due, and jobs in other states, are untouched;
+  - at most `Max` jobs per call;
+  - a row another transaction holds is skipped and promoted by a later call;
+  - the retryable unique conflict discards only the conflicting job.
+- **Npgsql:**
+  - only the leader schedules (an insert-only or follower client doesn't);
+  - one notification per affected queue, none on rollback;
+  - a job inserted with a `ScheduledAt` a few seconds ahead runs within `SchedulerInterval` plus jitter of its due time.
+- **Unit:** the service's batch size and interval, and the option's validation and mapping.
+
+**Open questions**
+- **FR-SCH-02 says "within ≤ 5 s".** A 5 s interval with ±10% jitter can take up to 5.5 s, and a busy producer adds its fetch latency on top. Either the requirement states the bound as "within `SchedulerInterval` + 10%", or the default interval comes down (for example to 4.5 s). This is the owner's decision.
+- **The discarded job's error:** River's docs don't say whether an error is appended to a job discarded for a unique conflict. Recommendation, KopiQueue's own choice: append one, like the rescuer's "stuck" error (§5.7 table), so `errors` explains why the job ended. Its text is KopiQueue's.
+
 ### 5.8 Cancellation of a running job across clients
 
 1. `JobCancelAsync(id)` runs an `UPDATE` in one statement: if the job is not running, set it to `cancelled` and finalise it. If it is running, set `metadata.cancel_attempted_at = now()` only. Then `pg_notify('river_control', {action: cancel, job_id, queue})`.
