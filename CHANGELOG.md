@@ -10,6 +10,7 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ### Added
 
+- Unique key builder and unique-states bitmask (FR-UNQ-01, FR-UNQ-04, FR-UNQ-06), the groundwork for unique jobs (M4). It reproduces all 22 unique keys River v0.51.2 computed in spike 0.8. DQ-8 is decided: arg values are re-encoded as Go's `encoding/json` writes them, so the key doesn't depend on how the args were serialised, and .NET and Go producers of the same args share a key. Nothing public changes yet; unique inserts arrive with task 4.2. ([#41](https://github.com/sujanto-gaws/KopiQueue/issues/41), [#79](https://github.com/sujanto-gaws/KopiQueue/issues/79))
 - External job cancel (FR-ERR-06, FR-ADM-05, FR-DB-05): `IKopiClient.JobCancelAsync(id)`, and an overload that takes the caller's `DbTransaction`, so the cancel commits or rolls back with it. They return the job's row after the call and throw `KopiQueueNotFoundException` for an unknown id.
   - A job that has not started is cancelled at once and never runs.
   - A running job gets `metadata.cancel_attempted_at`, and the client running it cancels the worker's `CancellationToken`: through a `river_control` notification, or within `FetchPollInterval` without notifications. A worker that then throws, its token's `OperationCanceledException` included, cancels the job for good with that exception as its error. A worker that returns completes it. A retry, snooze or interruption recorded after the cancel becomes `cancelled`.
