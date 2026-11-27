@@ -153,7 +153,7 @@ It stops them in reverse order. The completer is stopped last among the executio
 - **`StartAsync`** checks the configuration before it builds anything (FR-DEF-06): queues and workers go together; each queue name follows the insert rules and has 1–10,000 workers; `WorkerRegistry.ValidateForWork` passes; the times are in range; `ListenNotify` needs a driver that can listen. Any failure throws `KopiQueueConfigurationException` and nothing starts. It then starts the completer, the notifier (unless `PollOnly`, or the driver cannot listen) and one producer per queue. A client with no queues and no workers is insert-only: `StartAsync` does nothing and the client still opens no connection (FR-INS-08). A client starts once.
 - **`StopAsync(ct)`** follows §5.9 and is idempotent; concurrent callers share one stop. Steps 2–3: the soft stop ends when `ct` fires or `SoftStopTimeout` passes; the hard stop cancels the job tokens, the executor stores interrupted jobs as `available` without using an attempt, and the producers wait at most `HardStopGrace`. Step 4: the completer gets another `HardStopGrace` to write. Step 5: the elector steps down and resigns within another `HardStopGrace` (task 3.1, §5.5). Inserting keeps working after a stop.
 - **Queues (task 3.6):** a working client also starts a QueueMaintainer, after the elector and before the producers, and stops it once fetching has stopped (step 1). See §3.8.
-- **Not yet:** the scheduler (task 3.3) moves `scheduled` and `retryable` jobs to `available` once due; until it lands, only jobs inserted `available`, retries due within 5 s, and interrupted jobs run again.
+- **Scheduled jobs (task 3.3):** the leader's scheduler moves `scheduled` and `retryable` jobs to `available` once due (§5.7), every `SchedulerInterval`. The executor takes the same interval, so a retry or snooze due within it is made `available` at once.
 
 ### 3.8 Queues, pause and resume (plan task 3.6)
 
@@ -694,6 +694,15 @@ This spec is for the contributor who writes the scheduler (#35).
 - **FR-SCH-02 says "within ≤ 5 s".** A 5 s interval with ±10% jitter can take up to 5.5 s, and a busy producer adds its fetch latency on top. Either the requirement states the bound as "within `SchedulerInterval` + 10%", or the default interval comes down (for example to 4.5 s). This is the owner's decision.
 - **The discarded job's error:** River's docs don't say whether an error is appended to a job discarded for a unique conflict. Recommendation, KopiQueue's own choice: append one, like the rescuer's "stuck" error (§5.7 table), so `errors` explains why the job ended. Its text is KopiQueue's.
 
+**Implemented** (task 3.3, #35), from this spec only:
+- `Execution/Scheduler` (`scheduler`, `SchedulerInterval`, batches of 10,000) runs on the leader beside the queue cleaner. `KopiClientOptions`/`KopiQueueOptions.SchedulerInterval` (default 5 s, positive) is also the executor's interval.
+- Driver operation `JobScheduleAsync(JobScheduleParams { Max, UniqueConflictError })` returns `JobScheduleResult(Id, Queue, State)` for each changed job, in ID order. PostgreSQL: `job_schedule.sql`, one statement that promotes, discards and notifies.
+- **Order:** most overdue first (`scheduled_at, id`), so a backlog larger than a batch drains oldest first.
+- **Unique conflicts:** a due job conflicts when promotion would put it into the unique index (its states include `available` but not its current state) and another job holds the key, or an older due job of the same batch enters with the same key. The oldest due duplicate keeps a free slot.
+- **The error (open question 2):** the recommended default is followed. A discarded job gets one error in the executor's format: the attempt, the database's now, `JobScheduleParams.DefaultUniqueConflictError`, no trace.
+- **Not in the spec:** a conflicting job whose unique states include `discarded` would conflict as `discarded` too, so it stays `retryable` until the slot is free, and is not counted. A duplicate committed by another transaction while a batch runs makes that batch fail on the unique index; the maintenance host logs it and the next batch discards the job.
+- **FR-SCH-02 (open question 1):** not decided here. The default stays 5 s, so a job can wait up to 5.5 s plus the fetch.
+
 #### Rescuer: behaviour spec (plan task 3.4, FR-MNT-03, NFR-REL-02, UC-9)
 
 This spec is for the contributor who writes the rescuer (#36).
@@ -1048,7 +1057,7 @@ The commit interceptor described next needs the LocalWaker, so it arrives with t
 | `CompletedJobRetention` / `Cancelled` / `Discarded` | 24 h / 24 h / 7 d | `null` = never delete |
 | `QueueRetention` | 24 h | Queue cleaner (task 3.5): how long a queue row is kept after no client has worked the queue. At least 5 min, since clients mark their queues worked every minute (§3.8). `null` = never delete |
 | `ElectInterval` / `LeaderTtl` | 5 s / 15 s | `LeaderTtl` at least 2 × `ElectInterval` (task 3.1, §5.5) |
-| `SchedulerInterval` | 5 s | |
+| `SchedulerInterval` | 5 s | Positive. The leader's scheduler (task 3.3, §5.7), with ±10% jitter; the executor makes a retry or snooze due within it `available` at once |
 | `NotificationMode` | `Auto` | `Auto` \| `ListenNotify` \| `PollOnly`. SQL Server is always `PollOnly` (plus LocalWaker) |
 | `NotifierConnectionString` | `null` (derived from the data source) | PostgreSQL, on `NpgsqlDriverOptions` (task 2.2): a direct connection for LISTEN when the data source goes through PgBouncer in transaction mode or a proxy. KQ always forces `Pooling=false` on it |
 | `NotifierKeepAlive` | 5 s | PostgreSQL, on `NpgsqlDriverOptions` (task 2.2), 1 s to 1 day, rounded up to whole seconds: Npgsql `Keepalive` on the notifier connection. A silently dead connection is detected after about 2× this value; without it, it is never detected (spike 0.7) |

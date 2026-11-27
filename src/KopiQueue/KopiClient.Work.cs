@@ -248,6 +248,7 @@ public sealed partial class KopiClient
             options.QueueRetention is null || options.QueueRetention >= MinQueueRetention,
             nameof(KopiClientOptions.QueueRetention),
             "must be at least 5 minutes (clients mark their queues worked every minute), or null to keep queues");
+        Check(options.SchedulerInterval > TimeSpan.Zero, nameof(KopiClientOptions.SchedulerInterval), "must be positive");
         Check(Enum.IsDefined(options.NotificationMode), nameof(KopiClientOptions.NotificationMode), "is not a known mode");
         Check(Enum.IsDefined(options.CompleterMode), nameof(KopiClientOptions.CompleterMode), "is not a known mode");
         return errors;
@@ -292,11 +293,11 @@ public sealed partial class KopiClient
             _serializer,
             completer,
             _options.Services,
-            new JobExecutorOptions { JobTimeout = _options.JobTimeout, RetryPolicy = _options.RetryPolicy },
+            ExecutorOptions(_options),
             _timeProvider,
             loggers.CreateLogger<JobExecutor>());
         var notifier = listener is null ? null : new Notifier(listener, timeProvider: _timeProvider, logger: loggers.CreateLogger<Notifier>());
-        var maintenance = new MaintenanceHost(MaintenanceServices(), timeProvider: _timeProvider, logger: loggers.CreateLogger<MaintenanceHost>());
+        var maintenance = new MaintenanceHost(MaintenanceServices(_driver, _options), timeProvider: _timeProvider, logger: loggers.CreateLogger<MaintenanceHost>());
         var elector = new Elector(
             _driver,
             new ElectorOptions { ClientId = ClientId, ElectInterval = _options.ElectInterval, LeaderTtl = _options.LeaderTtl },
@@ -334,10 +335,29 @@ public sealed partial class KopiClient
         return new Running(producers, queueMaintainer, completer, elector, maintenance, notifier, loggers.CreateLogger<KopiClient>());
     }
 
+    /// <summary>
+    /// The executor's settings. Its <see cref="JobExecutorOptions.SchedulerInterval"/> is the scheduler's own, so a retry
+    /// the executor leaves to the scheduler never waits for one that runs less often than it assumes (design §5.7).
+    /// </summary>
+    internal static JobExecutorOptions ExecutorOptions(KopiClientOptions options) => new()
+    {
+        JobTimeout = options.JobTimeout,
+        RetryPolicy = options.RetryPolicy,
+        SchedulerInterval = options.SchedulerInterval,
+    };
+
     /// <summary>The leader-only maintenance services (design §5.7), which run while this client leads.</summary>
-    /// <remarks>The scheduler, rescuer and job cleaner join with plan tasks 3.3–3.5.</remarks>
-    private IMaintenanceService[] MaintenanceServices() =>
-        _options.QueueRetention is { } queueRetention ? [new QueueCleaner(_driver, queueRetention)] : [];
+    /// <remarks>The rescuer and job cleaner join with plan tasks 3.4 and 3.5.</remarks>
+    internal static IMaintenanceService[] MaintenanceServices(IKopiDriver driver, KopiClientOptions options)
+    {
+        var services = new List<IMaintenanceService> { new Scheduler(driver, options.SchedulerInterval) };
+        if (options.QueueRetention is { } queueRetention)
+        {
+            services.Add(new QueueCleaner(driver, queueRetention));
+        }
+
+        return [.. services];
+    }
 
     [LoggerMessage(EventId = 1000, Level = LogLevel.Information, Message = "Client {ClientId} started working queues {Queues} (notifications: {Listening})")]
     private static partial void LogStarted(ILogger logger, string clientId, string queues, bool listening);

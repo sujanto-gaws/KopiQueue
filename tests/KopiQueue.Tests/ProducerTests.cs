@@ -455,6 +455,9 @@ public sealed class ProducerTests
         public Task<IReadOnlyList<string>> QueueDeleteExpiredAsync(QueueDeleteExpiredParams parameters, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<string>>([]);
 
+        public Task<IReadOnlyList<JobScheduleResult>> JobScheduleAsync(JobScheduleParams parameters, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<JobScheduleResult>>([]);
+
         public Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
     }

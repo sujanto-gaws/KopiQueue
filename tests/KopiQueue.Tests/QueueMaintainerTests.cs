@@ -347,6 +347,9 @@ public sealed class QueueMaintainerTests
         public Task<IReadOnlyList<string>> QueueDeleteExpiredAsync(QueueDeleteExpiredParams parameters, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<IReadOnlyList<JobScheduleResult>> JobScheduleAsync(JobScheduleParams parameters, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         private QueueRow Row(string name) => new()
         {
             Name = name,

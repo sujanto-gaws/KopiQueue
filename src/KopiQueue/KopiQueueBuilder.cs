@@ -59,6 +59,9 @@ public sealed class KopiQueueOptions
 
     /// <inheritdoc cref="KopiClientOptions.QueueRetention"/>
     public TimeSpan? QueueRetention { get; set; } = TimeSpan.FromHours(24);
+
+    /// <inheritdoc cref="KopiClientOptions.SchedulerInterval"/>
+    public TimeSpan SchedulerInterval { get; set; } = TimeSpan.FromSeconds(5);
 }
 
 /// <summary>Settings of one queue in <see cref="KopiQueueOptions.Queues"/>.</summary>

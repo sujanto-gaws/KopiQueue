@@ -276,6 +276,13 @@ public sealed class KopiClientOptions
     /// minute, so it must be at least 5 minutes. Default: 24 hours; <c>null</c> keeps queue rows forever.
     /// </summary>
     public TimeSpan? QueueRetention { get; init; } = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// How often the leader's scheduler makes due scheduled and retryable jobs available (FR-SCH-01, FR-SCH-02, design
+    /// §5.7), with ±10% jitter. A job is therefore eligible within about this long after its due time. A retry or snooze
+    /// due within one interval is made available at once instead. Default: 5 s.
+    /// </summary>
+    public TimeSpan SchedulerInterval { get; init; } = TimeSpan.FromSeconds(5);
 }
 
 /// <summary>Settings of one queue (design §7).</summary>
@@ -363,6 +370,9 @@ public sealed partial class KopiClient : IKopiClient
     /// Inserts in a caller's transaction are not announced here: the client cannot see their commit.
     /// </summary>
     internal LocalWaker LocalWaker { get; } = new();
+
+    /// <summary>The client's options, as given (for tests of how they are mapped).</summary>
+    internal KopiClientOptions Options => _options;
 
 #pragma warning disable RS0026 // See IKopiClient.
     /// <inheritdoc />
