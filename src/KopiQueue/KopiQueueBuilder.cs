@@ -65,6 +65,15 @@ public sealed class KopiQueueOptions
 
     /// <inheritdoc cref="KopiClientOptions.RescueStuckJobsAfter"/>
     public TimeSpan? RescueStuckJobsAfter { get; set; }
+
+    /// <inheritdoc cref="KopiClientOptions.CompletedJobRetention"/>
+    public TimeSpan? CompletedJobRetention { get; set; } = TimeSpan.FromHours(24);
+
+    /// <inheritdoc cref="KopiClientOptions.CancelledJobRetention"/>
+    public TimeSpan? CancelledJobRetention { get; set; } = TimeSpan.FromHours(24);
+
+    /// <inheritdoc cref="KopiClientOptions.DiscardedJobRetention"/>
+    public TimeSpan? DiscardedJobRetention { get; set; } = TimeSpan.FromDays(7);
 }
 
 /// <summary>Settings of one queue in <see cref="KopiQueueOptions.Queues"/>.</summary>

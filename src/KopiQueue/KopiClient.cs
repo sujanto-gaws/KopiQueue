@@ -294,6 +294,25 @@ public sealed class KopiClientOptions
     /// <see cref="JobTimeout"/> is infinite).
     /// </summary>
     public TimeSpan? RescueStuckJobsAfter { get; init; }
+
+    /// <summary>
+    /// How long the leader keeps a completed job after it finished, before the job cleaner deletes it (FR-MNT-04, design
+    /// §5.7). A completed unique job holds its unique slot until then (design §5.6). Default: 24 hours; <c>null</c> keeps
+    /// completed jobs forever.
+    /// </summary>
+    public TimeSpan? CompletedJobRetention { get; init; } = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// How long the leader keeps a cancelled job after it was cancelled, before the job cleaner deletes it (FR-MNT-04).
+    /// Default: 24 hours; <c>null</c> keeps cancelled jobs forever.
+    /// </summary>
+    public TimeSpan? CancelledJobRetention { get; init; } = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// How long the leader keeps a discarded job (one that ran out of attempts) after it was discarded, before the job
+    /// cleaner deletes it (FR-MNT-04). Default: 7 days; <c>null</c> keeps discarded jobs forever.
+    /// </summary>
+    public TimeSpan? DiscardedJobRetention { get; init; } = TimeSpan.FromDays(7);
 }
 
 /// <summary>Settings of one queue (design §7).</summary>

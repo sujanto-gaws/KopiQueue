@@ -148,6 +148,18 @@ public interface IKopiExecutor
     Task<IReadOnlyList<JobRow>> JobRescueManyAsync(IReadOnlyList<JobRescueParams> jobs, CancellationToken cancellationToken);
 
     /// <summary>
+    /// The job cleaner's batch (design §5.7, FR-MNT-04), in one statement: deletes up to
+    /// <see cref="JobDeleteFinalizedParams.Max"/> jobs that are <see cref="JobState.Completed"/>,
+    /// <see cref="JobState.Cancelled"/> or <see cref="JobState.Discarded"/> and whose <see cref="JobRow.FinalizedAt"/> is
+    /// older than that state's retention by the database's clock, oldest first. A state without a retention is kept, and
+    /// jobs in any other state are never deleted. Rows another transaction holds are skipped, never waited for, and the
+    /// state and cutoff are checked again as each row is deleted, so a job that left its finalised state meanwhile stays.
+    /// Nothing else is touched and nothing is notified.
+    /// </summary>
+    /// <returns>The IDs of the deleted jobs, in ascending order.</returns>
+    Task<IReadOnlyList<long>> JobDeleteFinalizedAsync(JobDeleteFinalizedParams parameters, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Tries to win the leader lease (design §5.5, FR-MNT-01): takes it when nobody holds it, when its holder's lease has
     /// expired by the database's clock, or when <see cref="LeaderElectParams.LeaderId"/> already holds it, in which case
     /// the lease is extended and its election time kept. A won lease expires <see cref="LeaderElectParams.Ttl"/> after the
@@ -356,6 +368,24 @@ public sealed class JobRescueParams
 
     /// <summary>The error to append, saying the job was rescued.</summary>
     public required AttemptError Error { get; init; }
+}
+
+/// <summary>Which jobs <see cref="IKopiExecutor.JobDeleteFinalizedAsync"/> deletes.</summary>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed class JobDeleteFinalizedParams
+{
+    /// <summary>How long completed jobs are kept after they were finalised, or <c>null</c> to keep them. Positive.</summary>
+    public TimeSpan? CompletedRetention { get; init; }
+
+    /// <summary>How long cancelled jobs are kept after they were finalised, or <c>null</c> to keep them. Positive.</summary>
+    public TimeSpan? CancelledRetention { get; init; }
+
+    /// <summary>How long discarded jobs are kept after they were finalised, or <c>null</c> to keep them. Positive.</summary>
+    public TimeSpan? DiscardedRetention { get; init; }
+
+    /// <summary>The most jobs to delete: at least 1.</summary>
+    public required int Max { get; init; }
 }
 
 /// <summary>A client asking for the leader lease (<see cref="IKopiExecutor.LeaderAttemptElectAsync"/>, <see cref="IKopiExecutor.LeaderAttemptReelectAsync"/>).</summary>

@@ -256,9 +256,15 @@ public sealed partial class KopiClient
                     && (options.JobTimeout == Timeout.InfiniteTimeSpan || options.RescueStuckJobsAfter > options.JobTimeout)),
             nameof(KopiClientOptions.RescueStuckJobsAfter),
             "must be greater than JobTimeout, or null for JobTimeout plus 1 hour");
+        CheckRetention(options.CompletedJobRetention, nameof(KopiClientOptions.CompletedJobRetention));
+        CheckRetention(options.CancelledJobRetention, nameof(KopiClientOptions.CancelledJobRetention));
+        CheckRetention(options.DiscardedJobRetention, nameof(KopiClientOptions.DiscardedJobRetention));
         Check(Enum.IsDefined(options.NotificationMode), nameof(KopiClientOptions.NotificationMode), "is not a known mode");
         Check(Enum.IsDefined(options.CompleterMode), nameof(KopiClientOptions.CompleterMode), "is not a known mode");
         return errors;
+
+        void CheckRetention(TimeSpan? retention, string option) =>
+            Check(retention is null || retention > TimeSpan.Zero, option, "must be positive, or null to keep those jobs");
 
         void Check(bool valid, string option, string rule)
         {
@@ -362,7 +368,6 @@ public sealed partial class KopiClient
     };
 
     /// <summary>The leader-only maintenance services (design §5.7), which run while this client leads.</summary>
-    /// <remarks>The job cleaner joins with plan task 3.5.</remarks>
     internal static IMaintenanceService[] MaintenanceServices(
         IKopiDriver driver,
         KopiClientOptions options,
@@ -386,6 +391,17 @@ public sealed partial class KopiClient
                 },
                 (loggers ?? NullLoggerFactory.Instance).CreateLogger<Rescuer>()),
         };
+        if (JobCleaner.AnyRetention(options))
+        {
+            services.Add(new JobCleaner(driver, new JobDeleteFinalizedParams
+            {
+                CompletedRetention = options.CompletedJobRetention,
+                CancelledRetention = options.CancelledJobRetention,
+                DiscardedRetention = options.DiscardedJobRetention,
+                Max = JobCleaner.DefaultBatchSize,
+            }));
+        }
+
         if (options.QueueRetention is { } queueRetention)
         {
             services.Add(new QueueCleaner(driver, queueRetention));

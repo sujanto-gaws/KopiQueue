@@ -35,6 +35,7 @@ internal sealed class NpgsqlStatements
         JobSchedule = Load("job_schedule.sql");
         JobListStuck = Load("job_list_stuck.sql");
         JobRescueMany = Load("job_rescue_many.sql");
+        JobDeleteFinalized = Load("job_delete_finalized.sql");
         LeaderAttemptElect = Load("leader_attempt_elect.sql");
         LeaderAttemptReelect = Load("leader_attempt_reelect.sql");
         LeaderResign = Load("leader_resign.sql");
@@ -65,6 +66,8 @@ internal sealed class NpgsqlStatements
     public string JobListStuck { get; }
 
     public string JobRescueMany { get; }
+
+    public string JobDeleteFinalized { get; }
 
     public string LeaderAttemptElect { get; }
 
@@ -404,6 +407,32 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
             ],
             ReadJob,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<long>> JobDeleteFinalizedAsync(JobDeleteFinalizedParams parameters, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentOutOfRangeException.ThrowIfLessThan(parameters.Max, 1, nameof(parameters));
+        foreach (var retention in new[] { parameters.CompletedRetention, parameters.CancelledRetention, parameters.DiscardedRetention })
+        {
+            if (retention is { } r)
+            {
+                ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(r, TimeSpan.Zero, nameof(parameters));
+            }
+        }
+
+        var ids = await RowsAsync(
+            statements.JobDeleteFinalized,
+            [
+                new() { NpgsqlDbType = NpgsqlDbType.Interval, Value = (object?)parameters.CompletedRetention ?? DBNull.Value },
+                new() { NpgsqlDbType = NpgsqlDbType.Interval, Value = (object?)parameters.CancelledRetention ?? DBNull.Value },
+                new() { NpgsqlDbType = NpgsqlDbType.Interval, Value = (object?)parameters.DiscardedRetention ?? DBNull.Value },
+                new() { NpgsqlDbType = NpgsqlDbType.Integer, Value = parameters.Max },
+            ],
+            reader => reader.GetInt64(0),
+            cancellationToken).ConfigureAwait(false);
+        ids.Sort();
+        return ids;
     }
 
     public Task<bool> LeaderAttemptElectAsync(LeaderElectParams parameters, CancellationToken cancellationToken) =>
