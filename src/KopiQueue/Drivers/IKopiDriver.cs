@@ -179,6 +179,49 @@ public interface IKopiExecutor
     Task<IReadOnlyList<long>> JobListCancelAttemptedAsync(IReadOnlyList<long> ids, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Lists jobs that pass <see cref="JobListQuery.Filter"/>, sorted by <see cref="JobListQuery.OrderBy"/> and then by
+    /// ID, in the direction asked for, starting after <see cref="JobListQuery.After"/> (FR-ADM-02). A time that is
+    /// <c>null</c> sorts after every other, so last ascending and first descending. Takes no locks.
+    /// </summary>
+    /// <returns>Up to <see cref="JobListQuery.Max"/> jobs, in order.</returns>
+    Task<IReadOnlyList<JobRow>> JobListAsync(JobListQuery query, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Deletes job <paramref name="id"/> unless it is <see cref="JobState.Running"/> (FR-ADM-03), in one statement. A
+    /// job that starts running while the statement runs is not deleted.
+    /// </summary>
+    /// <returns>
+    /// The job as it was, and whether it was deleted; or <c>null</c> if no job has that ID. A job that was not deleted is
+    /// running, although the returned row can show the state it had just before it started.
+    /// </returns>
+    Task<JobDeleteResult?> JobDeleteAsync(long id, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Deletes up to <see cref="JobDeleteManyQuery.Max"/> jobs that pass <see cref="JobDeleteManyQuery.Filter"/>, in ID
+    /// order, in one statement (FR-ADM-03). Running jobs are never deleted, and jobs another transaction holds are
+    /// skipped rather than waited for.
+    /// </summary>
+    /// <returns>The deleted jobs, as they were, in ascending ID order.</returns>
+    Task<IReadOnlyList<JobRow>> JobDeleteManyAsync(JobDeleteManyQuery query, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Makes job <paramref name="id"/> available now (FR-ERR-07), in one statement, if it is
+    /// <see cref="JobState.Scheduled"/>, <see cref="JobState.Retryable"/>, <see cref="JobState.Completed"/>,
+    /// <see cref="JobState.Cancelled"/> or <see cref="JobState.Discarded"/>: its state becomes
+    /// <see cref="JobState.Available"/>, <see cref="JobRow.ScheduledAt"/> the database's now,
+    /// <see cref="JobRow.FinalizedAt"/> <c>null</c>, and <c>metadata.cancel_attempted_at</c> is removed, so a cancel asked
+    /// of an earlier attempt does not cancel the next. Its attempt count, maximum and errors are kept. A job in another
+    /// state is left as it is. On a driver with <see cref="DriverCapabilities.ListenNotify"/>, the job's queue is
+    /// notified as for an insert, in the same transaction.
+    /// </summary>
+    /// <returns>The job as it is after the call, or <c>null</c> if no job has that ID.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// The job is unique, and another job holds its unique key in a state its uniqueness covers, so it cannot become
+    /// available. Nothing changes.
+    /// </exception>
+    Task<JobRow?> JobRetryAsync(long id, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Tries to win the leader lease (design §5.5, FR-MNT-01): takes it when nobody holds it, when its holder's lease has
     /// expired by the database's clock, or when <see cref="LeaderElectParams.LeaderId"/> already holds it, in which case
     /// the lease is extended and its election time kept. A won lease expires <see cref="LeaderElectParams.Ttl"/> after the
@@ -418,6 +461,56 @@ public sealed class LeaderElectParams
     /// <summary>How long the lease lasts after it is won or extended. Positive.</summary>
     public required TimeSpan Ttl { get; init; }
 }
+
+/// <summary>Which jobs <see cref="IKopiExecutor.JobListAsync"/> returns.</summary>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed class JobListQuery
+{
+    /// <summary>Which jobs: none of its lists is empty.</summary>
+    public required JobFilter Filter { get; init; }
+
+    /// <summary>What to sort by, before the ID.</summary>
+    public JobListOrderBy OrderBy { get; init; }
+
+    /// <summary>Sorts from the highest value down.</summary>
+    public bool Descending { get; init; }
+
+    /// <summary>Only jobs that sort after this position, or <c>null</c> to start from the first.</summary>
+    public JobListPosition? After { get; init; }
+
+    /// <summary>The most jobs to return: at least 1.</summary>
+    public required int Max { get; init; }
+}
+
+/// <summary>A position in a job list: the sort value and ID of the job it follows (<see cref="JobListQuery.After"/>).</summary>
+/// <param name="Id">The job's ID.</param>
+/// <param name="Value">
+/// Its value of <see cref="JobListQuery.OrderBy"/>, or <c>null</c> when that time is <c>null</c>; not used when sorting
+/// by ID.
+/// </param>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed record JobListPosition(long Id, DateTimeOffset? Value);
+
+/// <summary>Which jobs <see cref="IKopiExecutor.JobDeleteManyAsync"/> deletes.</summary>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed class JobDeleteManyQuery
+{
+    /// <summary>Which jobs: none of its lists is empty, and its states do not include <see cref="JobState.Running"/>.</summary>
+    public required JobFilter Filter { get; init; }
+
+    /// <summary>The most jobs to delete: at least 1.</summary>
+    public required int Max { get; init; }
+}
+
+/// <summary>What <see cref="IKopiExecutor.JobDeleteAsync"/> did.</summary>
+/// <param name="Job">The job as it was.</param>
+/// <param name="Deleted"><c>false</c> when the job was running, so it was kept.</param>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed record JobDeleteResult(JobRow Job, bool Deleted);
 
 /// <summary>Which queues <see cref="IKopiExecutor.QueueListAsync"/> returns.</summary>
 /// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>

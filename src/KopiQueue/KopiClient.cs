@@ -112,6 +112,118 @@ public interface IKopiClient
     /// <exception cref="ArgumentException"><paramref name="transaction"/> belongs to another database client.</exception>
     Task<JobRow> JobCancelAsync(long id, DbTransaction transaction, CancellationToken cancellationToken = default);
 
+    /// <summary>Reads a job (FR-ADM-01).</summary>
+    /// <param name="id">The job's ID.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The job, or <c>null</c> if no job has that ID.</returns>
+    Task<JobRow?> JobGetAsync(long id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists jobs, a page at a time (FR-ADM-02): those that pass every filter of <paramref name="parameters"/>, sorted by
+    /// <see cref="JobListParams.OrderBy"/> and then by ID. Pages are keyset pages: pass
+    /// <see cref="JobListResult.NextCursor"/> as <see cref="JobListParams.After"/> to get the next one. Takes no locks.
+    /// </summary>
+    /// <param name="parameters">The filters, the sort, the page size and where to start. <c>null</c> returns the first 100 jobs by ID.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The page, and the cursor of the next one if there is more.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><see cref="JobListParams.Limit"/> is not from 1 to 10,000, or <see cref="JobListParams.OrderBy"/> is unknown.</exception>
+    /// <exception cref="ArgumentException">
+    /// A filter holds a value no job can have, or <see cref="JobListParams.After"/> is not a cursor from this method for
+    /// the same sort and direction.
+    /// </exception>
+    Task<JobListResult> JobListAsync(JobListParams? parameters = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes a job, in any state but running (FR-ADM-03), on a connection the client takes from its pool. Cancel a
+    /// running job first (<see cref="JobCancelAsync(long, CancellationToken)"/>), and delete it once it has stopped.
+    /// </summary>
+    /// <param name="id">The job's ID.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The deleted job as it was, or <c>null</c> if no job has that ID.</returns>
+    /// <exception cref="KopiQueueJobRunningException">The job is running; it is not deleted.</exception>
+    Task<JobRow?> JobDeleteAsync(long id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes a job inside the caller's transaction (FR-ADM-05), as <see cref="JobDeleteAsync(long, CancellationToken)"/>
+    /// does: the delete commits or rolls back with the transaction. The caller keeps ownership of the transaction.
+    /// </summary>
+    /// <param name="id">The job's ID.</param>
+    /// <param name="transaction">The caller's transaction, of the configured driver's database client.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The deleted job as it was, or <c>null</c> if no job has that ID.</returns>
+    /// <exception cref="KopiQueueJobRunningException">The job is running; it is not deleted.</exception>
+    /// <exception cref="ArgumentException"><paramref name="transaction"/> belongs to another database client.</exception>
+    Task<JobRow?> JobDeleteAsync(long id, DbTransaction transaction, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes up to <see cref="JobDeleteManyParams.Limit"/> jobs that pass every filter of
+    /// <paramref name="parameters"/>, in ID order, in one statement (FR-ADM-03). Running jobs are never deleted, and jobs
+    /// being fetched or changed at that moment are skipped rather than waited for. Call it again until it returns
+    /// nothing to delete every match.
+    /// </summary>
+    /// <param name="parameters">Which jobs, and the most to delete.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The deleted jobs as they were, in ascending ID order.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><see cref="JobDeleteManyParams.Limit"/> is not from 1 to 10,000.</exception>
+    /// <exception cref="ArgumentException">
+    /// A filter holds a value no job can have, or <see cref="JobFilter.States"/> includes <see cref="JobState.Running"/>.
+    /// </exception>
+    Task<IReadOnlyList<JobRow>> JobDeleteManyAsync(JobDeleteManyParams parameters, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes jobs inside the caller's transaction (FR-ADM-05), as
+    /// <see cref="JobDeleteManyAsync(JobDeleteManyParams, CancellationToken)"/> does. The caller keeps ownership of the
+    /// transaction.
+    /// </summary>
+    /// <param name="parameters">Which jobs, and the most to delete.</param>
+    /// <param name="transaction">The caller's transaction, of the configured driver's database client.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The deleted jobs as they were, in ascending ID order.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><see cref="JobDeleteManyParams.Limit"/> is not from 1 to 10,000.</exception>
+    /// <exception cref="ArgumentException">
+    /// A filter holds a value no job can have, <see cref="JobFilter.States"/> includes <see cref="JobState.Running"/>, or
+    /// <paramref name="transaction"/> belongs to another database client.
+    /// </exception>
+    Task<IReadOnlyList<JobRow>> JobDeleteManyAsync(JobDeleteManyParams parameters, DbTransaction transaction, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Makes a job available now (FR-ERR-07), on a connection the client takes from its pool, and wakes the producers of
+    /// its queue.
+    /// <list type="bullet">
+    /// <item>
+    /// A scheduled or retryable job, or a finalised one (completed, cancelled, discarded), becomes available at once. It
+    /// keeps its attempt count and errors, so a job whose attempts were used up gets one more; a cancel asked of an
+    /// earlier attempt no longer applies.
+    /// </item>
+    /// <item>An available, pending or running job is left as it is, without error.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="id">The job's ID.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The job as it is after the call.</returns>
+    /// <exception cref="KopiQueueNotFoundException">No job has that ID.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The job is unique, and another job holds its unique key in a state its uniqueness covers. Nothing changes.
+    /// </exception>
+    Task<JobRow> JobRetryAsync(long id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Makes a job available inside the caller's transaction (FR-ADM-05), as
+    /// <see cref="JobRetryAsync(long, CancellationToken)"/> does: the change commits or rolls back with the transaction,
+    /// and producers learn of it only if it commits. The caller keeps ownership of the transaction.
+    /// </summary>
+    /// <param name="id">The job's ID.</param>
+    /// <param name="transaction">The caller's transaction, of the configured driver's database client.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The job as it is after the call, visible to others once the transaction commits.</returns>
+    /// <exception cref="KopiQueueNotFoundException">No job has that ID.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The job is unique, and another job holds its unique key in a state its uniqueness covers. On PostgreSQL the
+    /// transaction is then aborted, as after any failed statement.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="transaction"/> belongs to another database client.</exception>
+    Task<JobRow> JobRetryAsync(long id, DbTransaction transaction, CancellationToken cancellationToken = default);
+
     /// <summary>Reads a queue (FR-ADM-04).</summary>
     /// <param name="name">The queue.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
@@ -140,7 +252,19 @@ public interface IKopiClient
     Task QueuePauseAsync(string name, QueuePauseOptions? options = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Resumes a queue, or every queue for <c>"*"</c>: the reverse of <see cref="QueuePauseAsync"/>, which applies the
+    /// Pauses a queue everywhere, or every queue for <c>"*"</c>, inside the caller's transaction (FR-ADM-05), as
+    /// <see cref="QueuePauseAsync(string, QueuePauseOptions?, CancellationToken)"/> does: clients learn of the pause only
+    /// if the transaction commits. The caller keeps ownership of the transaction.
+    /// </summary>
+    /// <param name="name">The queue, or <c>"*"</c> for all.</param>
+    /// <param name="transaction">The caller's transaction, of the configured driver's database client.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <exception cref="KopiQueueNotFoundException">The queue does not exist.</exception>
+    /// <exception cref="ArgumentException"><paramref name="transaction"/> belongs to another database client.</exception>
+    Task QueuePauseAsync(string name, DbTransaction transaction, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resumes a queue, or every queue for <c>"*"</c>: the reverse of <see cref="QueuePauseAsync(string, QueuePauseOptions?, CancellationToken)"/>, which applies the
     /// same way. A local resume does not undo a pause everywhere, nor the other way round.
     /// </summary>
     /// <param name="name">The queue, or <c>"*"</c> for all.</param>
@@ -151,6 +275,17 @@ public interface IKopiClient
     /// </exception>
     Task QueueResumeAsync(string name, QueuePauseOptions? options = null, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Resumes a queue everywhere, or every queue for <c>"*"</c>, inside the caller's transaction (FR-ADM-05): the reverse
+    /// of <see cref="QueuePauseAsync(string, DbTransaction, CancellationToken)"/>.
+    /// </summary>
+    /// <param name="name">The queue, or <c>"*"</c> for all.</param>
+    /// <param name="transaction">The caller's transaction, of the configured driver's database client.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <exception cref="KopiQueueNotFoundException">The queue does not exist.</exception>
+    /// <exception cref="ArgumentException"><paramref name="transaction"/> belongs to another database client.</exception>
+    Task QueueResumeAsync(string name, DbTransaction transaction, CancellationToken cancellationToken = default);
+
     /// <summary>Replaces a queue's metadata (FR-ADM-04).</summary>
     /// <param name="name">The queue.</param>
     /// <param name="metadata">The new metadata, which replaces the old.</param>
@@ -158,6 +293,16 @@ public interface IKopiClient
     /// <returns>The updated queue.</returns>
     /// <exception cref="KopiQueueNotFoundException">The queue does not exist.</exception>
     Task<QueueRow> QueueUpdateAsync(string name, JsonObject metadata, CancellationToken cancellationToken = default);
+
+    /// <summary>Replaces a queue's metadata inside the caller's transaction (FR-ADM-05). The caller keeps ownership of the transaction.</summary>
+    /// <param name="name">The queue.</param>
+    /// <param name="metadata">The new metadata, which replaces the old.</param>
+    /// <param name="transaction">The caller's transaction, of the configured driver's database client.</param>
+    /// <param name="cancellationToken">Cancels the update.</param>
+    /// <returns>The updated queue, visible to others once the transaction commits.</returns>
+    /// <exception cref="KopiQueueNotFoundException">The queue does not exist.</exception>
+    /// <exception cref="ArgumentException"><paramref name="transaction"/> belongs to another database client.</exception>
+    Task<QueueRow> QueueUpdateAsync(string name, JsonObject metadata, DbTransaction transaction, CancellationToken cancellationToken = default);
 }
 #pragma warning restore RS0026
 
@@ -540,7 +685,88 @@ public sealed partial class KopiClient : IKopiClient
         ArgumentNullException.ThrowIfNull(transaction);
         return CancelAsync(_driver.GetExecutor(transaction), id, cancellationToken);
     }
-#pragma warning restore RS0026
+
+    /// <inheritdoc/>
+    public Task<JobRow?> JobGetAsync(long id, CancellationToken cancellationToken = default) =>
+        _driver.GetExecutor().JobGetByIdAsync(id, cancellationToken);
+
+    /// <inheritdoc/>
+    public async Task<JobListResult> JobListAsync(JobListParams? parameters = null, CancellationToken cancellationToken = default)
+    {
+        parameters ??= new JobListParams();
+        ArgumentOutOfRangeException.ThrowIfLessThan(parameters.Limit, 1, nameof(parameters));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(parameters.Limit, 10_000, nameof(parameters));
+        if (!Enum.IsDefined(parameters.OrderBy))
+        {
+            throw new ArgumentOutOfRangeException(nameof(parameters), parameters.OrderBy, "OrderBy is not a known order.");
+        }
+
+        parameters.Validate(nameof(parameters));
+        var after = parameters.After is null
+            ? null
+            : JobListCursor.Decode(parameters.After, parameters.OrderBy, parameters.Descending, nameof(parameters));
+        if (parameters.MatchesNothing)
+        {
+            return new JobListResult { Jobs = [] };
+        }
+
+        // One more than the page, to know whether a next page exists without a second query.
+        var rows = await _driver.GetExecutor().JobListAsync(
+            new JobListQuery { Filter = parameters, OrderBy = parameters.OrderBy, Descending = parameters.Descending, After = after, Max = parameters.Limit + 1 },
+            cancellationToken).ConfigureAwait(false);
+        if (rows.Count <= parameters.Limit)
+        {
+            return new JobListResult { Jobs = rows };
+        }
+
+        JobRow[] page = [.. rows.Take(parameters.Limit)];
+        return new JobListResult { Jobs = page, NextCursor = JobListCursor.Encode(parameters.OrderBy, parameters.Descending, page[^1]) };
+    }
+
+    /// <inheritdoc/>
+    public Task<JobRow?> JobDeleteAsync(long id, CancellationToken cancellationToken = default) =>
+        DeleteAsync(_driver.GetExecutor(), id, cancellationToken);
+
+    /// <inheritdoc/>
+    public Task<JobRow?> JobDeleteAsync(long id, DbTransaction transaction, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(transaction);
+        return DeleteAsync(_driver.GetExecutor(transaction), id, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<JobRow>> JobDeleteManyAsync(JobDeleteManyParams parameters, CancellationToken cancellationToken = default)
+    {
+        CheckDeleteMany(parameters);
+        return DeleteManyAsync(_driver.GetExecutor(), parameters, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<JobRow>> JobDeleteManyAsync(JobDeleteManyParams parameters, DbTransaction transaction, CancellationToken cancellationToken = default)
+    {
+        CheckDeleteMany(parameters);
+        ArgumentNullException.ThrowIfNull(transaction);
+        return DeleteManyAsync(_driver.GetExecutor(transaction), parameters, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<JobRow> JobRetryAsync(long id, CancellationToken cancellationToken = default)
+    {
+        var job = await RetryAsync(_driver.GetExecutor(), id, cancellationToken).ConfigureAwait(false);
+        if (job.State == JobState.Available)
+        {
+            LocalWaker.Wake([job.Queue]); // here at once, without waiting for the notification or the poll
+        }
+
+        return job;
+    }
+
+    /// <inheritdoc/>
+    public Task<JobRow> JobRetryAsync(long id, DbTransaction transaction, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(transaction);
+        return RetryAsync(_driver.GetExecutor(transaction), id, cancellationToken);
+    }
 
     /// <inheritdoc/>
     public Task<QueueRow?> QueueGetAsync(string name, CancellationToken cancellationToken = default)
@@ -567,14 +793,53 @@ public sealed partial class KopiClient : IKopiClient
         SetPausedAsync(name, paused: false, options, cancellationToken);
 
     /// <inheritdoc/>
-    public async Task<QueueRow> QueueUpdateAsync(string name, JsonObject metadata, CancellationToken cancellationToken = default)
+    public Task QueuePauseAsync(string name, DbTransaction transaction, CancellationToken cancellationToken = default) =>
+        SetPausedInAsync(name, paused: true, transaction, cancellationToken);
+
+    /// <inheritdoc/>
+    public Task QueueResumeAsync(string name, DbTransaction transaction, CancellationToken cancellationToken = default) =>
+        SetPausedInAsync(name, paused: false, transaction, cancellationToken);
+
+    /// <inheritdoc/>
+    public Task<QueueRow> QueueUpdateAsync(string name, JsonObject metadata, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
         ArgumentNullException.ThrowIfNull(metadata);
-        var row = await _driver.GetExecutor()
+        return UpdateQueueAsync(_driver.GetExecutor(), name, metadata, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public Task<QueueRow> QueueUpdateAsync(string name, JsonObject metadata, DbTransaction transaction, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentNullException.ThrowIfNull(metadata);
+        ArgumentNullException.ThrowIfNull(transaction);
+        return UpdateQueueAsync(_driver.GetExecutor(transaction), name, metadata, cancellationToken);
+    }
+
+#pragma warning restore RS0026
+
+    private static async Task<QueueRow> UpdateQueueAsync(IKopiExecutor executor, string name, JsonObject metadata, CancellationToken cancellationToken)
+    {
+        var row = await executor
             .QueueUpdateAsync(new QueueUpdateParams { Name = name, MetadataJson = metadata.ToJsonString() }, cancellationToken)
             .ConfigureAwait(false);
         return row ?? throw new KopiQueueNotFoundException($"Queue '{name}' does not exist.");
+    }
+
+    /// <summary>Pauses or resumes everywhere, in the caller's transaction: clients apply it through the notification or the poll, once it commits.</summary>
+    private async Task SetPausedInAsync(string name, bool paused, DbTransaction transaction, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentNullException.ThrowIfNull(transaction);
+        var executor = _driver.GetExecutor(transaction);
+        var found = paused
+            ? await executor.QueuePauseAsync(name, cancellationToken).ConfigureAwait(false)
+            : await executor.QueueResumeAsync(name, cancellationToken).ConfigureAwait(false);
+        if (!found)
+        {
+            throw new KopiQueueNotFoundException($"Queue '{name}' does not exist.");
+        }
     }
 
     private async Task SetPausedAsync(string name, bool paused, QueuePauseOptions? options, CancellationToken cancellationToken)
@@ -606,6 +871,39 @@ public sealed partial class KopiClient : IKopiClient
     private static async Task<JobRow> CancelAsync(IKopiExecutor executor, long id, CancellationToken cancellationToken) =>
         await executor.JobCancelAsync(id, cancellationToken).ConfigureAwait(false)
         ?? throw new KopiQueueNotFoundException($"Job {id} does not exist.");
+
+    private static async Task<JobRow> RetryAsync(IKopiExecutor executor, long id, CancellationToken cancellationToken) =>
+        await executor.JobRetryAsync(id, cancellationToken).ConfigureAwait(false)
+        ?? throw new KopiQueueNotFoundException($"Job {id} does not exist.");
+
+    private static async Task<JobRow?> DeleteAsync(IKopiExecutor executor, long id, CancellationToken cancellationToken)
+    {
+        var result = await executor.JobDeleteAsync(id, cancellationToken).ConfigureAwait(false);
+        return result switch
+        {
+            null => null,
+            { Deleted: true } => result.Job,
+            _ => throw new KopiQueueJobRunningException($"Job {id} is running, so it cannot be deleted. Cancel it, and delete it once it has stopped."),
+        };
+    }
+
+    /// <summary>Checks a delete-many before any SQL runs.</summary>
+    private static void CheckDeleteMany(JobDeleteManyParams parameters)
+    {
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentOutOfRangeException.ThrowIfLessThan(parameters.Limit, 1, nameof(parameters));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(parameters.Limit, 10_000, nameof(parameters));
+        parameters.Validate(nameof(parameters));
+        if (parameters.States?.Contains(JobState.Running) == true)
+        {
+            throw new ArgumentException("States includes Running, but running jobs cannot be deleted: cancel them, and delete them once they have stopped.", nameof(parameters));
+        }
+    }
+
+    private static async Task<IReadOnlyList<JobRow>> DeleteManyAsync(IKopiExecutor executor, JobDeleteManyParams parameters, CancellationToken cancellationToken) =>
+        parameters.MatchesNothing
+            ? []
+            : await executor.JobDeleteManyAsync(new JobDeleteManyQuery { Filter = parameters, Max = parameters.Limit }, cancellationToken).ConfigureAwait(false);
 
     /// <summary>How unique keys are built for args of <paramref name="argsType"/>; their marked members are looked up once.</summary>
     private JobValidation.UniqueContext Unique(Type argsType) =>

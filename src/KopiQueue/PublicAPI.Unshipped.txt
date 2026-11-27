@@ -652,3 +652,118 @@ abstract KopiQueue.PeriodicSchedule.NextAfter(System.DateTimeOffset after) -> Sy
 static KopiQueue.PeriodicJob.Create<TArgs>(KopiQueue.PeriodicSchedule! schedule, System.Func<TArgs>! args, KopiQueue.InsertOptions? options = null) -> KopiQueue.PeriodicJob!
 static KopiQueue.PeriodicSchedule.Cron(string! expression, System.TimeZoneInfo? timeZone = null) -> KopiQueue.PeriodicSchedule!
 static KopiQueue.PeriodicSchedule.Every(System.TimeSpan interval) -> KopiQueue.PeriodicSchedule!
+KopiQueue.IKopiClient.JobDeleteAsync(long id, System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow?>!
+KopiQueue.IKopiClient.JobDeleteAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow?>!
+KopiQueue.IKopiClient.JobDeleteManyAsync(KopiQueue.JobDeleteManyParams! parameters, System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.JobRow!>!>!
+KopiQueue.IKopiClient.JobDeleteManyAsync(KopiQueue.JobDeleteManyParams! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.JobRow!>!>!
+KopiQueue.IKopiClient.JobGetAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow?>!
+KopiQueue.IKopiClient.JobListAsync(KopiQueue.JobListParams? parameters = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobListResult!>!
+KopiQueue.IKopiClient.JobRetryAsync(long id, System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow!>!
+KopiQueue.IKopiClient.JobRetryAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow!>!
+KopiQueue.IKopiClient.QueuePauseAsync(string! name, System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+KopiQueue.IKopiClient.QueueResumeAsync(string! name, System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+KopiQueue.IKopiClient.QueueUpdateAsync(string! name, System.Text.Json.Nodes.JsonObject! metadata, System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.QueueRow!>!
+KopiQueue.JobDeleteManyParams
+KopiQueue.JobDeleteManyParams.JobDeleteManyParams() -> void
+KopiQueue.JobDeleteManyParams.Limit.get -> int
+KopiQueue.JobDeleteManyParams.Limit.init -> void
+KopiQueue.JobFilter
+KopiQueue.JobFilter.Ids.get -> System.Collections.Generic.IReadOnlyList<long>?
+KopiQueue.JobFilter.Ids.init -> void
+KopiQueue.JobFilter.Kinds.get -> System.Collections.Generic.IReadOnlyList<string!>?
+KopiQueue.JobFilter.Kinds.init -> void
+KopiQueue.JobFilter.MetadataContains.get -> System.Text.Json.Nodes.JsonObject?
+KopiQueue.JobFilter.MetadataContains.init -> void
+KopiQueue.JobFilter.Priorities.get -> System.Collections.Generic.IReadOnlyList<int>?
+KopiQueue.JobFilter.Priorities.init -> void
+KopiQueue.JobFilter.Queues.get -> System.Collections.Generic.IReadOnlyList<string!>?
+KopiQueue.JobFilter.Queues.init -> void
+KopiQueue.JobFilter.States.get -> System.Collections.Generic.IReadOnlyList<KopiQueue.JobState>?
+KopiQueue.JobFilter.States.init -> void
+KopiQueue.JobListOrderBy
+KopiQueue.JobListOrderBy.AttemptedAt = 3 -> KopiQueue.JobListOrderBy
+KopiQueue.JobListOrderBy.CreatedAt = 1 -> KopiQueue.JobListOrderBy
+KopiQueue.JobListOrderBy.FinalizedAt = 4 -> KopiQueue.JobListOrderBy
+KopiQueue.JobListOrderBy.Id = 0 -> KopiQueue.JobListOrderBy
+KopiQueue.JobListOrderBy.ScheduledAt = 2 -> KopiQueue.JobListOrderBy
+KopiQueue.JobListParams
+KopiQueue.JobListParams.After.get -> string?
+KopiQueue.JobListParams.After.init -> void
+KopiQueue.JobListParams.Descending.get -> bool
+KopiQueue.JobListParams.Descending.init -> void
+KopiQueue.JobListParams.JobListParams() -> void
+KopiQueue.JobListParams.Limit.get -> int
+KopiQueue.JobListParams.Limit.init -> void
+KopiQueue.JobListParams.OrderBy.get -> KopiQueue.JobListOrderBy
+KopiQueue.JobListParams.OrderBy.init -> void
+KopiQueue.JobListResult
+KopiQueue.JobListResult.JobListResult() -> void
+KopiQueue.JobListResult.Jobs.get -> System.Collections.Generic.IReadOnlyList<KopiQueue.JobRow!>!
+KopiQueue.JobListResult.Jobs.init -> void
+KopiQueue.JobListResult.NextCursor.get -> string?
+KopiQueue.JobListResult.NextCursor.init -> void
+KopiQueue.KopiClient.JobDeleteAsync(long id, System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow?>!
+KopiQueue.KopiClient.JobDeleteAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow?>!
+KopiQueue.KopiClient.JobDeleteManyAsync(KopiQueue.JobDeleteManyParams! parameters, System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.JobRow!>!>!
+KopiQueue.KopiClient.JobDeleteManyAsync(KopiQueue.JobDeleteManyParams! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.JobRow!>!>!
+KopiQueue.KopiClient.JobGetAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow?>!
+KopiQueue.KopiClient.JobListAsync(KopiQueue.JobListParams? parameters = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobListResult!>!
+KopiQueue.KopiClient.JobRetryAsync(long id, System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow!>!
+KopiQueue.KopiClient.JobRetryAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow!>!
+KopiQueue.KopiClient.QueuePauseAsync(string! name, System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+KopiQueue.KopiClient.QueueResumeAsync(string! name, System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+KopiQueue.KopiClient.QueueUpdateAsync(string! name, System.Text.Json.Nodes.JsonObject! metadata, System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.QueueRow!>!
+KopiQueue.KopiQueueJobRunningException
+KopiQueue.KopiQueueJobRunningException.KopiQueueJobRunningException() -> void
+KopiQueue.KopiQueueJobRunningException.KopiQueueJobRunningException(string? message) -> void
+KopiQueue.KopiQueueJobRunningException.KopiQueueJobRunningException(string? message, System.Exception? innerException) -> void
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobDeleteAsync(long id, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<KopiQueue.Drivers.JobDeleteResult?>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobDeleteManyAsync(KopiQueue.Drivers.JobDeleteManyQuery! query, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.JobRow!>!>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobListAsync(KopiQueue.Drivers.JobListQuery! query, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.JobRow!>!>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobRetryAsync(long id, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<KopiQueue.JobRow?>!
+[KQ0001]KopiQueue.Drivers.JobDeleteManyQuery
+[KQ0001]KopiQueue.Drivers.JobDeleteManyQuery.Filter.get -> KopiQueue.JobFilter!
+[KQ0001]KopiQueue.Drivers.JobDeleteManyQuery.Filter.init -> void
+[KQ0001]KopiQueue.Drivers.JobDeleteManyQuery.JobDeleteManyQuery() -> void
+[KQ0001]KopiQueue.Drivers.JobDeleteManyQuery.Max.get -> int
+[KQ0001]KopiQueue.Drivers.JobDeleteManyQuery.Max.init -> void
+[KQ0001]KopiQueue.Drivers.JobDeleteResult
+[KQ0001]KopiQueue.Drivers.JobDeleteResult.<Clone>$() -> KopiQueue.Drivers.JobDeleteResult!
+[KQ0001]KopiQueue.Drivers.JobDeleteResult.Deconstruct(out KopiQueue.JobRow! Job, out bool Deleted) -> void
+[KQ0001]KopiQueue.Drivers.JobDeleteResult.Deleted.get -> bool
+[KQ0001]KopiQueue.Drivers.JobDeleteResult.Deleted.init -> void
+[KQ0001]KopiQueue.Drivers.JobDeleteResult.Equals(KopiQueue.Drivers.JobDeleteResult? other) -> bool
+[KQ0001]KopiQueue.Drivers.JobDeleteResult.Job.get -> KopiQueue.JobRow!
+[KQ0001]KopiQueue.Drivers.JobDeleteResult.Job.init -> void
+[KQ0001]KopiQueue.Drivers.JobDeleteResult.JobDeleteResult(KopiQueue.JobRow! Job, bool Deleted) -> void
+[KQ0001]KopiQueue.Drivers.JobListPosition
+[KQ0001]KopiQueue.Drivers.JobListPosition.<Clone>$() -> KopiQueue.Drivers.JobListPosition!
+[KQ0001]KopiQueue.Drivers.JobListPosition.Deconstruct(out long Id, out System.DateTimeOffset? Value) -> void
+[KQ0001]KopiQueue.Drivers.JobListPosition.Equals(KopiQueue.Drivers.JobListPosition? other) -> bool
+[KQ0001]KopiQueue.Drivers.JobListPosition.Id.get -> long
+[KQ0001]KopiQueue.Drivers.JobListPosition.Id.init -> void
+[KQ0001]KopiQueue.Drivers.JobListPosition.JobListPosition(long Id, System.DateTimeOffset? Value) -> void
+[KQ0001]KopiQueue.Drivers.JobListPosition.Value.get -> System.DateTimeOffset?
+[KQ0001]KopiQueue.Drivers.JobListPosition.Value.init -> void
+[KQ0001]KopiQueue.Drivers.JobListQuery
+[KQ0001]KopiQueue.Drivers.JobListQuery.After.get -> KopiQueue.Drivers.JobListPosition?
+[KQ0001]KopiQueue.Drivers.JobListQuery.After.init -> void
+[KQ0001]KopiQueue.Drivers.JobListQuery.Descending.get -> bool
+[KQ0001]KopiQueue.Drivers.JobListQuery.Descending.init -> void
+[KQ0001]KopiQueue.Drivers.JobListQuery.Filter.get -> KopiQueue.JobFilter!
+[KQ0001]KopiQueue.Drivers.JobListQuery.Filter.init -> void
+[KQ0001]KopiQueue.Drivers.JobListQuery.JobListQuery() -> void
+[KQ0001]KopiQueue.Drivers.JobListQuery.Max.get -> int
+[KQ0001]KopiQueue.Drivers.JobListQuery.Max.init -> void
+[KQ0001]KopiQueue.Drivers.JobListQuery.OrderBy.get -> KopiQueue.JobListOrderBy
+[KQ0001]KopiQueue.Drivers.JobListQuery.OrderBy.init -> void
+[KQ0001]override KopiQueue.Drivers.JobDeleteResult.Equals(object? obj) -> bool
+[KQ0001]override KopiQueue.Drivers.JobDeleteResult.GetHashCode() -> int
+[KQ0001]override KopiQueue.Drivers.JobDeleteResult.ToString() -> string!
+[KQ0001]override KopiQueue.Drivers.JobListPosition.Equals(object? obj) -> bool
+[KQ0001]override KopiQueue.Drivers.JobListPosition.GetHashCode() -> int
+[KQ0001]override KopiQueue.Drivers.JobListPosition.ToString() -> string!
+[KQ0001]static KopiQueue.Drivers.JobDeleteResult.operator !=(KopiQueue.Drivers.JobDeleteResult? left, KopiQueue.Drivers.JobDeleteResult? right) -> bool
+[KQ0001]static KopiQueue.Drivers.JobDeleteResult.operator ==(KopiQueue.Drivers.JobDeleteResult? left, KopiQueue.Drivers.JobDeleteResult? right) -> bool
+[KQ0001]static KopiQueue.Drivers.JobListPosition.operator !=(KopiQueue.Drivers.JobListPosition? left, KopiQueue.Drivers.JobListPosition? right) -> bool
+[KQ0001]static KopiQueue.Drivers.JobListPosition.operator ==(KopiQueue.Drivers.JobListPosition? left, KopiQueue.Drivers.JobListPosition? right) -> bool

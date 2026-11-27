@@ -358,6 +358,18 @@ public sealed class RescuerTests
         public Task<IReadOnlyList<long>> JobDeleteFinalizedAsync(JobDeleteFinalizedParams parameters, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<IReadOnlyList<JobRow>> JobListAsync(JobListQuery query, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<JobDeleteResult?> JobDeleteAsync(long id, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<JobRow>> JobDeleteManyAsync(JobDeleteManyQuery query, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<JobRow?> JobRetryAsync(long id, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<JobRow?> JobCancelAsync(long id, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

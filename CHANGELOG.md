@@ -10,6 +10,14 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ### Added
 
+- Admin API (FR-ADM-01 to FR-ADM-05, FR-ERR-07):
+  - **`JobGetAsync`.**
+  - **`JobListAsync`:** filters by IDs, kinds, queues, states, priorities and metadata; sorts by ID or one of the job's times, either way; keyset pages through `NextCursor`.
+  - **`JobDeleteAsync`:** refuses a running job.
+  - **`JobDeleteManyAsync`.**
+  - **`JobRetryAsync`:** makes a scheduled, retryable or finalised job available now.
+  - **Transaction variants:** every admin call that changes data has an overload taking the caller's transaction, the queue calls included.
+  - ([#44](https://github.com/sujanto-gaws/KopiQueue/issues/44))
 - Periodic jobs (FR-PER-01 to FR-PER-04):
   - **Schedules:** `PeriodicSchedule.Every(interval)`, or `PeriodicSchedule.Cron(expression, timeZone)` on Cronos (5 or 6 fields, macros, River's `CRON_TZ=` prefix).
   - **Jobs:** `PeriodicJob`, with `RunOnStart` and `Id`.

@@ -1069,11 +1069,13 @@ public interface IKopiClient
     Task<IReadOnlyList<InsertResult>> InsertManyAsync(IEnumerable<InsertRequest> jobs, DbTransaction? tx = null, CancellationToken ct = default);
     Task<long> InsertManyFastAsync(IEnumerable<InsertRequest> jobs, DbTransaction? tx = null, CancellationToken ct = default); // COPY
 
+    // Admin (FR-ADM): every call that changes data also has an overload taking the caller's DbTransaction (FR-ADM-05).
     Task<JobRow?> JobGetAsync(long id, CancellationToken ct = default);
-    Task<JobListResult> JobListAsync(JobListParams p, CancellationToken ct = default);
+    Task<JobListResult> JobListAsync(JobListParams? p = null, CancellationToken ct = default);           // keyset pages
     Task<JobRow> JobCancelAsync(long id, CancellationToken ct = default);
     Task<JobRow> JobRetryAsync(long id, CancellationToken ct = default);
     Task<JobRow?> JobDeleteAsync(long id, CancellationToken ct = default);
+    Task<IReadOnlyList<JobRow>> JobDeleteManyAsync(JobDeleteManyParams p, CancellationToken ct = default);
 
     Task<QueueRow?> QueueGetAsync(string name, CancellationToken ct = default);
     Task<IReadOnlyList<QueueRow>> QueueListAsync(QueueListParams? p = null, CancellationToken ct = default);
@@ -1100,6 +1102,31 @@ await db.SaveChangesAsync(ct);
 await kopi.InsertAsync(new SendEmailArgs(...), db, ct: ct);   // uses db's current connection/tx
 await tx.CommitAsync(ct);
 ```
+
+**Admin API: implemented** (task 4.4, #44; FR-ADM-01..05, FR-ERR-07). River's documentation describes only cancelling (§5.8) and Pro's dead-letter retry, so this API is KopiQueue's own design, from the requirements.
+
+- **Calls:**
+  - `JobGetAsync(id)` returns `null` for an unknown ID.
+  - `JobListAsync(JobListParams)` filters by IDs, kinds, queues, states, priorities and `MetadataContains` (`@>`, served by River's GIN index). A `null` filter matches any job; an empty list matches none.
+  - `JobDeleteAsync(id)` returns the deleted row, or `null` for an unknown ID. A running job throws `KopiQueueJobRunningException`, an `InvalidOperationException`.
+  - `JobDeleteManyAsync(JobDeleteManyParams)` takes the same filters and a `Limit` (1,000 by default, at most 10,000). It deletes in ID order in one statement. It never deletes a running job (`States` containing `Running` is an argument error), skips rows another transaction holds, and returns the deleted rows. Callers loop until it returns none.
+  - `JobRetryAsync(id)`: a scheduled, retryable or finalised job becomes available now. An available, pending or running job is returned unchanged. An unknown ID throws `KopiQueueNotFoundException`, as cancel does.
+- **Transaction variants:** every call that changes data has an overload taking the caller's `DbTransaction`: retry, delete, delete many, and queue pause, resume and update. Like cancel, these overloads skip the client's local shortcut (waking its own producer, or applying a pause at once). Clients learn of the change through the notification, or the poll, once the transaction commits.
+- **Keyset pages:**
+  - `OrderBy` is `Id` (the default, ascending), `CreatedAt`, `ScheduledAt`, `AttemptedAt` or `FinalizedAt`. The ID breaks ties, and a missing time sorts as `infinity`: last ascending, first descending.
+  - `Limit` is 100 by default, at most 10,000. The client asks the driver for one row more, so `NextCursor` is `null` exactly when nothing followed the page.
+  - The cursor is opaque: `"1."` and, in base64url, the sort, the direction, the last row's value (UTC ticks) and its ID. A cursor for another sort or direction is refused. It holds no filters, so callers pass the same ones again.
+  - By ID, no job is ever returned twice. By a time that changes, such as `ScheduledAt` after a retry, a job can move across pages.
+- **Retry:**
+  - It keeps the attempt count, maximum and errors. A job whose attempts were used up gets one more, because only a failed attempt compares `attempt` with `max_attempts`.
+  - It removes `metadata.cancel_attempted_at`. Otherwise the cancel poll (§5.8) would cancel the next attempt.
+  - It notifies the queue on `river_insert`, as an insert does. The pooled overload also wakes local producers.
+  - A unique job whose key another job holds, in a state its uniqueness covers, can't become available: the unique index rejects it. Example: a discarded job retried after a newer job with the same args was inserted. The driver reports that as `InvalidOperationException`, and nothing changes.
+- **Driver operations** (experimental, `KQ0001`): `JobListAsync(JobListQuery)`, `JobDeleteAsync(id) -> JobDeleteResult?`, `JobDeleteManyAsync(JobDeleteManyQuery)` and `JobRetryAsync(id)`. PostgreSQL renders `job_list.sql` once per sort and direction.
+- **Tests:**
+  - conformance cases for each new operation;
+  - `JobAdminTests` for the client's checks, pages and cursors;
+  - `NpgsqlAdminTests` for cursors through the client, a retried discarded job running again on a working client, a running job that can't be deleted until it stops, every transaction variant committed and rolled back, and the unique conflict.
 
 **Insert-only mode (plan task 1.8, FR-INS-08).** A `KopiClient` with no queues or workers inserts with no start step, which suits web front-ends. It holds no connection and runs no background work: every insert borrows a pooled connection and returns it, and no LISTEN connection is opened. One client can be shared by concurrent callers, and creating one per request is cheap. `InsertOnlyClientTests` checks these points in `pg_stat_activity`:
 
@@ -1386,6 +1413,18 @@ SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'de
 - **Job cleaner (task 3.5, FR-MNT-04):** conformance cases (each state only past its own retention, a state without one kept, unfinalised jobs never deleted, at most `Max` oldest first, held rows skipped and deleted later); `NpgsqlJobCleanerTests`: a follower and an insert-only client delete nothing, the leader deletes as soon as it wins, no retention keeps everything, a deleted completed job frees its unique slot; `JobCleanerTests`: interval, batch size, the driver call, the options' defaults, validation and mapping.
 - **Queue cleaner (task 3.5, FR-MNT-05):** `NpgsqlQueueCleanerTests`: stale rows deleted in bounded batches, a row another transaction holds skipped and deleted later, jobs left alone, the leader cleaning as soon as it wins, `QueueRetention = null` keeping everything; a conformance case (task 3.6).
 - **Queues, pause and resume (task 3.6, FR-QUE-02..04, FR-ADM-04):** conformance cases for creating and refreshing, reading and listing, pausing and resuming (repeat, `"*"`, unknown) and updating queues; `QueueMaintainerTests` (fake clock and driver: paused queues paused before the first fetch, notifications applied at once and `"*"`, other messages ignored, polling within the poll interval without notifications and none with them, refresh every minute, a read overtaken by a notification read again, local and global pauses independent, a failed first refresh retried); `NpgsqlQueuePauseTests` (the admin API; a pause reaching listening and poll-only clients alike while the running job finishes; a queue paused before the client starts; a local pause); and, until 36f3d90, `RiverInteropTests` (both libraries paused, resumed and updated queues identically; each obeyed the other's pause and resume).
+- **Admin API (task 4.4, FR-ADM-01..05, FR-ERR-07):**
+  - Conformance cases:
+    - lists by each filter and by several together, an empty list matching nothing;
+    - keyset pages by ID both ways, and by finalisation time with ties and missing times;
+    - lists by schedule;
+    - deleting a waiting job but not a running one, and an unknown ID;
+    - delete many: limits, ID order and skipping running jobs;
+    - retrying each retryable state, keeping attempts and errors and removing an old cancel;
+    - available, pending and running jobs left alone;
+    - the unique conflict, rolled-back transactions, and the insert notification.
+  - `JobAdminTests`: default pages, cursors, refused cursors, parameter checks before any SQL, empty filters.
+  - `NpgsqlAdminTests`: see §6.3.
 - **Maintenance host (task 3.2, FR-MNT-07):** `MaintenanceHostTests` (fake services and clock: only while leading, full batches repeat at once, partial ones wait the interval, ±10% jitter, failures retried, a batch in progress is cancelled and awaited on losing leadership, leading again restarts) and an elector case showing maintenance stops before a failing leader's lease could pass to another client.
 - **Leader election (task 3.1, FR-MNT-01):** `ElectorTests` (fake lease and clock: winning, renewing, stepping down before the lease can pass on, resigning, waking on another client's resignation), conformance cases for the three lease operations, `NpgsqlLeadershipTests` (several clients, handover through the resignation in both notification modes, takeover after a crashed leader's lease expires, insert-only clients never compete), `NpgsqlLeaderKillTests` (M3's exit criterion with real processes: three `KopiQueue.TestNode` clients, the leader's process killed outright; the lease stays with it until it expires, then a survivor takes over within the TTL plus a few seconds, deletes an abandoned queue as the new leader, and the survivors work every job inserted after the kill); until 36f3d90, two River interop cases also checked that neither library takes the other's lease and each takes over when the other resigns.
 - SQL Server joins when its driver lands (M3). PostgreSQL-specific behaviour (River catalog equality, `pg_notify`, `COPY` details, constraint names) stays in `KopiQueue.Npgsql.Tests`.
