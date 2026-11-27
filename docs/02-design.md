@@ -634,6 +634,17 @@ RETURNING *, (xmax <> 0) AS unique_skipped_as_duplicate;
 
 - A job leaving the "occupied" states, for example to `discarded`, frees the slot automatically because the partial index no longer covers it.
 
+**Implemented** (task 4.1, #41): the key builder and the state bitmask, shared by both drivers and internal until the unique insert (task 4.2) exposes them.
+- `UniqueKey.Compute(kind, argsJson, queue, now, UniqueOptions, uniqueMembers, encoding)` returns the 32-byte key. `UniqueKey.Preimage` returns the text it hashes.
+  - `uniqueMembers` are the JSON names of the members marked unique; task 4.2 resolves them from `[UniqueKey]`.
+  - Names are sorted by their UTF-8 bytes, not UTF-16 code units, as the vectors require.
+  - The period is `now` to the whole second, rounded down to a multiple of the period since the Unix epoch.
+- **Values** are re-encoded in Go-compatible form by default (DQ-8, `GoJson`). `UniqueArgsEncoding.Verbatim` copies them as serialised.
+- **Rejected:** `ByArgs` with args that are not a JSON object (River rejects them too, spike 0.8); a period that is not positive; and `ExcludeKind` with no other dimension, which would put every such job of every kind in one slot. The vectors don't settle that last case, so it is KopiQueue's choice.
+- **`UniqueStates`:** the mask of a state set (`null` for the default `11110101`), FR-UNQ-04's check that available, pending, running and scheduled are included, and the `bit(8)` text for PostgreSQL.
+- **Acceptance:** `UniqueKeyTests` reproduces all 22 vectors of `spikes/RiverSchema/golden/river-v0.51.2-unique-keys.jsonl` with both encodings. The test project links that file instead of copying it.
+- **Not covered by the vectors:** Go writes U+0008 and U+000C as short escapes (`b`, `f` after a backslash) from Go 1.22 on, and so does `GoJson`. A Go producer built with an older Go would differ for strings that contain them.
+
 ### 5.7 Maintenance services (leader only)
 
 | Service | Interval (default) | Statement sketch | Batch |
@@ -1360,4 +1371,4 @@ SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'de
 | DQ-5 | Cron library: write our own small parser, or depend on `Cronos` (MIT)? Leaning towards Cronos |
 | DQ-6 | SQL Server batch parameters: OPENJSON (no schema objects) or table-valued parameters (faster, but need a user-defined table type and `EXECUTE` permission on it)? Benchmark in M5 |
 | DQ-7 | SQL Server `state` as `varchar(16)` (readable in ad-hoc queries) or `tinyint` (smaller indexes)? The fetch index is filtered on state, so state is not in its key; leaning towards varchar |
-| DQ-8 | River hashes each unique-arg value **as the producer serialised it**, and Go's `encoding/json` escapes `<`, `>`, `&` and U+2028/9 but not other non-ASCII, while `System.Text.Json` defaults differ. Should the unique-key builder re-encode values in Go-compatible form by default, so Go and .NET producers of the same job dedupe, behind an `IUniqueKeyEncoder` extension point? Leaning yes; decide in M4 task 4.1 against the golden vectors |
+| DQ-8 | ~~Should the unique-key builder re-encode arg values in Go-compatible form by default?~~ **Closed (yes, decided 2026-11-27 in task 4.1):** by default each top-level value is written again as Go's `encoding/json` writes it: HTML-safe string escaping (`<`, `>`, `&`, U+2028 and U+2029 escaped, other non-ASCII as it is), short escapes for control characters, and floating-point numbers in Go's shortest `float64` form. Integer literals and nested member order are kept. So the key no longer depends on the serialiser's escaping: args written by `System.Text.Json` with its default encoder get River's key for the same values (`UniqueKeyTests`), and all 22 golden vectors match either way. The alternative, copying each value verbatim, stays available (`UniqueArgsEncoding.Verbatim`). Instead of an `IUniqueKeyEncoder` interface, the choice is these two encodings, which task 4.2 exposes as a client option; a custom encoder can follow if someone needs one |

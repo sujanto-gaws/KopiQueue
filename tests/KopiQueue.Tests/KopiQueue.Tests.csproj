@@ -26,6 +26,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Unique keys River v0.51.2 computed, recorded black-box in spike 0.8; see UniqueKeyTests. -->
+    <None Include="../../spikes/RiverSchema/golden/river-v0.51.2-unique-keys.jsonl" Link="Unique/river-v0.51.2-unique-keys.jsonl" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
 
