@@ -8,13 +8,15 @@ namespace KopiQueue.Npgsql.Tests.Migrations;
 /// <summary>
 /// The River-compatible main line (plan task 1.2: design §4.1, FR-MIG-05, NFR-COMP-05).
 /// Every version, up and down, must leave the same catalog as River v0.51.2's CLI does. The expected catalogs are
-/// goldens under <c>Migrations/River/v0.51.2</c>, which <see cref="River_cli_produces_the_goldens"/> checks against
-/// the real CLI (and regenerates when <c>KOPI_RIVER_GOLDEN_DIR</c> is set).
+/// goldens under <c>Migrations/River/v0.51.2</c>, recorded from River's CLI and checked against it in CI until
+/// 36f3d90. KopiQueue's tests no longer run River (ADR-008), so the goldens are fixed data.
 /// </summary>
 public sealed class RiverMainLineTests(PostgresFixture db) : IClassFixture<PostgresFixture>
 {
     public const int Latest = 8;
-    public const string GoldenDirVariable = "KOPI_RIVER_GOLDEN_DIR";
+
+    /// <summary>The River version the goldens and the main line are pinned to (design §4.1).</summary>
+    public const string PinnedVersion = "v0.51.2";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -275,106 +277,15 @@ public sealed class RiverMainLineTests(PostgresFixture db) : IClassFixture<Postg
         Assert.Equal("river_job_unique_idx", duplicate.ConstraintName);
     }
 
-    // ---- Against River's own CLI (skipped unless KOPI_RIVER_CLI is set) ----
-
     [Fact]
-    public async Task River_cli_produces_the_goldens()
+    public async Task The_state_bitmask_function_matches_the_recorded_truth_table()
     {
         db.SkipIfUnavailable();
-        var river = RiverCli.GetOrSkip(db.ConnectionString);
         await using var ds = db.CreateDataSource();
         var schema = await CreateSchemaAsync(ds);
-        var writeTo = Environment.GetEnvironmentVariable(GoldenDirVariable);
-        var up = new string[Latest + 1];
+        await UpAsync(ds, schema, 6);
 
-        for (var version = 1; version <= Latest; version++)
-        {
-            await river.MigrateUpAsync(schema, version, Ct);
-            up[version] = await CatalogSnapshot.TakeAsync(ds, schema, Ct);
-            if (writeTo is null)
-            {
-                Assert.Equal(CatalogSnapshot.Lines(await Goldens.UpAsync(ds, version)), CatalogSnapshot.Lines(up[version]));
-            }
-            else
-            {
-                await File.WriteAllTextAsync(Path.Combine(writeTo, $"up-{version}.txt"), up[version], Ct);
-            }
-        }
-
-        for (var version = Latest - 1; version >= 0; version--)
-        {
-            await river.MigrateDownAsync(schema, version, Ct);
-            var down = await CatalogSnapshot.TakeAsync(ds, schema, Ct);
-            var downFile = writeTo is null ? null : Path.Combine(writeTo, $"down-{version}.txt");
-            if (downFile is not null)
-            {
-                // Only states that differ from the up state get their own file.
-                var differs = version > 0 && down != up[version];
-                if (differs)
-                {
-                    await File.WriteAllTextAsync(downFile, down, Ct);
-                }
-                else
-                {
-                    File.Delete(downFile);
-                }
-            }
-            else
-            {
-                Assert.Equal(CatalogSnapshot.Lines(await Goldens.DownAsync(ds, version)), CatalogSnapshot.Lines(down));
-            }
-        }
-    }
-
-    [Fact]
-    public async Task KopiQueue_continues_a_schema_River_migrated_to_version_4()
-    {
-        db.SkipIfUnavailable();
-        var river = RiverCli.GetOrSkip(db.ConnectionString);
-        await using var ds = db.CreateDataSource();
-        var schema = await CreateSchemaAsync(ds);
-        await river.MigrateUpAsync(schema, 4, Ct);
-
-        var result = await new MigrationRunner(new NpgsqlMigrationDriver(ds, schema))
-            .RunAsync(new(NpgsqlMigrationDriver.MainLine, "main", MigrationDirection.Up), Ct);
-
-        Assert.Equal((4, Latest), (result.VersionBefore, result.VersionAfter));
-        await AssertCatalogAsync(ds, schema, await Goldens.UpAsync(ds, Latest));
-        await river.ValidateAsync(schema, Ct);
-    }
-
-    [Fact]
-    public async Task River_continues_and_reverts_a_schema_KopiQueue_migrated()
-    {
-        db.SkipIfUnavailable();
-        var river = RiverCli.GetOrSkip(db.ConnectionString);
-        await using var ds = db.CreateDataSource();
-        var schema = await CreateSchemaAsync(ds);
-
-        await UpAsync(ds, schema, 3);
-        await river.MigrateUpAsync(schema, null, Ct);
-        await AssertCatalogAsync(ds, schema, await Goldens.UpAsync(ds, Latest));
-        await river.ValidateAsync(schema, Ct);
-
-        await DownAsync(ds, schema, 0);
-        await UpAsync(ds, schema);
-        await river.ValidateAsync(schema, Ct);
-        await river.MigrateDownAsync(schema, 0, Ct);
-        await AssertCatalogAsync(ds, schema, await Goldens.UpAsync(ds, 0));
-    }
-
-    [Fact]
-    public async Task The_state_bitmask_function_returns_what_Rivers_returns()
-    {
-        db.SkipIfUnavailable();
-        var river = RiverCli.GetOrSkip(db.ConnectionString);
-        await using var ds = db.CreateDataSource();
-        var riverSchema = await CreateSchemaAsync(ds);
-        var kopiSchema = await CreateSchemaAsync(ds);
-        await river.MigrateUpAsync(riverSchema, 6, Ct);
-        await UpAsync(ds, kopiSchema, 6);
-
-        Assert.Equal(await TruthTableAsync(ds, riverSchema), await TruthTableAsync(ds, kopiSchema));
+        Assert.Equal(await Goldens.StateBitmaskAsync(), await TruthTableAsync(ds, schema));
     }
 
     private static async Task<List<string>> TruthTableAsync(NpgsqlDataSource ds, string schema)
@@ -460,10 +371,18 @@ public sealed class RiverMainLineTests(PostgresFixture db) : IClassFixture<Postg
         }
     }
 
-    /// <summary>Expected catalogs recorded from River's CLI (see <see cref="River_cli_produces_the_goldens"/>).</summary>
+    /// <summary>Expected catalogs and results recorded from River v0.51.2's CLI.</summary>
     private static class Goldens
     {
-        private static readonly string Directory = Path.Combine(AppContext.BaseDirectory, "Migrations", "River", RiverCli.PinnedVersion);
+        private static readonly string Directory = Path.Combine(AppContext.BaseDirectory, "Migrations", "River", PinnedVersion);
+
+        /// <summary>
+        /// <c>river_job_state_in_bitmask</c> for every mask and state, plus the two NULL cases, one line each. Recorded
+        /// from KopiQueue's version 6 while CI still required it to equal River's (removed test
+        /// <c>The_state_bitmask_function_returns_what_Rivers_returns</c>, last green at 36f3d90).
+        /// </summary>
+        public static async Task<List<string>> StateBitmaskAsync() =>
+            [.. (await File.ReadAllLinesAsync(Path.Combine(Directory, "state-bitmask.txt"), Ct)).Where(l => l.Length > 0)];
 
         /// <summary>The catalog River leaves after migrating up to <paramref name="version"/> (0: an empty schema).</summary>
         public static async Task<string> UpAsync(NpgsqlDataSource ds, int version) =>

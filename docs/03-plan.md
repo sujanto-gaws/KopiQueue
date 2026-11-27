@@ -61,8 +61,7 @@ kopi-queue/
 │  ├─ KopiQueue.Npgsql.Tests/            # conformance suite + PG-specific tests
 │  ├─ KopiQueue.SqlServer.Tests/         # conformance suite + SQL Server-specific tests
 │  ├─ KopiQueue.IntegrationTests/        # end to end with host, parameterised by driver
-│  ├─ KopiQueue.StressTests/             # multi-client, chaos; nightly
-│  └─ KopiQueue.CompatTests/             # River ↔ KQ (Go harness in tests/compat/go)
+│  └─ KopiQueue.StressTests/             # multi-client, chaos; nightly
 ├─ spikes/                         # throwaway M0 spike code (not packed)
 ├─ bench/KopiQueue.Benchmarks/
 ├─ samples/
@@ -126,7 +125,7 @@ Each task lists the requirement IDs it satisfies. Estimates are in engineer-days
 | 2.7 | `KopiClient` lifecycle, graceful soft and hard stop | 3 | FR-HST-03 |
 | 2.8 | `KopiQueue.Hosting`: `AddKopiQueue`, `IHostedService`, options binding and validation | 3 | FR-HST-01, -02, -04 |
 | 2.9 | Tests (conformance cases for fetch and complete; integration tests for concurrency, timeouts, retries, shutdown) | 5 | — |
-| 2.10 | **River interop suite**: KQ and a River client (Go harness from spike 0.8) on one schema. KQ insert → River works it and vice versa; notifications in both directions; does an insert-only River client notify; leadership channel usage | 2 | NFR-COMP-05 |
+| 2.10 | **River interop suite**: KQ and a River client (Go harness from spike 0.8) on one schema. KQ insert → River works it and vice versa; notifications in both directions; does an insert-only River client notify; leadership channel usage. Removed after M3's clean-room tasks: KQ no longer runs River (ADR-008), and its findings stay in design §4.3 | 2 | NFR-COMP-05 |
 | 2.11 | PgBouncer in CI (Docker): transaction mode in poll-only mode, notifier bypass via `NotifierConnectionString`, session mode | 1 | NFR-COMP-04 |
 
 **Exit criteria:** the WorkerService sample processes jobs end to end on PostgreSQL, including in `PollOnly` mode.
@@ -197,7 +196,7 @@ Each task lists the requirement IDs it satisfies. Estimates are in engineer-days
 |---|------|----|-----|
 | 7.1 | Benchmarks and tuning on both drivers | 8 | NFR-PERF-01..07 |
 | 7.2 | Stress and chaos suite on both drivers (killed connections and processes, DB restart, SQL Server failover); **72 h soak per driver before GA** | 6 | NFR-REL-01..06 |
-| 7.3 | River compatibility suite (Go ↔ KQ) and a River UI smoke test | 4 | NFR-COMP-05 |
+| 7.3 | River compatibility goldens: one suite for the catalog (every version up and down), the state bitmask, the unique-key vectors, notification channels and payloads, and the job rows each outcome leaves. No River client, CLI or River UI is run (ADR-008) | 4 | NFR-COMP-05 |
 | 7.4 | Managed-service verification: RDS, Azure Flexible, Neon/Supabase, PgBouncer; **Azure SQL Database and Managed Instance** | 4 | NFR-COMP-02a, -04 |
 | 7.5 | Trimming and Native AOT validation | 2 | NFR-COMP-06 |
 | 7.6 | Security review on both drivers | 2.5 | NFR-SEC-01..05 |

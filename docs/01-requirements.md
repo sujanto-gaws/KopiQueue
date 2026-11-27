@@ -58,7 +58,7 @@ KQ aims to be different in these ways:
 ### 3.2 Non-goals (v1.0)
 
 - NG1. Databases other than PostgreSQL and SQL Server. The driver abstraction leaves room for SQLite later, see the [Plan](03-plan.md).
-- NG2. A built-in web dashboard. Post-1.0 we will either validate River UI compatibility or build our own.
+- NG2. A built-in web dashboard. Post-1.0 we will build our own. River UI should keep working on a KQ schema because the schema and rows match River's goldens, but KQ does not run River UI to check it (C2).
 - NG3. River Pro features: workflows (DAGs), sequences, global concurrency limits, encrypted args. The schema must still not block them (for example, the `pending` state is kept).
 - NG4. Exactly-once execution. KQ guarantees at-least-once, so workers must be idempotent.
 - NG5. Message-bus semantics such as pub/sub fan-out, sagas or routing topologies.
@@ -338,7 +338,7 @@ They are **initial targets to be validated in milestone M6**.
 ## 8. Constraints and assumptions
 
 - C1. PostgreSQL and SQL Server are the supported stores for 1.0.
-- C2. **Clean-room implementation.** River is MPL-2.0. KQ will not copy River source files, including its SQL files. We re-implement from public documentation and observed behaviour. For schema compatibility we reproduce the *shape* of the schema, which is an interface, and write our own DDL. We get that shape by applying River's published migrations with River's own CLI to a scratch database and inspecting the result, not by reading River's SQL source. To be confirmed by legal review, see the [Plan](03-plan.md) risks.
+- C2. **Clean-room implementation.** River is MPL-2.0. KQ will not copy River source files, including its SQL files. We re-implement from public documentation, using River as a reference only: KQ's code, tests and CI never run River. For schema compatibility we reproduce the *shape* of the schema, which is an interface, and write our own DDL. That shape is fixed in catalog goldens recorded once from River's CLI (M0 spike 0.8, task 1.2), not taken from River's SQL source. To be confirmed by legal review, see the [Plan](03-plan.md) risks.
 - C3. Licence for KQ: **MIT** (OQ-3, decided).
 - A1. Users can run migrations, either at deploy time or through the CLI.
 - A2. Clocks: database `now()` is the source of truth for scheduling. Client clocks are used only for local timers.
@@ -350,7 +350,7 @@ They are **initial targets to be validated in milestone M6**.
 3. The 72-hour soak test passes: 3 clients, mixed workload, random process kills, and an invariant checker confirms no lost or double-finalised jobs.
 4. The sample apps (ASP.NET Core minimal API with EF Core, and a Worker Service) run end to end on PostgreSQL and on SQL Server.
 5. The public API is reviewed and frozen, with `PublicAPI.Shipped.txt` committed.
-6. A cross-compatibility test where River (Go) inserts and KQ works the jobs, and the reverse, passes on PostgreSQL at the pinned schema version.
+6. The River compatibility goldens pass on PostgreSQL at the pinned schema version: the catalog after every migration up and down, the state bitmask, the unique-key vectors, the notification channels and payloads, and the job rows each outcome leaves. River itself is never run (C2).
 7. The driver conformance suite passes on PostgreSQL 14–18, SQL Server 2019/2022/2025, and Azure SQL Database.
 
 ## 10. Open questions
@@ -361,7 +361,7 @@ They are **initial targets to be validated in milestone M6**.
 | OQ-2 | Product and package name: "KopiQueue"? NuGet ID prefix `KopiQueue.*` | **Decided 2026-11-26:** name `KopiQueue`. The first release claims all 8 package IDs. Apply for the `KopiQueue.*` prefix reservation once public packages exist (plan §6.1) |
 | OQ-3 | Licence | **Decided 2026-11-26: MIT** |
 | OQ-4 | Should a SQLite driver for local dev and tests be in 1.x? | Post-1.0 (P2) |
-| OQ-5 | Dashboard: rely on River UI (PostgreSQL only, enabled by OQ-1) or build a Blazor UI that also covers SQL Server? | Validate River UI first, decide after 1.0. SQL Server users need our own UI either way |
+| OQ-5 | Dashboard: rely on River UI (PostgreSQL only, enabled by OQ-1) or build a Blazor UI that also covers SQL Server? | Own UI, after 1.0: SQL Server users need it either way, and KQ does not run River UI (C2). River UI compatibility rests on the schema and row goldens, untested against River UI itself |
 | OQ-6 | Minimum supported Postgres: 14 or 15? | 14 for wider managed-host coverage, raised as versions reach end of life |
 | OQ-7 | Minimum SQL Server: 2019 or 2022? | 2019, since it is still in extended support and widely deployed. Use the native `json` type only on 2025 / Azure SQL, behind a feature check |
 | OQ-8 | Is a Service Broker notifier (FR-DB-07) worth its operational cost? | Decide post-1.0 from user demand and latency data |

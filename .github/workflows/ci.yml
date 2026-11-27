@@ -55,16 +55,10 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       KOPI_TEST_PG: Host=localhost;Port=5432;Username=postgres;Password=kopi;Database=postgres
-      # River's CLI at the pinned version, run as a black box: the main line must leave the same catalog (task 1.2).
-      KOPI_RIVER_CLI: ${{ github.workspace }}/.river/river
-      # A River client driven through its public API, for the interop suite (task 2.10, tests/compat/go).
-      KOPI_RIVER_COMPAT: ${{ github.workspace }}/.river/kopi-river-compat
-      KOPI_REQUIRE_RIVER_CLI: "1"
       # PgBouncer in front of the same PostgreSQL (task 2.11, tests/pgbouncer/start.sh).
       KOPI_TEST_PGBOUNCER_TX: Host=127.0.0.1;Port=6542;Username=postgres;Password=kopi;Database=postgres
       KOPI_TEST_PGBOUNCER_SESSION: Host=127.0.0.1;Port=6543;Username=postgres;Password=kopi;Database=postgres
       KOPI_REQUIRE_PGBOUNCER: "1"
-      RIVER_VERSION: v0.51.2
     steps:
       - uses: actions/checkout@v5
         with:
@@ -73,15 +67,6 @@ jobs:
         with:
           global-json-file: global.json
           dotnet-version: 10.0.x
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.26.x"
-          cache: false
-      - name: install River CLI
-        run: GOBIN="$GITHUB_WORKSPACE/.river" go install "github.com/riverqueue/river/cmd/river@$RIVER_VERSION"
-      - name: build River interop harness
-        working-directory: tests/compat/go
-        run: go build -o "$KOPI_RIVER_COMPAT" .
       - name: start PgBouncer (transaction and session mode)
         run: |
           sudo apt-get update -qq

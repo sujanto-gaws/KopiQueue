@@ -24,7 +24,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Catalogs recorded from River's CLI; see RiverMainLineTests. -->
+    <!-- Catalogs and results recorded from River v0.51.2's CLI; see RiverMainLineTests. -->
     <None Include="Migrations\River\**\*.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

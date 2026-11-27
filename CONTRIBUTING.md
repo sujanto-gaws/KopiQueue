@@ -8,8 +8,8 @@ KopiQueue reimplements the behaviour of [River](https://github.com/riverqueue/ri
 **MPL-2.0**, a file-level copyleft licence. KopiQueue is **MIT**. To keep the two licences separate:
 
 1. **Do not copy, translate or closely paraphrase River source code**, including Go code, SQL migrations, queries and tests. "Porting" a file line by line counts as copying.
-2. **Allowed sources for behaviour:** River's public documentation, its public API reference (names and signatures), blog posts and talks, and *observed behaviour* (running River and inspecting what it does).
-3. **Schema compatibility (PostgreSQL)** is derived by applying River's migrations with River's own CLI to a scratch database and **inspecting the result** (`pg_dump --schema-only`, catalog queries). Our DDL is written by hand from that inspection. Record what you derived in `docs/schema-compat.md`.
+2. **Allowed sources for behaviour:** River's public documentation, its public API reference (names and signatures), and blog posts and talks. River is a **reference only**: KopiQueue's code, tests and CI never run a River client or River's CLI.
+3. **Schema compatibility (PostgreSQL)** is checked against the catalog goldens in `tests/KopiQueue.Npgsql.Tests/Migrations/River/v0.51.2/`, which were recorded once from River's CLI and are now fixed data. Our DDL is written by hand. Behaviour that the docs and the goldens don't settle is an open question for the issue, not a reason to run River.
 4. If you have recently read River's implementation of a feature in detail, say so in your PR, and let another contributor write that component.
 5. Each PR description must include the confirmation line from the PR template.
 
