@@ -91,12 +91,15 @@ jobs:
       - run: dotnet build tests/KopiQueue.Npgsql.Tests -c $CONFIGURATION
       - run: >-
           dotnet test --project tests/KopiQueue.Npgsql.Tests -c $CONFIGURATION --no-build
+          --results-directory "$GITHUB_WORKSPACE/TestResults"
           --report-trx --coverage --coverage-output-format cobertura
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-results-postgres-${{ matrix.pg }}
-          path: tests/**/TestResults/**
+          # dotnet test (Microsoft.Testing.Platform) writes the .trx and coverage files here, not under tests/.
+          path: TestResults/
+          if-no-files-found: error
 
   sqlserver:
     name: sqlserver ${{ matrix.mssql }}
@@ -127,9 +130,12 @@ jobs:
       - run: dotnet build tests/KopiQueue.SqlServer.Tests -c $CONFIGURATION
       - run: >-
           dotnet test --project tests/KopiQueue.SqlServer.Tests -c $CONFIGURATION --no-build
+          --results-directory "$GITHUB_WORKSPACE/TestResults"
           --report-trx --coverage --coverage-output-format cobertura
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-results-sqlserver-${{ matrix.mssql }}
-          path: tests/**/TestResults/**
+          # dotnet test (Microsoft.Testing.Platform) writes the .trx and coverage files here, not under tests/.
+          path: TestResults/
+          if-no-files-found: error
