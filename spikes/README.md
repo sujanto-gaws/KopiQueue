@@ -16,10 +16,6 @@ They create and drop `kopi_spike_rc` / `kopi_spike_rcsi` on the server in `KOPI_
 PostgreSQL spikes use `KOPI_SPIKE_PG`, falling back to `KOPI_TEST_PG`:
 
 - **0.7:** `dotnet run --project spikes/NpgsqlSpikes -c Release -- all` (or `latency`, `tx`, `payload`, `names`, `pool`, `terminate`, `blackhole`). It creates and drops `kopi_spike_notify`. `SPIKE_TRACE=1` prints probe traces.
-- **0.8**, with River's CLI (`go install github.com/riverqueue/river/cmd/river@v0.51.2`) and Go ≥ 1.24:
-  1. `river migrate-up --database-url <url-of-scratch-db>`
-  2. `psql -X -f spikes/RiverSchema/introspect.sql <scratch-db>`
-  3. `cd spikes/RiverSchema/observe && RIVER_SPIKE_URL=<url> go run . insert|work|golden <out.jsonl>`
-  4. `python -I -X utf8 spikes/RiverSchema/golden/verify_unique_keys.py spikes/RiverSchema/golden/river-v0.51.2-unique-keys.jsonl`
-
-  The Go harness uses River only through its public API, and River's source is never read (clean-room, CONTRIBUTING.md). The golden vectors are River's *outputs* and are the M4 acceptance data.
+- **0.8:** the Go harness that ran River has been removed, because KopiQueue no longer runs River (ADR-008, CONTRIBUTING.md). What remains is its recorded output:
+  - `spikes/RiverSchema/introspect.sql`: the catalog queries.
+  - `spikes/RiverSchema/golden/river-v0.51.2-unique-keys.jsonl`: River's unique-key vectors, the M4 acceptance data. Check them with `python -I -X utf8 spikes/RiverSchema/golden/verify_unique_keys.py spikes/RiverSchema/golden/river-v0.51.2-unique-keys.jsonl`.

@@ -4,6 +4,10 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ## [Unreleased]
 
+### Changed
+
+- Clean-room (ADR-008): River is a reference only, and KopiQueue's tests and CI no longer run a River client or River's CLI. The River interop suite (`RiverInteropTests`, `tests/compat/go`), the tests that ran River's CLI against the main line, and the spike 0.8 Go harness are removed, and CI no longer installs Go. The migration tests still compare every version, up and down, with the catalog goldens recorded from River v0.51.2. The state-bitmask check now compares against a recorded truth table.
+
 ### Added
 
 - Queues, pause and resume (FR-QUE-02..04, FR-ADM-04, FR-DB-05): clients create the rows of the queues they work and mark them worked every minute. `IKopiClient` gains `QueueGetAsync`, `QueueListAsync`, `QueuePauseAsync`, `QueueResumeAsync` (`"*"` for all queues; `QueuePauseOptions.LocalOnly` for this client only) and `QueueUpdateAsync`, with `QueueRow`, `QueueListParams` and `KopiQueueNotFoundException`. A paused queue fetches nothing while its running jobs finish; the pause reaches other clients at once by notification, or within `FetchPollInterval` without one, and works both ways with River clients on the same schema. The driver API gains the queue operations (experimental, `KQ0001`). `QueueRetention` must now be at least 5 minutes. ([#38](https://github.com/sujanto-gaws/KopiQueue/issues/38))

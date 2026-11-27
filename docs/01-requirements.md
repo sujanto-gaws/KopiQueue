@@ -338,7 +338,7 @@ They are **initial targets to be validated in milestone M6**.
 ## 8. Constraints and assumptions
 
 - C1. PostgreSQL and SQL Server are the supported stores for 1.0.
-- C2. **Clean-room implementation.** River is MPL-2.0. KQ will not copy River source files, including its SQL files. We re-implement from public documentation and observed behaviour. For schema compatibility we reproduce the *shape* of the schema, which is an interface, and write our own DDL. We get that shape by applying River's published migrations with River's own CLI to a scratch database and inspecting the result, not by reading River's SQL source. To be confirmed by legal review, see the [Plan](03-plan.md) risks.
+- C2. **Clean-room implementation.** River is MPL-2.0. KQ will not copy River source files, including its SQL files. We re-implement from public documentation, using River as a reference only: KQ's code, tests and CI never run River. For schema compatibility we reproduce the *shape* of the schema, which is an interface, and write our own DDL. That shape is fixed in catalog goldens recorded once from River's CLI (M0 spike 0.8, task 1.2), not taken from River's SQL source. To be confirmed by legal review, see the [Plan](03-plan.md) risks.
 - C3. Licence for KQ: **MIT** (OQ-3, decided).
 - A1. Users can run migrations, either at deploy time or through the CLI.
 - A2. Clocks: database `now()` is the source of truth for scheduling. Client clocks are used only for local timers.
