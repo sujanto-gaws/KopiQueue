@@ -10,6 +10,10 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ### Added
 
+- Args-level default insert options (FR-DEF-05):
+  - An args type implementing `IJobArgsWithInsertOptions` supplies its own queue, priority, attempts, tags, metadata and uniqueness.
+  - Each option an insert sets still wins.
+  - ([#45](https://github.com/sujanto-gaws/KopiQueue/issues/45))
 - Admin API (FR-ADM-01 to FR-ADM-05, FR-ERR-07):
   - **`JobGetAsync`.**
   - **`JobListAsync`:** filters by IDs, kinds, queues, states, priorities and metadata; sorts by ID or one of the job's times, either way; keyset pages through `NextCursor`.

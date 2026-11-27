@@ -3,7 +3,8 @@ using System.Text.Json.Nodes;
 namespace KopiQueue;
 
 /// <summary>
-/// Options for inserting a job (FR-INS-05). Every option is optional: an unset option takes the client's default.
+/// Options for inserting a job (FR-INS-05). Every option is optional: an unset option takes the args type's default, if it
+/// is an <see cref="IJobArgsWithInsertOptions"/> (FR-DEF-05), and otherwise the client's (<see cref="InsertDefaults"/>).
 /// </summary>
 /// <example>
 /// <code>
@@ -49,6 +50,31 @@ public sealed class InsertOptions
     /// <see cref="IKopiClient.InsertManyAsync"/>, but not with <see cref="IKopiClient.InsertManyFastAsync"/>.
     /// </remarks>
     public UniqueOptions? Unique { get; init; }
+
+    /// <summary>
+    /// The options an insert of <paramref name="args"/> uses (FR-DEF-05): each of <paramref name="options"/> that is set,
+    /// and otherwise the args type's own, if it is an <see cref="IJobArgsWithInsertOptions"/>.
+    /// </summary>
+    internal static InsertOptions? Resolve(InsertOptions? options, object args)
+    {
+        if (args is not IJobArgsWithInsertOptions withDefaults || withDefaults.GetInsertOptions() is not { } defaults)
+        {
+            return options;
+        }
+
+        return options is null
+            ? defaults
+            : new InsertOptions
+            {
+                Queue = options.Queue ?? defaults.Queue,
+                Priority = options.Priority ?? defaults.Priority,
+                ScheduledAt = options.ScheduledAt ?? defaults.ScheduledAt,
+                MaxAttempts = options.MaxAttempts ?? defaults.MaxAttempts,
+                Tags = options.Tags ?? defaults.Tags,
+                Metadata = options.Metadata ?? defaults.Metadata,
+                Unique = options.Unique ?? defaults.Unique,
+            };
+    }
 }
 
 /// <summary>The defaults for options that an insert leaves unset.</summary>

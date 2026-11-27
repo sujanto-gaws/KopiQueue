@@ -27,7 +27,37 @@ public sealed record SyncCustomerArgs(
 [JobKind("rebuild_index")]
 public sealed record RebuildIndexArgs(string Index) : IJobArgs;
 
+/// <summary>Supplies defaults that depend on its value (FR-DEF-05).</summary>
+[JobKind("tenant_report")]
+public sealed record TenantReportArgs(string Tenant) : IJobArgsWithInsertOptions
+{
+    public InsertOptions GetInsertOptions() => new()
+    {
+        Queue = "reports-" + Tenant,
+        Priority = 3,
+        MaxAttempts = 5,
+        Tags = ["report"],
+        Metadata = new System.Text.Json.Nodes.JsonObject { ["tenant"] = Tenant },
+        Unique = new() { ByArgs = true },
+    };
+}
+
+[JobKind("no_defaults")]
+public sealed record NoDefaultsArgs(int N) : IJobArgsWithInsertOptions
+{
+    public InsertOptions? GetInsertOptions() => null;
+}
+
+[JobKind("bad_defaults")]
+public sealed record BadDefaultsArgs(int N) : IJobArgsWithInsertOptions
+{
+    public InsertOptions GetInsertOptions() => new() { Priority = 9 };
+}
+
 [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
+[JsonSerializable(typeof(TenantReportArgs))]
+[JsonSerializable(typeof(NoDefaultsArgs))]
+[JsonSerializable(typeof(BadDefaultsArgs))]
 [JsonSerializable(typeof(RebuildIndexArgs))]
 [JsonSerializable(typeof(SendEmailArgs))]
 [JsonSerializable(typeof(ResizeArgs))]

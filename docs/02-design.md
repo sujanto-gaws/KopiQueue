@@ -1027,7 +1027,13 @@ public sealed class SendEmailWorker(IEmailSender sender, ILogger<SendEmailWorker
 
 - `JobKindRegistry.GetKind<TArgs>()` reads `[JobKind]` (not inherited) and caches it. A missing attribute or a kind outside 1–127 characters throws `KopiQueueConfigurationException`, naming the type. A failure is not cached, so a fixed type works without a restart.
 - A `JobKindRegistry` instance maps kinds back to args types for the client. Registering a second type with an existing kind throws `KopiQueueConfigurationException`. Kinds are compared ordinally, so `Send_Email` and `send_email` are different kinds.
-- `InsertOptions` has `Queue`, `Priority`, `ScheduledAt`, `MaxAttempts`, `Tags` and `Metadata` (a `JsonObject`). Unset options take `InsertDefaults`: queue `default`, priority 1, 25 attempts, scheduled now by the database's clock. `Unique` came with task 4.2 (§5.6), and args-level defaults come with task 4.5.
+- `InsertOptions` has `Queue`, `Priority`, `ScheduledAt`, `MaxAttempts`, `Tags` and `Metadata` (a `JsonObject`). Unset options take `InsertDefaults`: queue `default`, priority 1, 25 attempts, scheduled now by the database's clock. `Unique` came with task 4.2 (§5.6).
+- **Args-level defaults** (task 4.5, #45, FR-DEF-05):
+  - An args type can implement `IJobArgsWithInsertOptions`, whose `GetInsertOptions()` returns its default `InsertOptions`, after River's documented `JobArgsWithInsertOpts`. It is a method, not a property, so it never ends up in the args JSON. It is read at each insert, so it can depend on the args' values, for example a queue per tenant.
+  - Each option is resolved on its own: the insert's own, else the args type's, else `InsertDefaults`. `Tags`, `Metadata` and `Unique` are replaced whole, not merged.
+  - It applies to every insert path: single, bulk, the fast `COPY` (which refuses args-level uniqueness as it refuses any), the EF Core extension, and periodic jobs. For periodic jobs, args-level uniqueness replaces the tick key, as an option set by the constructor does.
+  - The merged options are validated together, so an invalid default fails each insert that doesn't override it, with the usual `ArgumentException`.
+  - Tests: `ArgsInsertOptionsTests`, plus a UC-4 case in `NpgsqlUniqueTests` where the args type alone keeps one pending job per customer.
 - A `ScheduledAt` later than the client's clock inserts the job as `scheduled`; otherwise it is `available`.
 - Validation runs before any SQL. An invalid option throws `ArgumentException` naming the option:
 
