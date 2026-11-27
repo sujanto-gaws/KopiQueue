@@ -11,6 +11,9 @@ public sealed partial class KopiClient
 {
     private const int MaxQueueWorkers = 10_000;
 
+    /// <summary>The longest client ID the leader lease stores (<c>river_leader.leader_id</c>).</summary>
+    private const int MaxClientIdLength = 127;
+
     private readonly Lock _lifecycle = new();
     private Running? _running;
     private Task? _stopping;
@@ -61,12 +64,13 @@ public sealed partial class KopiClient
         var running = Build(queues);
         try
         {
-            await running.Completer.StartAsync(cancellationToken).ConfigureAwait(false);
             if (running.Notifier is { } notifier)
             {
                 await notifier.StartAsync(cancellationToken).ConfigureAwait(false);
             }
 
+            await running.Elector.StartAsync(cancellationToken).ConfigureAwait(false);
+            await running.Completer.StartAsync(cancellationToken).ConfigureAwait(false);
             foreach (var producer in running.Producers)
             {
                 await producer.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -94,8 +98,9 @@ public sealed partial class KopiClient
     /// Stops working jobs (FR-HST-03, design §5.9): stops fetching, then waits for the running jobs (soft stop). When
     /// <paramref name="cancellationToken"/> fires, or <see cref="KopiClientOptions.SoftStopTimeout"/> passes, it cancels
     /// the running jobs' tokens (hard stop) and waits at most <see cref="KopiClientOptions.HardStopGrace"/> for them.
-    /// Then it writes the pending outcomes, again within the grace period, and closes the notifier. Jobs still running
-    /// after that stay <c>running</c> in the database and are rescued later (at-least-once).
+    /// Then it writes the pending outcomes, again within the grace period, resigns leadership if it leads (FR-MNT-01),
+    /// and closes the notifier. Jobs still running after that stay <c>running</c> in the database and are rescued later
+    /// (at-least-once).
     /// </summary>
     /// <remarks>Calling it again, or on a client that never started, is harmless; inserting still works afterwards.</remarks>
     /// <param name="cancellationToken">Ends the soft stop; for a hosted client, the host's shutdown token.</param>
@@ -112,8 +117,13 @@ public sealed partial class KopiClient
         }
     }
 
-    private static string DefaultClientId() => string.Create(
-        CultureInfo.InvariantCulture, $"{Environment.MachineName}-{Environment.ProcessId}-{Random.Shared.Next(0x1000000):x6}");
+    private static string DefaultClientId()
+    {
+        // The leader lease takes at most 127 characters; host names can be longer.
+        var machine = Environment.MachineName;
+        machine = machine.Length > 100 ? machine[..100] : machine;
+        return string.Create(CultureInfo.InvariantCulture, $"{machine}-{Environment.ProcessId}-{Random.Shared.Next(0x1000000):x6}");
+    }
 
     private async Task StopCoreAsync(Running running, CancellationToken cancellationToken)
     {
@@ -147,7 +157,13 @@ public sealed partial class KopiClient
             await running.Completer.StopAsync(flush.Token).ConfigureAwait(false);
         }
 
-        // 6. Close the notifier. (5, resigning leadership, arrives with the elector in M3.)
+        // 5. Resign leadership, so another client takes over at once, within the grace period.
+        using (var resign = new CancellationTokenSource(_options.HardStopGrace, _timeProvider))
+        {
+            await running.Elector.StopAsync(resign.Token).ConfigureAwait(false);
+        }
+
+        // 6. Close the notifier.
         await running.DisposeAsync().ConfigureAwait(false);
         LogStopped(running.Logger, ClientId);
     }
@@ -208,6 +224,9 @@ public sealed partial class KopiClient
         Check(options.SoftStopTimeout is null || options.SoftStopTimeout >= TimeSpan.Zero, nameof(KopiClientOptions.SoftStopTimeout), "must not be negative");
         Check(options.HardStopGrace >= TimeSpan.Zero, nameof(KopiClientOptions.HardStopGrace), "must not be negative");
         Check(options.ClientId is null || !string.IsNullOrWhiteSpace(options.ClientId), nameof(KopiClientOptions.ClientId), "must not be empty");
+        Check(options.ClientId is null || options.ClientId.Length <= MaxClientIdLength, nameof(KopiClientOptions.ClientId), $"must be at most {MaxClientIdLength} characters");
+        Check(options.ElectInterval > TimeSpan.Zero, nameof(KopiClientOptions.ElectInterval), "must be positive");
+        Check(options.LeaderTtl >= options.ElectInterval * 2, nameof(KopiClientOptions.LeaderTtl), "must be at least twice ElectInterval");
         Check(Enum.IsDefined(options.NotificationMode), nameof(KopiClientOptions.NotificationMode), "is not a known mode");
         Check(Enum.IsDefined(options.CompleterMode), nameof(KopiClientOptions.CompleterMode), "is not a known mode");
         return errors;
@@ -256,6 +275,13 @@ public sealed partial class KopiClient
             _timeProvider,
             loggers.CreateLogger<JobExecutor>());
         var notifier = listener is null ? null : new Notifier(listener, timeProvider: _timeProvider, logger: loggers.CreateLogger<Notifier>());
+        var elector = new Elector(
+            _driver,
+            new ElectorOptions { ClientId = ClientId, ElectInterval = _options.ElectInterval, LeaderTtl = _options.LeaderTtl },
+            notifier,
+            onLeadershipChanged: null, // the maintenance services join with plan task 3.2
+            _timeProvider,
+            loggers.CreateLogger<Elector>());
         var producers = queues
             .OrderBy(q => q.Key, StringComparer.Ordinal)
             .Select(q => new Producer(
@@ -276,7 +302,7 @@ public sealed partial class KopiClient
                 _timeProvider,
                 loggers.CreateLogger<Producer>()))
             .ToArray();
-        return new Running(producers, completer, notifier, loggers.CreateLogger<KopiClient>());
+        return new Running(producers, completer, elector, notifier, loggers.CreateLogger<KopiClient>());
     }
 
     [LoggerMessage(EventId = 1000, Level = LogLevel.Information, Message = "Client {ClientId} started working queues {Queues} (notifications: {Listening})")]
@@ -289,11 +315,13 @@ public sealed partial class KopiClient
     private static partial void LogStopped(ILogger logger, string clientId);
 
     /// <summary>The components of a working client.</summary>
-    private sealed class Running(Producer[] producers, JobCompleter completer, Notifier? notifier, ILogger logger) : IAsyncDisposable
+    private sealed class Running(Producer[] producers, JobCompleter completer, Elector elector, Notifier? notifier, ILogger logger) : IAsyncDisposable
     {
         public Producer[] Producers { get; } = producers;
 
         public JobCompleter Completer { get; } = completer;
+
+        public Elector Elector { get; } = elector;
 
         public Notifier? Notifier { get; } = notifier;
 
@@ -307,6 +335,7 @@ public sealed partial class KopiClient
             }
 
             await Completer.DisposeAsync().ConfigureAwait(false);
+            await Elector.DisposeAsync().ConfigureAwait(false);
             if (Notifier is not null)
             {
                 await Notifier.DisposeAsync().ConfigureAwait(false);

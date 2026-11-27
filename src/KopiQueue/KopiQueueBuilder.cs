@@ -50,6 +50,12 @@ public sealed class KopiQueueOptions
 
     /// <inheritdoc cref="KopiClientOptions.HardStopGrace"/>
     public TimeSpan HardStopGrace { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <inheritdoc cref="KopiClientOptions.ElectInterval"/>
+    public TimeSpan ElectInterval { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <inheritdoc cref="KopiClientOptions.LeaderTtl"/>
+    public TimeSpan LeaderTtl { get; set; } = TimeSpan.FromSeconds(15);
 }
 
 /// <summary>Settings of one queue in <see cref="KopiQueueOptions.Queues"/>.</summary>

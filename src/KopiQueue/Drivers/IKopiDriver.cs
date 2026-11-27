@@ -98,6 +98,30 @@ public interface IKopiExecutor
     /// </summary>
     /// <returns>Every given job that exists, changed or not, in ID order. A job that does not exist is left out.</returns>
     Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Tries to win the leader lease (design §5.5, FR-MNT-01): takes it when nobody holds it, when its holder's lease has
+    /// expired by the database's clock, or when <see cref="LeaderElectParams.LeaderId"/> already holds it, in which case
+    /// the lease is extended and its election time kept. A won lease expires <see cref="LeaderElectParams.Ttl"/> after the
+    /// database's now. Winning sends no notification.
+    /// </summary>
+    /// <returns><c>true</c> when the client holds the lease afterwards.</returns>
+    Task<bool> LeaderAttemptElectAsync(LeaderElectParams parameters, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Extends the lease of a leader (design §5.5) to <see cref="LeaderElectParams.Ttl"/> after the database's now, if
+    /// <see cref="LeaderElectParams.LeaderId"/> still holds it.
+    /// </summary>
+    /// <returns><c>true</c> when the lease was extended; <c>false</c> when another client holds it or nobody does.</returns>
+    Task<bool> LeaderAttemptReelectAsync(LeaderElectParams parameters, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Gives up the lease of <paramref name="leaderId"/>, if it holds it (design §5.5, FR-MNT-01), so that another client
+    /// can win at once. On a driver with <see cref="DriverCapabilities.ListenNotify"/> it also announces the resignation on
+    /// the leadership topic, in the same statement, as River does: <c>{"leader_id": "...", "action": "resigned"}</c>.
+    /// </summary>
+    /// <returns><c>true</c> when the client held the lease; nothing is announced otherwise.</returns>
+    Task<bool> LeaderResignAsync(string leaderId, CancellationToken cancellationToken);
 }
 
 /// <summary>What a database supports. The core reads these instead of checking the driver type (FR-DB-03).</summary>
@@ -171,6 +195,18 @@ public sealed class JobGetAvailableParams
 
     /// <summary>How many entries <see cref="JobRow.AttemptedBy"/> keeps, newest last. Default: 100, as River.</summary>
     public int MaxAttemptedBy { get; init; } = 100;
+}
+
+/// <summary>A client asking for the leader lease (<see cref="IKopiExecutor.LeaderAttemptElectAsync"/>, <see cref="IKopiExecutor.LeaderAttemptReelectAsync"/>).</summary>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed class LeaderElectParams
+{
+    /// <summary>The client's ID: 1 to 127 characters.</summary>
+    public required string LeaderId { get; init; }
+
+    /// <summary>How long the lease lasts after it is won or extended. Positive.</summary>
+    public required TimeSpan Ttl { get; init; }
 }
 
 /// <summary>A job to insert, already serialised and validated by the core.</summary>

@@ -169,8 +169,8 @@ public sealed class KopiClientOptions
     public ILoggerFactory? LoggerFactory { get; init; }
 
     /// <summary>
-    /// This client's name, recorded in each job it fetches (<c>attempted_by</c>). Default: the machine name, the process
-    /// ID and a random suffix.
+    /// This client's name, recorded in each job it fetches (<c>attempted_by</c>) and in the leader lease: at most 127
+    /// characters. Default: the machine name, the process ID and a random suffix.
     /// </summary>
     public string? ClientId { get; init; }
 
@@ -209,6 +209,18 @@ public sealed class KopiClientOptions
     /// written. Default: 5 s.
     /// </summary>
     public TimeSpan HardStopGrace { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How often a client that works jobs tries to become leader, and how often the leader renews its lease (FR-MNT-01,
+    /// design §5.5). Default: 5 s.
+    /// </summary>
+    public TimeSpan ElectInterval { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How long a leader's lease lasts after each renewal: at least twice <see cref="ElectInterval"/>. A leader that cannot
+    /// renew steps down when a third of it is left; a crashed leader is replaced once it expires. Default: 15 s.
+    /// </summary>
+    public TimeSpan LeaderTtl { get; init; } = TimeSpan.FromSeconds(15);
 }
 
 /// <summary>Settings of one queue (design §7).</summary>

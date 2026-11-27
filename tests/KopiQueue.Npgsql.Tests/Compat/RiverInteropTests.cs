@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using KopiQueue.Drivers;
 using KopiQueue.Migrations;
@@ -225,6 +226,92 @@ public sealed class RiverInteropTests(PostgresFixture db) : IClassFixture<Postgr
         Assert.Equal(
             ("river-compat", "resigned"),
             (resignation.RootElement.GetProperty("leader_id").GetString(), resignation.RootElement.GetProperty("action").GetString()));
+    }
+
+    [Fact]
+    public async Task A_KopiQueue_client_leaves_a_River_leader_alone_and_takes_over_as_soon_as_it_resigns()
+    {
+        db.SkipIfUnavailable();
+        var river = RiverHarness.GetOrSkip(db.ConnectionString);
+        await using var ds = db.CreateDataSource();
+        var (driver, schema) = await MigratedAsync(ds);
+
+        await using var worker = await river.StartWorkerAsync(schema, "compat", expect: 0, minRun: TimeSpan.FromSeconds(5), cancellationToken: Ct);
+        await WaitForLeaderAsync(ds, schema, "river-compat", TimeSpan.FromSeconds(5));
+
+        // A 20 s interval: taking over within a few seconds of River's exit can only follow River's resignation notice.
+        var client = await LeadershipClientAsync(driver, TimeSpan.FromSeconds(20));
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1.5), Ct);
+            Assert.Equal("river-compat", await LeaderOfAsync(ds, schema));
+
+            await worker.WaitForExitAsync(TimeSpan.FromSeconds(30), Ct);
+            var exited = Stopwatch.StartNew();
+            await WaitForLeaderAsync(ds, schema, "kopi-compat", TimeSpan.FromSeconds(5));
+            Report($"KopiQueue took over {exited.ElapsedMilliseconds} ms after the River leader exited (resigned)");
+        }
+        finally
+        {
+            await client.StopAsync(Ct);
+        }
+    }
+
+    [Fact]
+    public async Task A_River_client_leaves_a_KopiQueue_leader_alone_and_takes_over_after_it_resigns()
+    {
+        db.SkipIfUnavailable();
+        var river = RiverHarness.GetOrSkip(db.ConnectionString);
+        await using var ds = db.CreateDataSource();
+        var (driver, schema) = await MigratedAsync(ds);
+        var client = await LeadershipClientAsync(driver, TimeSpan.FromSeconds(1));
+        try
+        {
+            await WaitForLeaderAsync(ds, schema, "kopi-compat", TimeSpan.FromSeconds(5));
+            await using var worker = await river.StartWorkerAsync(schema, "compat", expect: 0, minRun: TimeSpan.FromSeconds(30), cancellationToken: Ct);
+            await Task.Delay(TimeSpan.FromSeconds(3), Ct);
+            Assert.Equal("kopi-compat", await LeaderOfAsync(ds, schema));
+
+            await client.StopAsync(Ct);
+            var resigned = Stopwatch.StartNew();
+            await WaitForLeaderAsync(ds, schema, "river-compat", TimeSpan.FromSeconds(25));
+            Report($"River took over {resigned.ElapsedMilliseconds} ms after the KopiQueue leader resigned");
+        }
+        finally
+        {
+            await client.StopAsync(Ct);
+        }
+    }
+
+    private static async Task<KopiClient> LeadershipClientAsync(IKopiDriver driver, TimeSpan electInterval)
+    {
+        var client = new KopiClient(driver, new KopiClientOptions
+        {
+            Queues = new Dictionary<string, QueueOptions> { ["kopi_only"] = new() { MaxWorkers = 1 } },
+            Workers = new WorkerRegistry().Add(new CompatWorker()),
+            ClientId = "kopi-compat",
+            ElectInterval = electInterval,
+            LeaderTtl = TimeSpan.FromSeconds(60),
+        });
+        await client.StartAsync(Ct);
+        return client;
+    }
+
+    private static async Task<string?> LeaderOfAsync(NpgsqlDataSource ds, string schema)
+    {
+        await using var cmd = ds.CreateCommand($"SELECT leader_id FROM {schema}.river_leader");
+        return await cmd.ExecuteScalarAsync(Ct) as string;
+    }
+
+    private static async Task WaitForLeaderAsync(NpgsqlDataSource ds, string schema, string expected, TimeSpan limit)
+    {
+        var deadline = DateTime.UtcNow + limit;
+        string? leader;
+        while ((leader = await LeaderOfAsync(ds, schema)) != expected)
+        {
+            Assert.True(DateTime.UtcNow < deadline, $"The leader is '{leader ?? "nobody"}', not '{expected}', after {limit}.");
+            await Task.Delay(20, Ct);
+        }
     }
 
     private static async Task<Listener> ListenAsync(NpgsqlDataSource ds, string schema, params string[] topics)

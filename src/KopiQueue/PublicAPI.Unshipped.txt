@@ -420,3 +420,20 @@ KopiQueue.QueueSettings.MaxWorkers.get -> int
 KopiQueue.QueueSettings.MaxWorkers.set -> void
 KopiQueue.QueueSettings.QueueSettings() -> void
 [KQ0001]KopiQueue.KopiQueueBuilder.UseDriver(System.Func<System.IServiceProvider!, KopiQueue.Drivers.IKopiDriver!>! factory) -> KopiQueue.KopiQueueBuilder!
+KopiQueue.KopiClientOptions.ElectInterval.get -> System.TimeSpan
+KopiQueue.KopiClientOptions.ElectInterval.init -> void
+KopiQueue.KopiClientOptions.LeaderTtl.get -> System.TimeSpan
+KopiQueue.KopiClientOptions.LeaderTtl.init -> void
+KopiQueue.KopiQueueOptions.ElectInterval.get -> System.TimeSpan
+KopiQueue.KopiQueueOptions.ElectInterval.set -> void
+KopiQueue.KopiQueueOptions.LeaderTtl.get -> System.TimeSpan
+KopiQueue.KopiQueueOptions.LeaderTtl.set -> void
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.LeaderAttemptElectAsync(KopiQueue.Drivers.LeaderElectParams! parameters, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.LeaderAttemptReelectAsync(KopiQueue.Drivers.LeaderElectParams! parameters, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.LeaderResignAsync(string! leaderId, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+[KQ0001]KopiQueue.Drivers.LeaderElectParams
+[KQ0001]KopiQueue.Drivers.LeaderElectParams.LeaderElectParams() -> void
+[KQ0001]KopiQueue.Drivers.LeaderElectParams.LeaderId.get -> string!
+[KQ0001]KopiQueue.Drivers.LeaderElectParams.LeaderId.init -> void
+[KQ0001]KopiQueue.Drivers.LeaderElectParams.Ttl.get -> System.TimeSpan
+[KQ0001]KopiQueue.Drivers.LeaderElectParams.Ttl.init -> void
