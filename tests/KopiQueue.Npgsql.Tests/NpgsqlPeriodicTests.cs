@@ -16,6 +16,10 @@ public sealed class NpgsqlPeriodicTests(PostgresFixture db) : IClassFixture<Post
     [Fact]
     public async Task A_cluster_inserts_each_tick_once_across_a_change_of_leader()
     {
+        // Every second, so the test is short. How many ticks a change of leader skips depends on how long leadership is
+        // vacant, which a loaded machine can stretch past a second, so this test checks what holds under any load: no
+        // tick twice, and ticks from both leaders. The catch-up of a skipped tick is checked by the next test and the
+        // enqueuer's unit tests.
         db.SkipIfUnavailable();
         await using var ds = db.CreateDataSource();
         var (driver, schema) = await MigratedAsync(ds);
@@ -26,13 +30,14 @@ public sealed class NpgsqlPeriodicTests(PostgresFixture db) : IClassFixture<Post
         var stopped = false;
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(3), Ct);
-            var leader = await LeaderAsync(ds, schema);
-            var (first, second) = leader == "node-a" ? (a, b) : (b, a);
+            var leader = await WaitForLeaderAsync(ds, schema, expected: null);
+            await WaitForAsync(ds, schema, 2);
+            var (first, second, next) = leader == "node-a" ? (a, b, "node-b") : (b, a, "node-a");
 
+            var switchedAt = await DatabaseNowAsync(ds);
             await first.StopAsync(Ct); // resigns; the other client takes over
-            await Task.Delay(TimeSpan.FromSeconds(4), Ct);
-            Assert.NotEqual(leader, await LeaderAsync(ds, schema));
+            Assert.Equal(next, await WaitForLeaderAsync(ds, schema, next));
+            await WaitForAsync(ds, schema, 2, after: switchedAt);
             await second.StopAsync(Ct);
             stopped = true;
         }
@@ -47,22 +52,14 @@ public sealed class NpgsqlPeriodicTests(PostgresFixture db) : IClassFixture<Post
 
         var elapsed = DateTimeOffset.UtcNow - started;
         await using var cmd = ds.CreateCommand(
-            $"""
-            SELECT count(*), count(DISTINCT unique_key), bool_and((metadata->>'periodic')::boolean),
-                   max(gap) FILTER (WHERE gap IS NOT NULL)
-            FROM (
-                SELECT unique_key, metadata, created_at - lag(created_at) OVER (ORDER BY created_at) AS gap
-                FROM {schema}.river_job WHERE kind = 'every_second'
-            ) AS j
-            """);
+            $"SELECT count(*), count(DISTINCT unique_key), bool_and((metadata->>'periodic')::boolean) FROM {schema}.river_job WHERE kind = 'every_second'");
         await using var reader = await cmd.ExecuteReaderAsync(Ct);
         Assert.True(await reader.ReadAsync(Ct));
-        var (count, distinct, periodic, widest) = (reader.GetInt64(0), reader.GetInt64(1), reader.GetBoolean(2), reader.GetTimeSpan(3));
+        var (count, distinct, periodic) = (reader.GetInt64(0), reader.GetInt64(1), reader.GetBoolean(2));
 
         Assert.Equal(count, distinct); // no tick twice (FR-PER-04)
         Assert.True(periodic);
-        Assert.InRange(count, 4, (long)elapsed.TotalSeconds + 1);
-        Assert.True(widest < TimeSpan.FromSeconds(3), $"The widest gap between ticks was {widest}: more than one tick was skipped.");
+        Assert.InRange(count, 4, (long)Math.Ceiling(elapsed.TotalSeconds) + 1); // never more jobs than ticks
     }
 
     [Fact]
@@ -118,23 +115,40 @@ public sealed class NpgsqlPeriodicTests(PostgresFixture db) : IClassFixture<Post
         return client;
     }
 
-    private static async Task WaitForAsync(NpgsqlDataSource ds, string schema, long jobs)
+    /// <summary>Waits until at least <paramref name="jobs"/> periodic jobs exist, created after <paramref name="after"/> if given.</summary>
+    private static async Task WaitForAsync(NpgsqlDataSource ds, string schema, long jobs, DateTimeOffset? after = null)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        await using var cmd = ds.CreateCommand($"SELECT count(*) FROM {schema}.river_job WHERE kind = 'every_second'");
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        await using var cmd = ds.CreateCommand(
+            $"SELECT count(*) FROM {schema}.river_job WHERE kind = 'every_second' AND ($1::timestamptz IS NULL OR created_at >= $1)");
+        cmd.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.TimestampTz, Value = (object?)after ?? DBNull.Value });
         while ((long)(await cmd.ExecuteScalarAsync(Ct))! < jobs)
         {
-            Assert.True(DateTime.UtcNow < deadline, $"Fewer than {jobs} periodic jobs after 10 s.");
+            Assert.True(DateTime.UtcNow < deadline, $"Fewer than {jobs} periodic jobs after 20 s.");
             await Task.Delay(50, Ct);
         }
     }
 
-    private static async Task<string?> WaitForLeaderAsync(NpgsqlDataSource ds, string schema, string expected)
+    private static async Task<DateTimeOffset> DatabaseNowAsync(NpgsqlDataSource ds)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(10);
+        await using var cmd = ds.CreateCommand("SELECT now()");
+        await using var reader = await cmd.ExecuteReaderAsync(Ct);
+        Assert.True(await reader.ReadAsync(Ct));
+        return reader.GetFieldValue<DateTimeOffset>(0);
+    }
+
+    /// <summary>Waits until <paramref name="expected"/> leads, or until any client leads when it is <c>null</c>; returns the leader.</summary>
+    private static async Task<string?> WaitForLeaderAsync(NpgsqlDataSource ds, string schema, string? expected)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(20);
         string? leader;
-        while ((leader = await LeaderAsync(ds, schema)) != expected && DateTime.UtcNow < deadline)
+        while ((leader = await LeaderAsync(ds, schema)) is null || (expected is not null && leader != expected))
         {
+            if (DateTime.UtcNow >= deadline)
+            {
+                break;
+            }
+
             await Task.Delay(50, Ct);
         }
 
