@@ -12,4 +12,9 @@
     <ProjectReference Include="..\KopiQueue\KopiQueue.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- KopiQueue's own migration line "main" for SQL Server (design §4.4, plan task 5.1). -->
+    <EmbeddedResource Include="Migrations\**\*.sql" LogicalName="kopi-migrations/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
 </Project>

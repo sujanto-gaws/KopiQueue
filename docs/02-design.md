@@ -384,24 +384,24 @@ Same logical model as §4.1. Mapping:
 
 ```sql
 CREATE TABLE kopi_job (
-  id            bigint IDENTITY(1,1) NOT NULL CONSTRAINT kopi_job_pk PRIMARY KEY CLUSTERED,
-  state         varchar(16)    NOT NULL CONSTRAINT kopi_job_state_df DEFAULT 'available',
-  attempt       smallint       NOT NULL DEFAULT 0,
-  max_attempts  smallint       NOT NULL,
-  attempted_at  datetime2(6)   NULL,
-  created_at    datetime2(6)   NOT NULL DEFAULT SYSUTCDATETIME(),
-  finalized_at  datetime2(6)   NULL,
-  scheduled_at  datetime2(6)   NOT NULL DEFAULT SYSUTCDATETIME(),
-  priority      smallint       NOT NULL DEFAULT 1,
-  args          nvarchar(max)  NOT NULL,
-  attempted_by  nvarchar(max)  NULL,
-  errors        nvarchar(max)  NULL,
-  kind          nvarchar(128)  NOT NULL,
-  metadata      nvarchar(max)  NOT NULL DEFAULT N'{}',
-  queue         nvarchar(128)  NOT NULL DEFAULT N'default',
-  tags          nvarchar(max)  NOT NULL DEFAULT N'[]',
-  unique_key    varbinary(32)  NULL,
-  unique_states tinyint        NULL,
+  id            bigint IDENTITY(1,1) NOT NULL,                       -- kopi_job_pk: PRIMARY KEY CLUSTERED (id)
+  state         varchar(16)   COLLATE Latin1_General_100_BIN2 NOT NULL DEFAULT 'available',
+  attempt       smallint      NOT NULL DEFAULT 0,
+  max_attempts  smallint      NOT NULL DEFAULT 25,
+  attempted_at  datetime2(6)  NULL,
+  created_at    datetime2(6)  NOT NULL DEFAULT SYSUTCDATETIME(),
+  finalized_at  datetime2(6)  NULL,
+  scheduled_at  datetime2(6)  NOT NULL DEFAULT SYSUTCDATETIME(),
+  priority      smallint      NOT NULL DEFAULT 1,
+  args          nvarchar(max) NOT NULL,
+  attempted_by  nvarchar(max) NULL,
+  errors        nvarchar(max) NULL,
+  kind          nvarchar(128) COLLATE Latin1_General_100_BIN2 NOT NULL,
+  metadata      nvarchar(max) NOT NULL DEFAULT N'{}',
+  queue         nvarchar(128) COLLATE Latin1_General_100_BIN2 NOT NULL DEFAULT N'default',
+  tags          nvarchar(max) NOT NULL DEFAULT N'[]',
+  unique_key    varbinary(32) NULL,
+  unique_states tinyint       NULL,
   -- 0 while the job "occupies" its unique slot, otherwise its own id (see ADR-011)
   unique_slot AS CAST(CASE
       WHEN unique_key IS NOT NULL AND unique_states IS NOT NULL
@@ -409,7 +409,7 @@ CREATE TABLE kopi_job (
              WHEN 'available' THEN 1   WHEN 'cancelled' THEN 2  WHEN 'completed' THEN 4
              WHEN 'discarded' THEN 8   WHEN 'pending'   THEN 16 WHEN 'retryable' THEN 32
              WHEN 'running'   THEN 64  WHEN 'scheduled' THEN 128 END) <> 0
-      THEN 0 ELSE id END AS bigint) PERSISTED,
+      THEN 0 ELSE id END AS bigint) PERSISTED NOT NULL,
 
   CONSTRAINT kopi_job_state_valid CHECK (state IN
     ('available','cancelled','completed','discarded','pending','retryable','running','scheduled')),
@@ -418,10 +418,11 @@ CREATE TABLE kopi_job (
     (finalized_at IS NOT NULL AND state     IN ('cancelled','completed','discarded'))),
   CONSTRAINT kopi_job_max_attempts_is_positive CHECK (max_attempts > 0),
   CONSTRAINT kopi_job_priority_in_range        CHECK (priority BETWEEN 1 AND 4),
-  CONSTRAINT kopi_job_queue_length CHECK (LEN(queue) BETWEEN 1 AND 128),
-  CONSTRAINT kopi_job_kind_length  CHECK (LEN(kind)  BETWEEN 1 AND 128),
+  CONSTRAINT kopi_job_kind_length   CHECK (LEN(kind)  BETWEEN 1 AND 127),
+  CONSTRAINT kopi_job_queue_length  CHECK (LEN(queue) BETWEEN 1 AND 127),
   CONSTRAINT kopi_job_args_json     CHECK (ISJSON(args) = 1),
-  CONSTRAINT kopi_job_metadata_json CHECK (ISJSON(metadata) = 1)
+  CONSTRAINT kopi_job_metadata_json CHECK (ISJSON(metadata) = 1),
+  CONSTRAINT kopi_job_tags_json     CHECK (ISJSON(tags) = 1)
 );
 
 -- Hot fetch path: filtered to available rows only, so it stays small
@@ -437,33 +438,43 @@ CREATE INDEX kopi_job_kind_idx      ON kopi_job (kind);
 CREATE UNIQUE INDEX kopi_job_unique_idx ON kopi_job (unique_key, unique_slot);
 
 CREATE TABLE kopi_leader (
-  name       varchar(16)   NOT NULL CONSTRAINT kopi_leader_pk PRIMARY KEY DEFAULT 'default' CHECK (name = 'default'),
-  leader_id  nvarchar(128) NOT NULL,
+  name       varchar(16)   COLLATE Latin1_General_100_BIN2 NOT NULL DEFAULT 'default',  -- kopi_leader_pk; CHECK (name = 'default')
+  leader_id  nvarchar(128) COLLATE Latin1_General_100_BIN2 NOT NULL,                    -- CHECK (LEN(leader_id) BETWEEN 1 AND 127)
   elected_at datetime2(6)  NOT NULL,
   expires_at datetime2(6)  NOT NULL
 );
 
 CREATE TABLE kopi_queue (
-  name       nvarchar(128) NOT NULL CONSTRAINT kopi_queue_pk PRIMARY KEY,
+  name       nvarchar(128) COLLATE Latin1_General_100_BIN2 NOT NULL,  -- kopi_queue_pk; CHECK (LEN(name) BETWEEN 1 AND 127)
   created_at datetime2(6)  NOT NULL DEFAULT SYSUTCDATETIME(),
-  updated_at datetime2(6)  NOT NULL,
+  updated_at datetime2(6)  NOT NULL DEFAULT SYSUTCDATETIME(),
   paused_at  datetime2(6)  NULL,
-  metadata   nvarchar(max) NOT NULL DEFAULT N'{}' CHECK (ISJSON(metadata) = 1)
+  metadata   nvarchar(max) NOT NULL DEFAULT N'{}'                    -- CHECK (ISJSON(metadata) = 1)
 );
 
 CREATE TABLE kopi_migration (
-  line       nvarchar(128) NOT NULL,
-  version    bigint        NOT NULL,
+  line       nvarchar(128) COLLATE Latin1_General_100_BIN2 NOT NULL,  -- CHECK (LEN(line) BETWEEN 1 AND 127)
+  version    bigint        NOT NULL,                                  -- CHECK (version >= 1)
   created_at datetime2(6)  NOT NULL DEFAULT SYSUTCDATETIME(),
   CONSTRAINT kopi_migration_pk PRIMARY KEY (line, version)
 );
 ```
 
+The DDL above is a summary. The authoritative definition is `src/KopiQueue.SqlServer/Migrations/main/001_initial_schema.up.sql` (plan task 5.1), whose columns, indexes and constraints `SqlServerMainLineTests` checks against a real SQL Server.
+
 SQL Server notes:
 
-- Filtered indexes and indexed computed columns need `ANSI_NULLS`, `QUOTED_IDENTIFIER`, `ANSI_PADDING`, `ANSI_WARNINGS`, `ARITHABORT` and `CONCAT_NULL_YIELDS_NULL` ON, and `NUMERIC_ROUNDABORT` OFF, in every session that writes the table. SqlClient's defaults satisfy this, with one subtlety verified in M0: SqlClient leaves `ARITHABORT` **OFF**, but at compatibility level ≥ 90 `ANSI_WARNINGS ON` implies it. The driver checks the options on first use and fails fast if a session (for example one opened by other code with `SET ANSI_WARNINGS OFF`) would break writes.
+- **Migration line.** The `main` line starts at version 1. It creates all four tables, and the migration table has the `(line, version)` shape from the start: SQL Server needs none of PostgreSQL's eight River versions. Until `0.5.0-beta` ships, M5 tasks may still change version 1; after that, a change needs a new version.
+- **Schema and prefix.** The schema defaults to `dbo`. It can't be left unset, as PostgreSQL's can to use the `search_path`. The prefix defaults to `kopi_`. Both are validated before they are substituted (NFR-SEC-01), and the schema is quoted with `QUOTENAME` rules.
+- **Named constraints.** Every constraint is named after the prefix, defaults included. SQL Server scopes constraint names to the schema, so names without the prefix would stop two prefixes sharing a schema.
+- **Binary collation.** `state`, `kind`, `queue`, the leader columns and the migration line use `Latin1_General_100_BIN2`. They then compare case-sensitively and ordinally, as on PostgreSQL, whatever the database's default collation is (usually case-insensitive). A parameter compares under the column's collation, so seeks still use the indexes.
+- **Parity with PostgreSQL.** `max_attempts DEFAULT 25` and `kopi_queue.updated_at DEFAULT SYSUTCDATETIME()` match PostgreSQL's version 7. The length checks allow 1-127 characters, as `JobValidation` and PostgreSQL's `char_length < 128` do.
+- **JSON checks.** `args`, `metadata` and `tags` must be valid JSON. Before SQL Server 2022, `ISJSON` accepts only objects and arrays, but KopiQueue never stores a scalar in these columns. `attempted_by` and `errors` are not checked, which keeps fetch and complete cheap.
+- **Session options.** Filtered indexes and indexed computed columns need `ANSI_NULLS`, `QUOTED_IDENTIFIER`, `ANSI_PADDING`, `ANSI_WARNINGS`, `ARITHABORT` and `CONCAT_NULL_YIELDS_NULL` ON, and `NUMERIC_ROUNDABORT` OFF, in every session that writes the table. SqlClient's defaults satisfy this, with one subtlety verified in M0: SqlClient leaves `ARITHABORT` **OFF**, but at compatibility level ≥ 90 `ANSI_WARNINGS ON` implies it.
+  - `SqlServerSessionCheck` reads the session's options and the database's compatibility level, which must be at least 150 (NFR-COMP-02a).
+  - When a session would break writes, it throws `KopiQueueConfigurationException`, naming each wrong setting. Such a session usually comes from other code, for example code that ran `SET ANSI_WARNINGS OFF`.
+  - The migrator runs the check on every session it opens. The executor will run it on first use (task 5.2).
 - Every batch statement stays below 5,000 rows (the lock-escalation threshold), so row locks never escalate to a table lock while producers fetch.
-- The schema (default `dbo`) and the prefix are substituted into the SQL after validation and quoted with `QUOTENAME` rules.
 
 ## 5. Key algorithms
 
@@ -1261,7 +1272,7 @@ The interface was kept, with these changes from the original sketch: `JobInsertR
 - Each script runs in its own transaction together with its version row. Up runs the SQL and then inserts the row; down deletes the row and then runs the SQL. A script whose leading comments contain `-- kopi:no-transaction` runs outside a transaction (for `CREATE INDEX CONCURRENTLY`). Such a script must hold a single statement, because PostgreSQL treats a multi-statement batch as an implicit transaction.
 - Planning: up applies the missing versions up to the target (default: the latest). Down reverts down to the target (default: one step; `0` reverts the whole line). Recorded versions must form a gap-free 1..N. A database that is newer than the library is a no-op for up and an error for down.
 - Lock: the runner polls `TryAcquireLock` every 200 ms until `LockTimeout` (default 30 s). PostgreSQL uses a session-level `pg_try_advisory_lock` whose key is the first 8 bytes of SHA-256(`kopi_migrate:<schema>.<prefix>`), so separate schemas migrate independently. SQL Server uses `sp_getapplock` (§8.1). River's CLI does not take this lock, so do not run both against the same schema at once.
-- The migration table is created by version 1 of the `main` line, in River's original shape, and replaced by the `(line, version)` shape in version 5 (§4.1.1). The driver handles both, so `main` must reach version 5 before any other line is applied.
+- On PostgreSQL, the migration table is created by version 1 of the `main` line, in River's original shape, and replaced by the `(line, version)` shape in version 5 (§4.1.1). The driver handles both, so `main` must reach version 5 before any other line is applied. On SQL Server, version 1 creates it in the `(line, version)` shape (§4.4), so any line can follow it.
 - A failed step is wrapped in `KopiQueueMigrationException` with the database error as the inner exception. Earlier steps stay applied.
 
 **Migrator API (plan task 1.3, FR-MIG-02).** `KopiMigrator` (namespace `KopiQueue.Migrations`) manages one line. Drivers create it, for example `new NpgsqlDriver(dataSource, new NpgsqlDriverOptions { Schema = "queue" }).CreateMigrator(loggerFactory)`, which returns the `main` line.
@@ -1359,7 +1370,13 @@ SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'de
 
 **Maintenance:** `DELETE TOP (@n) FROM kopi_job WITH (READPAST, FORCESEEK(...)) WHERE ...` (cleaner), and `UPDATE TOP (@n) ... WITH (READPAST, FORCESEEK(...))` with `OUTPUT inserted.queue` (scheduler), following the rules above.
 
-**Migrations lock:** `sp_getapplock @Resource = 'kopi_migrate', @LockMode = 'Exclusive', @LockOwner = 'Session'`. DDL runs inside a transaction for each migration.
+**Migrations lock** (plan task 5.1): `sp_getapplock @Resource = 'kopi_migrate:<schema>.<prefix>', @LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = 0`.
+
+- The runner polls it, as it polls PostgreSQL's advisory lock. Keyed by schema and prefix, separate schemas migrate independently.
+- The lock belongs to the session, so it lasts across every step's transaction. The session releases it before its pooled connection goes back to the pool.
+- Each migration runs without a command timeout, in its own READ COMMITTED transaction together with its version row. The explicit isolation level matters because a level left on a pooled session, such as SNAPSHOT, would break some DDL.
+- A script may hold several batches, separated by lines of only `GO` as in sqlcmd. This is for statements that must start a batch, such as `CREATE VIEW` and `CREATE TRIGGER`.
+- Every session first passes the session-options check (§4.4).
 
 ## 9. Serialisation
 
