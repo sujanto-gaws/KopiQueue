@@ -45,7 +45,7 @@ public sealed class SchedulerTests
     }
 
     [Fact]
-    public void The_leader_runs_the_scheduler_at_the_clients_interval_with_or_without_the_queue_cleaner()
+    public void The_leader_runs_the_scheduler_at_the_clients_interval_with_the_rescuer_and_with_or_without_the_queue_cleaner()
     {
         var driver = new KopiClientLifecycleTests.IdleDriver();
         var interval = TimeSpan.FromSeconds(2);
@@ -53,8 +53,9 @@ public sealed class SchedulerTests
         var withCleaner = KopiClient.MaintenanceServices(driver, new KopiClientOptions { SchedulerInterval = interval });
         var withoutCleaner = KopiClient.MaintenanceServices(driver, new KopiClientOptions { SchedulerInterval = interval, QueueRetention = null });
 
-        Assert.Equal(["scheduler", "queue_cleaner"], withCleaner.Select(s => s.Name));
-        Assert.Equal(interval, Assert.Single(withoutCleaner).Interval);
+        Assert.Equal(["scheduler", "rescuer", "queue_cleaner"], withCleaner.Select(s => s.Name));
+        Assert.Equal(["scheduler", "rescuer"], withoutCleaner.Select(s => s.Name));
+        Assert.Equal(interval, withoutCleaner[0].Interval);
         Assert.Equal(interval, withCleaner[0].Interval);
     }
 

@@ -1,6 +1,7 @@
 using System.Globalization;
 using KopiQueue.Drivers;
 using KopiQueue.Execution;
+using KopiQueue.Serialization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -249,6 +250,12 @@ public sealed partial class KopiClient
             nameof(KopiClientOptions.QueueRetention),
             "must be at least 5 minutes (clients mark their queues worked every minute), or null to keep queues");
         Check(options.SchedulerInterval > TimeSpan.Zero, nameof(KopiClientOptions.SchedulerInterval), "must be positive");
+        Check(
+            options.RescueStuckJobsAfter is null
+                || (options.RescueStuckJobsAfter > TimeSpan.Zero
+                    && (options.JobTimeout == Timeout.InfiniteTimeSpan || options.RescueStuckJobsAfter > options.JobTimeout)),
+            nameof(KopiClientOptions.RescueStuckJobsAfter),
+            "must be greater than JobTimeout, or null for JobTimeout plus 1 hour");
         Check(Enum.IsDefined(options.NotificationMode), nameof(KopiClientOptions.NotificationMode), "is not a known mode");
         Check(Enum.IsDefined(options.CompleterMode), nameof(KopiClientOptions.CompleterMode), "is not a known mode");
         return errors;
@@ -297,7 +304,7 @@ public sealed partial class KopiClient
             _timeProvider,
             loggers.CreateLogger<JobExecutor>());
         var notifier = listener is null ? null : new Notifier(listener, timeProvider: _timeProvider, logger: loggers.CreateLogger<Notifier>());
-        var maintenance = new MaintenanceHost(MaintenanceServices(_driver, _options), timeProvider: _timeProvider, logger: loggers.CreateLogger<MaintenanceHost>());
+        var maintenance = new MaintenanceHost(MaintenanceServices(_driver, _options, _serializer, loggers), timeProvider: _timeProvider, logger: loggers.CreateLogger<MaintenanceHost>());
         var elector = new Elector(
             _driver,
             new ElectorOptions { ClientId = ClientId, ElectInterval = _options.ElectInterval, LeaderTtl = _options.LeaderTtl },
@@ -336,6 +343,14 @@ public sealed partial class KopiClient
     }
 
     /// <summary>
+    /// The rescuer's threshold: <see cref="KopiClientOptions.RescueStuckJobsAfter"/>, or by default
+    /// <see cref="KopiClientOptions.JobTimeout"/> plus 1 hour (1 hour when the job timeout is infinite), design §7.
+    /// </summary>
+    internal static TimeSpan RescueStuckJobsAfter(KopiClientOptions options) =>
+        options.RescueStuckJobsAfter
+        ?? (options.JobTimeout == Timeout.InfiniteTimeSpan ? TimeSpan.FromHours(1) : options.JobTimeout + TimeSpan.FromHours(1));
+
+    /// <summary>
     /// The executor's settings. Its <see cref="JobExecutorOptions.SchedulerInterval"/> is the scheduler's own, so a retry
     /// the executor leaves to the scheduler never waits for one that runs less often than it assumes (design §5.7).
     /// </summary>
@@ -347,10 +362,30 @@ public sealed partial class KopiClient
     };
 
     /// <summary>The leader-only maintenance services (design §5.7), which run while this client leads.</summary>
-    /// <remarks>The rescuer and job cleaner join with plan tasks 3.4 and 3.5.</remarks>
-    internal static IMaintenanceService[] MaintenanceServices(IKopiDriver driver, KopiClientOptions options)
+    /// <remarks>The job cleaner joins with plan task 3.5.</remarks>
+    internal static IMaintenanceService[] MaintenanceServices(
+        IKopiDriver driver,
+        KopiClientOptions options,
+        IJobArgsSerializer? serializer = null,
+        ILoggerFactory? loggers = null)
     {
-        var services = new List<IMaintenanceService> { new Scheduler(driver, options.SchedulerInterval) };
+        var services = new List<IMaintenanceService>
+        {
+            new Scheduler(driver, options.SchedulerInterval),
+            new Rescuer(
+                driver,
+                new RescuerOptions
+                {
+                    RescueStuckJobsAfter = RescueStuckJobsAfter(options),
+                    JobTimeout = options.JobTimeout,
+                    SchedulerInterval = options.SchedulerInterval,
+                    RetryPolicy = options.RetryPolicy,
+                    Workers = options.Workers,
+                    Serializer = serializer ?? options.ArgsSerializer ?? SystemTextJsonArgsSerializer.Default,
+                    Services = options.Services,
+                },
+                (loggers ?? NullLoggerFactory.Instance).CreateLogger<Rescuer>()),
+        };
         if (options.QueueRetention is { } queueRetention)
         {
             services.Add(new QueueCleaner(driver, queueRetention));

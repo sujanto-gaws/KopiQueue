@@ -33,6 +33,8 @@ internal sealed class NpgsqlStatements
         JobGetAvailable = Load("job_get_available.sql");
         JobSetStateIfRunningMany = Load("job_set_state_if_running_many.sql");
         JobSchedule = Load("job_schedule.sql");
+        JobListStuck = Load("job_list_stuck.sql");
+        JobRescueMany = Load("job_rescue_many.sql");
         LeaderAttemptElect = Load("leader_attempt_elect.sql");
         LeaderAttemptReelect = Load("leader_attempt_reelect.sql");
         LeaderResign = Load("leader_resign.sql");
@@ -59,6 +61,10 @@ internal sealed class NpgsqlStatements
     public string JobSetStateIfRunningMany { get; }
 
     public string JobSchedule { get; }
+
+    public string JobListStuck { get; }
+
+    public string JobRescueMany { get; }
 
     public string LeaderAttemptElect { get; }
 
@@ -337,6 +343,66 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
                 new() { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)statements.Schema ?? DBNull.Value },
             ],
             reader => new JobScheduleResult(reader.GetInt64(0), reader.GetString(1), FromDatabase(reader.GetString(2))),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<JobListStuckResult> JobListStuckAsync(JobListStuckParams parameters, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(parameters.StuckAfter, TimeSpan.Zero, nameof(parameters));
+        ArgumentOutOfRangeException.ThrowIfLessThan(parameters.Max, 1, nameof(parameters));
+
+        var rows = await RowsAsync(
+            statements.JobListStuck,
+            [
+                new() { NpgsqlDbType = NpgsqlDbType.Interval, Value = parameters.StuckAfter },
+                new() { NpgsqlDbType = NpgsqlDbType.Integer, Value = parameters.Max },
+            ],
+            reader => (Job: reader.IsDBNull(0) ? null : ReadJob(reader), Now: reader.GetFieldValue<DateTimeOffset>(16)),
+            cancellationToken).ConfigureAwait(false);
+        return new JobListStuckResult(rows[0].Now, [.. rows.Where(r => r.Job is not null).Select(r => r.Job!)]);
+    }
+
+    public async Task<IReadOnlyList<JobRow>> JobRescueManyAsync(IReadOnlyList<JobRescueParams> jobs, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(jobs);
+        if (jobs.Count == 0)
+        {
+            return [];
+        }
+
+        var ids = new long[jobs.Count];
+        var attemptedAt = new DateTimeOffset[jobs.Count];
+        var states = new string[jobs.Count];
+        var scheduledAt = new DateTimeOffset?[jobs.Count];
+        var errors = new string[jobs.Count];
+        for (var i = 0; i < jobs.Count; i++)
+        {
+            var job = jobs[i] ?? throw new ArgumentException($"Rescue {i} is null.", nameof(jobs));
+            if (job.State is not (JobState.Available or JobState.Retryable or JobState.Discarded))
+            {
+                throw new ArgumentException($"Rescue {i} sets job {job.Id} to {job.State}; a rescue makes a job available, retryable or discarded.", nameof(jobs));
+            }
+
+            ArgumentNullException.ThrowIfNull(job.Error, nameof(jobs));
+            ids[i] = job.Id;
+            attemptedAt[i] = job.AttemptedAt.ToUniversalTime();
+            states[i] = ToDatabase(job.State);
+            scheduledAt[i] = job.ScheduledAt?.ToUniversalTime();
+            errors[i] = FormatError(job.Error);
+        }
+
+        return await RowsAsync(
+            statements.JobRescueMany,
+            [
+                Array(NpgsqlDbType.Bigint, ids),
+                Array(NpgsqlDbType.TimestampTz, attemptedAt),
+                Array(NpgsqlDbType.Text, states),
+                Array(NpgsqlDbType.TimestampTz, scheduledAt),
+                Array(NpgsqlDbType.Jsonb, errors),
+                new() { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)statements.Schema ?? DBNull.Value },
+            ],
+            ReadJob,
             cancellationToken).ConfigureAwait(false);
     }
 

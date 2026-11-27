@@ -283,6 +283,17 @@ public sealed class KopiClientOptions
     /// due within one interval is made available at once instead. Default: 5 s.
     /// </summary>
     public TimeSpan SchedulerInterval { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How long a job may be <c>running</c> before the leader's rescuer takes it for stuck, for example because the client
+    /// running it crashed (FR-MNT-03, NFR-REL-02, design §5.7), and retries or discards it. A job whose worker's timeout
+    /// is longer gets at least that long; a job with no timeout (<see cref="Timeout.InfiniteTimeSpan"/>, from its worker or
+    /// from <see cref="JobTimeout"/>) is never rescued by age. Delivery is at least once: a rescued attempt may still be
+    /// running somewhere, so this is also an upper bound on how long a job may run. Must be greater than
+    /// <see cref="JobTimeout"/>. Default: <c>null</c>, which is <see cref="JobTimeout"/> plus 1 hour (1 hour when
+    /// <see cref="JobTimeout"/> is infinite).
+    /// </summary>
+    public TimeSpan? RescueStuckJobsAfter { get; init; }
 }
 
 /// <summary>Settings of one queue (design §7).</summary>

@@ -62,6 +62,9 @@ public sealed class KopiQueueOptions
 
     /// <inheritdoc cref="KopiClientOptions.SchedulerInterval"/>
     public TimeSpan SchedulerInterval { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <inheritdoc cref="KopiClientOptions.RescueStuckJobsAfter"/>
+    public TimeSpan? RescueStuckJobsAfter { get; set; }
 }
 
 /// <summary>Settings of one queue in <see cref="KopiQueueOptions.Queues"/>.</summary>

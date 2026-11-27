@@ -280,29 +280,14 @@ internal sealed partial class JobExecutor
     /// The worker's delay, else the retry policy's time; a time in the past (a negative delay, or a policy that got it
     /// wrong) falls back to <see cref="DefaultRetryPolicy"/>, as in River.
     /// </summary>
-    private DateTimeOffset NextRetry(JobRow job, TimeSpan? workerDelay, DateTimeOffset now)
-    {
-        DateTimeOffset at;
-        try
-        {
-            at = workerDelay is { } delay ? now + delay : _retryPolicy.NextRetry(job, now);
-        }
-#pragma warning disable CA1031 // A retry policy that throws must not lose the outcome.
-        catch (Exception e)
-#pragma warning restore CA1031
-        {
-            LogRetryPolicyFailed(e, job.Id, job.Kind);
-            at = DateTimeOffset.MinValue;
-        }
-
-        if (at < now)
-        {
-            LogRetryInThePast(job.Id, job.Kind);
-            at = DefaultRetryPolicy.Instance.NextRetry(job, now);
-        }
-
-        return at;
-    }
+    private DateTimeOffset NextRetry(JobRow job, TimeSpan? workerDelay, DateTimeOffset now) =>
+        RetrySchedule.Next(
+            job,
+            workerDelay,
+            _retryPolicy,
+            now,
+            e => LogRetryPolicyFailed(e, job.Id, job.Kind),
+            () => LogRetryInThePast(job.Id, job.Kind));
 
     /// <summary>The job's <c>snoozes</c> metadata plus one, read leniently as River does; 1 when absent.</summary>
     internal static long NextSnoozeCount(string metadataJson)
@@ -391,7 +376,7 @@ internal sealed partial class JobExecutor
     }
 
     /// <summary>The services of a client created without DI: workers with public constructors still work.</summary>
-    private sealed class EmptyServiceProvider : IServiceProvider
+    internal sealed class EmptyServiceProvider : IServiceProvider
     {
         public static readonly EmptyServiceProvider Instance = new();
 

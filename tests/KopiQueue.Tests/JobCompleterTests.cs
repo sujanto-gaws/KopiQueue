@@ -347,6 +347,12 @@ public sealed class JobCompleterTests
         public Task<IReadOnlyList<JobScheduleResult>> JobScheduleAsync(JobScheduleParams parameters, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<JobScheduleResult>>([]);
 
+        public Task<JobListStuckResult> JobListStuckAsync(JobListStuckParams parameters, CancellationToken cancellationToken) =>
+            Task.FromResult(new JobListStuckResult(DateTimeOffset.UtcNow, []));
+
+        public Task<IReadOnlyList<JobRow>> JobRescueManyAsync(IReadOnlyList<JobRescueParams> jobs, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<JobRow>>([]);
+
         public async Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _calls);

@@ -219,6 +219,12 @@ public sealed class KopiClientLifecycleTests
             return Task.FromResult<IReadOnlyList<JobScheduleResult>>([new JobScheduleResult(1, "default", JobState.Available)]);
         }
 
+        public Task<JobListStuckResult> JobListStuckAsync(JobListStuckParams parameters, CancellationToken cancellationToken) =>
+            Task.FromResult(new JobListStuckResult(DateTimeOffset.UtcNow, []));
+
+        public Task<IReadOnlyList<JobRow>> JobRescueManyAsync(IReadOnlyList<JobRescueParams> jobs, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<JobRow>>([]);
+
         public Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<JobRow>>([]);
 

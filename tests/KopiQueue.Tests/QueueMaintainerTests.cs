@@ -350,6 +350,12 @@ public sealed class QueueMaintainerTests
         public Task<IReadOnlyList<JobScheduleResult>> JobScheduleAsync(JobScheduleParams parameters, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<JobListStuckResult> JobListStuckAsync(JobListStuckParams parameters, CancellationToken cancellationToken) =>
+            Task.FromResult(new JobListStuckResult(DateTimeOffset.UtcNow, []));
+
+        public Task<IReadOnlyList<JobRow>> JobRescueManyAsync(IReadOnlyList<JobRescueParams> jobs, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<JobRow>>([]);
+
         private QueueRow Row(string name) => new()
         {
             Name = name,

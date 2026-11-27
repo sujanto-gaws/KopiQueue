@@ -532,3 +532,41 @@ KopiQueue.KopiQueueOptions.SchedulerInterval.set -> void
 [KQ0001]override KopiQueue.Drivers.JobScheduleResult.ToString() -> string!
 [KQ0001]static KopiQueue.Drivers.JobScheduleResult.operator !=(KopiQueue.Drivers.JobScheduleResult? left, KopiQueue.Drivers.JobScheduleResult? right) -> bool
 [KQ0001]static KopiQueue.Drivers.JobScheduleResult.operator ==(KopiQueue.Drivers.JobScheduleResult? left, KopiQueue.Drivers.JobScheduleResult? right) -> bool
+KopiQueue.KopiClientOptions.RescueStuckJobsAfter.get -> System.TimeSpan?
+KopiQueue.KopiClientOptions.RescueStuckJobsAfter.init -> void
+KopiQueue.KopiQueueOptions.RescueStuckJobsAfter.get -> System.TimeSpan?
+KopiQueue.KopiQueueOptions.RescueStuckJobsAfter.set -> void
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobListStuckAsync(KopiQueue.Drivers.JobListStuckParams! parameters, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<KopiQueue.Drivers.JobListStuckResult!>!
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobRescueManyAsync(System.Collections.Generic.IReadOnlyList<KopiQueue.Drivers.JobRescueParams!>! jobs, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.JobRow!>!>!
+[KQ0001]KopiQueue.Drivers.JobListStuckParams
+[KQ0001]KopiQueue.Drivers.JobListStuckParams.JobListStuckParams() -> void
+[KQ0001]KopiQueue.Drivers.JobListStuckParams.Max.get -> int
+[KQ0001]KopiQueue.Drivers.JobListStuckParams.Max.init -> void
+[KQ0001]KopiQueue.Drivers.JobListStuckParams.StuckAfter.get -> System.TimeSpan
+[KQ0001]KopiQueue.Drivers.JobListStuckParams.StuckAfter.init -> void
+[KQ0001]KopiQueue.Drivers.JobListStuckResult
+[KQ0001]KopiQueue.Drivers.JobListStuckResult.<Clone>$() -> KopiQueue.Drivers.JobListStuckResult!
+[KQ0001]KopiQueue.Drivers.JobListStuckResult.Deconstruct(out System.DateTimeOffset Now, out System.Collections.Generic.IReadOnlyList<KopiQueue.JobRow!>! Jobs) -> void
+[KQ0001]KopiQueue.Drivers.JobListStuckResult.Equals(KopiQueue.Drivers.JobListStuckResult? other) -> bool
+[KQ0001]KopiQueue.Drivers.JobListStuckResult.JobListStuckResult(System.DateTimeOffset Now, System.Collections.Generic.IReadOnlyList<KopiQueue.JobRow!>! Jobs) -> void
+[KQ0001]KopiQueue.Drivers.JobListStuckResult.Jobs.get -> System.Collections.Generic.IReadOnlyList<KopiQueue.JobRow!>!
+[KQ0001]KopiQueue.Drivers.JobListStuckResult.Jobs.init -> void
+[KQ0001]KopiQueue.Drivers.JobListStuckResult.Now.get -> System.DateTimeOffset
+[KQ0001]KopiQueue.Drivers.JobListStuckResult.Now.init -> void
+[KQ0001]KopiQueue.Drivers.JobRescueParams
+[KQ0001]KopiQueue.Drivers.JobRescueParams.AttemptedAt.get -> System.DateTimeOffset
+[KQ0001]KopiQueue.Drivers.JobRescueParams.AttemptedAt.init -> void
+[KQ0001]KopiQueue.Drivers.JobRescueParams.Error.get -> KopiQueue.AttemptError!
+[KQ0001]KopiQueue.Drivers.JobRescueParams.Error.init -> void
+[KQ0001]KopiQueue.Drivers.JobRescueParams.Id.get -> long
+[KQ0001]KopiQueue.Drivers.JobRescueParams.Id.init -> void
+[KQ0001]KopiQueue.Drivers.JobRescueParams.JobRescueParams() -> void
+[KQ0001]KopiQueue.Drivers.JobRescueParams.ScheduledAt.get -> System.DateTimeOffset?
+[KQ0001]KopiQueue.Drivers.JobRescueParams.ScheduledAt.init -> void
+[KQ0001]KopiQueue.Drivers.JobRescueParams.State.get -> KopiQueue.JobState
+[KQ0001]KopiQueue.Drivers.JobRescueParams.State.init -> void
+[KQ0001]override KopiQueue.Drivers.JobListStuckResult.Equals(object? obj) -> bool
+[KQ0001]override KopiQueue.Drivers.JobListStuckResult.GetHashCode() -> int
+[KQ0001]override KopiQueue.Drivers.JobListStuckResult.ToString() -> string!
+[KQ0001]static KopiQueue.Drivers.JobListStuckResult.operator !=(KopiQueue.Drivers.JobListStuckResult? left, KopiQueue.Drivers.JobListStuckResult? right) -> bool
+[KQ0001]static KopiQueue.Drivers.JobListStuckResult.operator ==(KopiQueue.Drivers.JobListStuckResult? left, KopiQueue.Drivers.JobListStuckResult? right) -> bool

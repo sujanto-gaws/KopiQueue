@@ -8,6 +8,7 @@ using Npgsql;
 //
 // The connection string comes from KOPI_NODE_PG, so its password never shows on a command line. The node works the
 // "node" queue, prints "ready" once started, and stops cleanly when its standard input closes or reads "stop".
+// Jobs time out after 2 s and are taken for stuck after 3 s, so a test can watch the rescuer (task 3.4) at work.
 if (args is not [var schema, var clientId] || Environment.GetEnvironmentVariable("KOPI_NODE_PG") is not { Length: > 0 } connectionString)
 {
     await Console.Error.WriteLineAsync("usage: KOPI_NODE_PG=<connection string> KopiQueue.TestNode <schema> <client-id>");
@@ -19,7 +20,9 @@ var client = new KopiClient(new NpgsqlDriver(dataSource, new NpgsqlDriverOptions
 {
     ClientId = clientId,
     Queues = new Dictionary<string, QueueOptions>(StringComparer.Ordinal) { ["node"] = new() { MaxWorkers = 2 } },
-    Workers = new WorkerRegistry().Add(new NodeWorker()),
+    Workers = new WorkerRegistry().Add(new NodeWorker()).Add(new HangingWorker()),
+    JobTimeout = TimeSpan.FromSeconds(2),
+    RescueStuckJobsAfter = TimeSpan.FromSeconds(3),
     ElectInterval = TimeSpan.FromMilliseconds(500),
     LeaderTtl = TimeSpan.FromSeconds(3),
     FetchPollInterval = TimeSpan.FromMilliseconds(500),
@@ -42,4 +45,14 @@ internal sealed record NodeArgs(int N) : IJobArgs;
 internal sealed class NodeWorker : Worker<NodeArgs>
 {
     public override Task WorkAsync(Job<NodeArgs> job, CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+/// <summary>Hangs in its first attempt, even past its timeout, as a worker of a crashed process would; completes after.</summary>
+[JobKind("node_hang")]
+internal sealed record HangArgs : IJobArgs;
+
+internal sealed class HangingWorker : Worker<HangArgs>
+{
+    public override Task WorkAsync(Job<HangArgs> job, CancellationToken cancellationToken) =>
+        job.Attempt == 1 ? Task.Delay(System.Threading.Timeout.Infinite, CancellationToken.None) : Task.CompletedTask;
 }
