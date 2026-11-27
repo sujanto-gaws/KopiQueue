@@ -125,11 +125,12 @@ public abstract partial class DriverConformanceTests<TFixture>
         var executor = (await MigratedAsync()).Driver.GetExecutor();
         var (stale, fresh) = (UniqueQueue(), UniqueQueue());
         await executor.QueueCreateOrSetUpdatedAtManyAsync([stale, fresh], Ct);
-        await Task.Delay(TimeSpan.FromSeconds(1.2), Ct);
+        await Task.Delay(TimeSpan.FromSeconds(3.5), Ct);
         await executor.QueueCreateOrSetUpdatedAtManyAsync([fresh], Ct);
 
-        // Other cases' queues may go too; this case looks only at its own.
-        var deleted = await executor.QueueDeleteExpiredAsync(new QueueDeleteExpiredParams { Retention = TimeSpan.FromSeconds(1), Max = 1_000 }, Ct);
+        // Other cases' queues may go too; this case looks only at its own. A stall here only ages the stale queue more;
+        // the fresh one stays younger than the retention unless the runner stalls for 3 s between these two calls.
+        var deleted = await executor.QueueDeleteExpiredAsync(new QueueDeleteExpiredParams { Retention = TimeSpan.FromSeconds(3), Max = 1_000 }, Ct);
 
         Assert.Contains(stale, deleted);
         Assert.DoesNotContain(fresh, deleted);

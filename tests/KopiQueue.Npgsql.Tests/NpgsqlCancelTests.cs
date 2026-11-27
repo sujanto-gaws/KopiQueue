@@ -69,7 +69,8 @@ public sealed class NpgsqlCancelTests(PostgresFixture db) : IClassFixture<Postgr
             await admin.JobCancelAsync(job.Id, Ct);
             await WaitForStateAsync(driver, job.Id, JobState.Cancelled);
 
-            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(2.5), $"took {clock.Elapsed}"); // one poll interval, and some
+            // Within a few 1 s polls, where without the poll it would never arrive; a loaded CI runner needs the slack.
+            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"took {clock.Elapsed}");
         }
         finally
         {

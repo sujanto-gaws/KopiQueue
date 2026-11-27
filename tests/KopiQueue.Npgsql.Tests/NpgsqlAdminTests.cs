@@ -63,6 +63,109 @@ public sealed class NpgsqlAdminTests(PostgresFixture db) : IClassFixture<Postgre
     }
 
     [Fact]
+    public async Task Every_sort_direction_and_page_size_pages_exactly_as_a_full_sort_would()
+    {
+        // Plan task 4.6: 300 jobs whose times tie often and are often missing (never attempted, not finalised), paged in
+        // every order, both ways, by 1, 7 and 64, against the same jobs sorted in memory (a missing time last ascending).
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var (driver, _) = await MigratedAsync(ds);
+        var client = new KopiClient(driver);
+        var executor = driver.GetExecutor();
+        var now = DateTimeOffset.UtcNow;
+        await client.InsertManyAsync(
+            [.. Enumerable.Range(0, 300).Select(i => new InsertRequest(new AdminArgs(i), new InsertOptions { Queue = "paged", ScheduledAt = now.AddMinutes(-(i % 5) - 1) }))],
+            cancellationToken: Ct);
+        var finalizedAt = new[] { now.AddHours(-3), now.AddHours(-2), now.AddHours(-1) };
+        for (var fetch = 0; fetch < 4; fetch++)
+        {
+            // Each fetch gives its jobs one attempted_at; some are then finalised at one of three times.
+            var running = await executor.JobGetAvailableAsync(new JobGetAvailableParams { Queue = "paged", Max = 40, ClientId = "c" }, Ct);
+            await executor.JobSetStateIfRunningManyAsync(
+                [.. running.Where((_, i) => i % 2 == 0).Select((j, i) => new JobSetStateParams { Id = j.Id, State = JobState.Completed, FinalizedAt = finalizedAt[i % 3] })],
+                Ct);
+            await Task.Delay(10, Ct);
+        }
+
+        var all = (await client.JobListAsync(new JobListParams { Limit = 10_000 }, Ct)).Jobs;
+        Assert.Equal(300, all.Count);
+        Assert.Equal(all.Select(j => j.Id).Order(), all.Select(j => j.Id));
+        foreach (var orderBy in Enum.GetValues<JobListOrderBy>())
+        {
+            Func<JobRow, DateTimeOffset?> value = orderBy switch
+            {
+                JobListOrderBy.Id => _ => DateTimeOffset.MinValue,
+                JobListOrderBy.CreatedAt => j => j.CreatedAt,
+                JobListOrderBy.ScheduledAt => j => j.ScheduledAt,
+                JobListOrderBy.AttemptedAt => j => j.AttemptedAt,
+                _ => j => j.FinalizedAt,
+            };
+            var ascending = all.OrderBy(j => value(j) ?? DateTimeOffset.MaxValue).ThenBy(j => j.Id).Select(j => j.Id).ToList();
+            foreach (var descending in new[] { false, true })
+            {
+                var expected = descending ? Enumerable.Reverse(ascending).ToList() : ascending;
+                foreach (var limit in new[] { 1, 7, 64 })
+                {
+                    var seen = new List<long>();
+                    string? after = null;
+                    do
+                    {
+                        var page = await client.JobListAsync(new JobListParams { OrderBy = orderBy, Descending = descending, Limit = limit, After = after }, Ct);
+                        Assert.InRange(page.Jobs.Count, 1, limit);
+                        seen.AddRange(page.Jobs.Select(j => j.Id));
+                        after = page.NextCursor;
+                    }
+                    while (after is not null);
+
+                    Assert.True(expected.SequenceEqual(seen), $"{orderBy}, descending {descending}, by {limit}: the pages differ from the full sort.");
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Paging_by_id_while_jobs_are_inserted_and_deleted_returns_no_job_twice_and_every_job_that_stays()
+    {
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var (driver, _) = await MigratedAsync(ds);
+        var client = new KopiClient(driver);
+        var kept = (await client.InsertManyAsync([.. Enumerable.Range(0, 200).Select(i => new InsertRequest(new AdminArgs(i)))], cancellationToken: Ct))
+            .Select(r => r.Job.Id).ToHashSet();
+        await client.InsertManyAsync([.. Enumerable.Range(0, 200).Select(i => new InsertRequest(new AdminArgs(i), new InsertOptions { Queue = "doomed" }))], cancellationToken: Ct);
+
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var churn = Task.Run(
+            async () =>
+            {
+                var other = new KopiClient(driver);
+                while (!stop.IsCancellationRequested)
+                {
+                    await other.InsertAsync(new AdminArgs(1), new InsertOptions { Queue = "doomed" }, CancellationToken.None);
+                    await other.JobDeleteManyAsync(new JobDeleteManyParams { Queues = ["doomed"], Limit = 3 }, CancellationToken.None);
+                }
+            },
+            CancellationToken.None);
+
+        var seen = new List<long>();
+        string? after = null;
+        do
+        {
+            var page = await client.JobListAsync(new JobListParams { Limit = 10, After = after }, Ct);
+            seen.AddRange(page.Jobs.Select(j => j.Id));
+            after = page.NextCursor;
+        }
+        while (after is not null);
+
+        await stop.CancelAsync();
+        await churn;
+
+        Assert.Equal(seen.Order(), seen); // strictly ascending, so no job twice
+        Assert.Equal(seen.Count, seen.Distinct().Count());
+        Assert.Subset(seen.ToHashSet(), kept); // every job that was never deleted
+    }
+
+    [Fact]
     public async Task A_retried_discarded_job_runs_again_on_a_working_client_with_one_more_attempt()
     {
         db.SkipIfUnavailable();

@@ -4,6 +4,10 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ## [Unreleased]
 
+### Fixed
+
+- Concurrent bulk inserts of the same unique jobs in different orders no longer deadlock on PostgreSQL. Rows are inserted in unique-key order, while inserted jobs keep ids in input order. ([#145](https://github.com/sujanto-gaws/KopiQueue/pull/145))
+
 ### Changed
 
 - Clean-room (ADR-008): River is a reference only, and KopiQueue's tests and CI no longer run a River client or River's CLI. The River interop suite (`RiverInteropTests`, `tests/compat/go`), the tests that ran River's CLI against the main line, and the spike 0.8 Go harness are removed, and CI no longer installs Go. The migration tests still compare every version, up and down, with the catalog goldens recorded from River v0.51.2. The state-bitmask check now compares against a recorded truth table.

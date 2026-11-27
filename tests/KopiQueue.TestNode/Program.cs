@@ -4,14 +4,22 @@ using Npgsql;
 
 // A working KopiQueue client in its own process, so a test can kill it outright: no resignation, no clean stop.
 //
-//   KopiQueue.TestNode <schema> <client-id>
+//   KopiQueue.TestNode <schema> <client-id> [periodic]
 //
 // The connection string comes from KOPI_NODE_PG, so its password never shows on a command line. The node works the
 // "node" queue, prints "ready" once started, and stops cleanly when its standard input closes or reads "stop".
-// Jobs time out after 2 s and are taken for stuck after 3 s, so a test can watch the rescuer (task 3.4) at work.
-if (args is not [var schema, var clientId] || Environment.GetEnvironmentVariable("KOPI_NODE_PG") is not { Length: > 0 } connectionString)
+// Jobs time out after 2 s and are taken for stuck after 3 s, so a test can watch the rescuer (task 3.4) at work. With
+// "periodic", the node also has a periodic job every 4 s, inserted into the "node_ticks" queue, which no node works
+// (task 4.6): with a 3 s lease and a 500 ms elect interval, its catch-up window is 3.5 s, shorter than a tick.
+var (schema, clientId, periodic) = args switch
 {
-    await Console.Error.WriteLineAsync("usage: KOPI_NODE_PG=<connection string> KopiQueue.TestNode <schema> <client-id>");
+    [var s, var c] => (s, c, false),
+    [var s, var c, "periodic"] => (s, c, true),
+    _ => (null, null, false),
+};
+if (schema is null || clientId is null || Environment.GetEnvironmentVariable("KOPI_NODE_PG") is not { Length: > 0 } connectionString)
+{
+    await Console.Error.WriteLineAsync("usage: KOPI_NODE_PG=<connection string> KopiQueue.TestNode <schema> <client-id> [periodic]");
     return 2;
 }
 
@@ -26,6 +34,9 @@ var client = new KopiClient(new NpgsqlDriver(dataSource, new NpgsqlDriverOptions
     ElectInterval = TimeSpan.FromMilliseconds(500),
     LeaderTtl = TimeSpan.FromSeconds(3),
     FetchPollInterval = TimeSpan.FromMilliseconds(500),
+    PeriodicJobs = periodic
+        ? [PeriodicJob.Create(PeriodicSchedule.Every(TimeSpan.FromSeconds(4)), () => new TickArgs(), new InsertOptions { Queue = "node_ticks" })]
+        : null,
 });
 
 await client.StartAsync();
@@ -37,6 +48,10 @@ while (await Console.In.ReadLineAsync() is { } line && line != "stop")
 
 await client.StopAsync();
 return 0;
+
+/// <summary>The periodic job's args; the test declares the same kind.</summary>
+[JobKind("node_tick")]
+internal sealed record TickArgs : IJobArgs;
 
 /// <summary>The args the test inserts; the test declares the same kind.</summary>
 [JobKind("node_work")]
