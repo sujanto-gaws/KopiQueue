@@ -750,6 +750,53 @@ This spec is for the contributor who writes the rescuer (#36).
 - **Unknown kinds.** River's docs say an unknown kind "can be discarded by the leader". KopiQueue's rolling-deploy behaviour is the opposite: a job whose kind this client has no worker for is retried until a client that has the worker takes it (`NpgsqlClientIntegrationTests`, task 2.9). The spec follows KopiQueue: rescue it with the client's defaults, and don't discard it for being unknown. Confirm, or choose River's documented behaviour.
 - **The default threshold.** River's docs: "one hour, or JobTimeout plus one hour in case JobTimeout has been configured to be larger than one hour". KopiQueue's §7: `JobTimeout` + 1 h. With the default 1 min `JobTimeout`, that's 1 h 1 min instead of 1 h. Either keep KopiQueue's simpler rule, or match River's.
 
+#### Job cleaner: behaviour spec (plan task 3.5, FR-MNT-04)
+
+This spec is for the contributor who writes the job cleaner (the rest of #37; the queue cleaner is done, #121).
+- **Clean-room:** its author has read River's job queries (disclosed on #111–#113), so it states behaviour only. It contains no SQL, and nothing taken from River's source.
+- **Sources:** KopiQueue's requirements and design, and River's public docs: [maintenance services, cleaner](https://riverqueue.com/docs/maintenance-services).
+- **The implementer** must not read River's source (CONTRIBUTING.md) or run River (ADR-008). Where this spec is silent, decide from the sources above, or ask on #37.
+
+**What it does**
+1. **Where it runs:** on the leader only, as an `IMaintenanceService` named `job_cleaner` (task 3.2). Every 30 s (±10% jitter), and at once again after a full batch of 1,000. River's docs: the cleaner "deletes completed, cancelled, and permanently failed (discarded) jobs if their last attempt was beyond the retention period".
+2. **Which jobs:** only finalized jobs, in states `completed`, `cancelled` and `discarded`. A job in any other state is never deleted, whatever its age.
+   - A job is past retention when its `finalized_at` is older than its state's retention, judged by the **database's** clock.
+   - Why `finalized_at`: it is set exactly when a job reaches one of these states (the schema's check constraint, §4.1), it is the only time a job has if it was cancelled or discarded without ever running, and the `(state, finalized_at)` index of the pinned schema serves this lookup. For a job that ran, it is the end of its last attempt, which is what River's docs describe.
+3. **Retention per state:** `CompletedJobRetention`, `CancelledJobRetention` and `DiscardedJobRetention` (FR-MNT-04 defaults: 24 h, 24 h, 7 d). `null` keeps that state's jobs forever. River's docs describe the same three per-state periods, with "retain indefinitely" as an option. If all three are `null`, the service isn't registered (as the queue cleaner when `QueueRetention` is `null`).
+4. **One statement per batch** (FR-MNT-07):
+   - It deletes up to the batch size across the states that have a retention, oldest `finalized_at` first.
+   - A row another transaction holds is skipped and deleted by a later batch. It never waits for a lock.
+   - The statement re-checks the state and cutoff as it deletes, so a job that left its finalized state (for example, made available again by `JobRetryAsync`, FR-ERR-07) is not deleted.
+5. **What else changes:**
+   - **Unique slots:** deleting a job frees any unique slot it held. A `completed` job occupies its slot under the default unique states (§5.6), so after deletion a duplicate can be inserted again. Document this next to the unique options (M4, #42).
+   - **Not touched:** the job's queue row is left alone, and no notification is sent.
+6. **Result:** the service returns the number of jobs it deleted, so a full batch runs again at once.
+
+**Configuration**
+- The three options go on `KopiClientOptions` beside `QueueRetention`, and on `KopiQueueOptions`, mapped in `KopiQueueHostedService.ToClientOptions` (design §7).
+- Validation: each is `null` or positive. No minimum, since finalized jobs aren't refreshed the way queue rows are.
+
+**Driver operation** (experimental, `KQ0001`, KopiQueue's own name, for example `JobDeleteFinalizedAsync`)
+- Its parameters: the cutoff per state (absent for a state that's kept) and `Max`. It returns the deleted ids, or their count.
+- PostgreSQL SQL goes in `src/KopiQueue.Npgsql/Sql/`; SQL Server follows in task 5.6 (#52).
+- Template: `QueueCleaner`, `queue_delete_expired.sql` and its conformance case (#121).
+
+**Tests the task needs** (with 3.8, #40, "retention")
+- **Conformance:**
+  - each state is deleted only past its own cutoff;
+  - a state with no cutoff is kept;
+  - jobs in non-finalized states are never deleted, however old;
+  - at most `Max` per call, oldest first;
+  - a row another transaction holds is skipped and deleted later.
+- **Npgsql:**
+  - the leader deletes expired jobs as soon as it wins;
+  - followers and insert-only clients don't;
+  - all three retentions `null` keeps everything;
+  - a unique job's slot is free again once its completed job is deleted.
+- **Unit:** the service's interval and batch size; the options' defaults, validation and mapping.
+
+**Open questions:** none for the owner. The docs and KopiQueue's design settle the behaviour; only the operation's name and return shape are the implementer's choice.
+
 ### 5.8 Cancellation of a running job across clients
 
 1. `JobCancelAsync(id)` runs an `UPDATE` in one statement: if the job is not running, set it to `cancelled` and finalise it. If it is running, set `metadata.cancel_attempted_at = now()` only. Then `pg_notify('river_control', {action: cancel, job_id, queue})`.
