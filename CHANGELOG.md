@@ -6,7 +6,7 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ### Fixed
 
-- Concurrent bulk inserts of the same unique jobs in different orders no longer deadlock on PostgreSQL. Rows are inserted in unique-key order, while inserted jobs keep ids in input order. ([#46](https://github.com/sujanto-gaws/KopiQueue/issues/46))
+- Concurrent bulk inserts of the same unique jobs in different orders no longer deadlock on PostgreSQL. Rows are inserted in unique-key order, while inserted jobs keep ids in input order. ([#145](https://github.com/sujanto-gaws/KopiQueue/pull/145))
 
 ### Changed
 
