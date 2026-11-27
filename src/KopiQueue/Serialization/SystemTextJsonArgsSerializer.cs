@@ -19,6 +19,43 @@ public interface IJobArgsSerializer
     /// <param name="argsType">The args type registered for the job's kind.</param>
     /// <returns>The args.</returns>
     IJobArgs Deserialize(string json, Type argsType);
+
+    /// <summary>
+    /// The JSON names of the members of <paramref name="argsType"/> marked <see cref="UniqueKeyAttribute"/>, as this
+    /// serialiser writes them, for unique jobs by args (FR-UNQ-01). Empty when no member is marked.
+    /// </summary>
+    /// <param name="argsType">The args type, as passed to <see cref="Serialize"/>.</param>
+    /// <returns>The names; KopiQueue caches them per type.</returns>
+    /// <remarks>
+    /// The default implementation cannot know the JSON names, so it returns an empty set for a type that marks no
+    /// member and throws <see cref="NotSupportedException"/> for one that does. Override it to support
+    /// <see cref="UniqueKeyAttribute"/>.
+    /// </remarks>
+    /// <exception cref="NotSupportedException">The serialiser cannot map marked members to JSON names.</exception>
+    IReadOnlySet<string> GetUniqueMemberNames(Type argsType) => UniqueMemberNames.Unmapped(GetType(), argsType);
+}
+
+/// <summary>The default of <see cref="IJobArgsSerializer.GetUniqueMemberNames"/>.</summary>
+internal static class UniqueMemberNames
+{
+    public static readonly IReadOnlySet<string> None = new HashSet<string>(StringComparer.Ordinal);
+
+    [UnconditionalSuppressMessage("Trimming", "IL2070:UnrecognizedReflectionPattern",
+        Justification = "Finds marked members that are serialised; a member the trimmer removed is not serialised either.")]
+    public static IReadOnlySet<string> Unmapped(Type serializerType, Type argsType)
+    {
+        ArgumentNullException.ThrowIfNull(argsType);
+        const System.Reflection.BindingFlags members =
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var marked = argsType.GetProperties(members).Cast<System.Reflection.MemberInfo>()
+            .Concat(argsType.GetFields(members))
+            .Any(m => m.IsDefined(typeof(UniqueKeyAttribute), inherit: true));
+        return marked
+            ? throw new NotSupportedException(
+                $"{argsType.FullName} marks members with [UniqueKey], but the args serialiser {serializerType.FullName} does not map them to "
+                + "JSON names. Implement IJobArgsSerializer.GetUniqueMemberNames.")
+            : None;
+    }
 }
 
 /// <summary>
@@ -110,6 +147,33 @@ public sealed class SystemTextJsonArgsSerializer : IJobArgsSerializer
 
         return JsonSerializer.Deserialize(json, TypeInfo(argsType)) as IJobArgs
             ?? throw new JsonException($"The stored args are JSON null, which is not a valid {argsType.FullName}.");
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The names are the JSON names <c>System.Text.Json</c> writes, after the naming policy and
+    /// <see cref="JsonPropertyNameAttribute"/>. Works with a <see cref="JsonSerializerContext"/> too.
+    /// </remarks>
+    /// <exception cref="NotSupportedException">No JSON metadata is available for <paramref name="argsType"/>.</exception>
+    public IReadOnlySet<string> GetUniqueMemberNames(Type argsType)
+    {
+        ArgumentNullException.ThrowIfNull(argsType);
+        var info = TypeInfo(argsType);
+        if (info.Kind != System.Text.Json.Serialization.Metadata.JsonTypeInfoKind.Object)
+        {
+            return UniqueMemberNames.None;
+        }
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in info.Properties)
+        {
+            if (property.AttributeProvider?.IsDefined(typeof(UniqueKeyAttribute), inherit: true) == true)
+            {
+                names.Add(property.Name);
+            }
+        }
+
+        return names.Count == 0 ? UniqueMemberNames.None : names;
     }
 
     private System.Text.Json.Serialization.Metadata.JsonTypeInfo TypeInfo(Type argsType)

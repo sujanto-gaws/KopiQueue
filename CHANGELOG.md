@@ -10,6 +10,14 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ### Added
 
+- Unique jobs (FR-UNQ-01 to FR-UNQ-06):
+  - **Options:** `InsertOptions.Unique` takes a `UniqueOptions` (`ByArgs`, `ByPeriod`, `ByQueue`, `ByState`, `ExcludeKind`). Options with nothing set enforce nothing, as in River.
+  - **Marked members:** `[UniqueKey]` limits `ByArgs` to the marked members, under the JSON names the serialiser writes (`IJobArgsSerializer.GetUniqueMemberNames`).
+  - **Encoding:** `KopiClientOptions.UniqueArgsEncoding` chooses how arg values are written into the key.
+  - **Duplicates:** a duplicate insert returns the job that holds the key, with `UniqueSkippedAsDuplicate` set, and inserts nothing, singly and in `InsertManyAsync`, including duplicates within one batch.
+  - **Enforcement:** PostgreSQL enforces the key with River's partial unique index, so KopiQueue and River producers that share a database dedupe against each other.
+  - **Fast insert:** `InsertManyFastAsync` rejects unique jobs.
+  - ([#42](https://github.com/sujanto-gaws/KopiQueue/issues/42))
 - Unique key builder and unique-states bitmask (FR-UNQ-01, FR-UNQ-04, FR-UNQ-06), the groundwork for unique jobs (M4). It reproduces all 22 unique keys River v0.51.2 computed in spike 0.8. DQ-8 is decided: arg values are re-encoded as Go's `encoding/json` writes them, so the key doesn't depend on how the args were serialised, and .NET and Go producers of the same args share a key. Nothing public changes yet; unique inserts arrive with task 4.2. ([#41](https://github.com/sujanto-gaws/KopiQueue/issues/41), [#79](https://github.com/sujanto-gaws/KopiQueue/issues/79))
 - External job cancel (FR-ERR-06, FR-ADM-05, FR-DB-05): `IKopiClient.JobCancelAsync(id)`, and an overload that takes the caller's `DbTransaction`, so the cancel commits or rolls back with it. They return the job's row after the call and throw `KopiQueueNotFoundException` for an unknown id.
   - A job that has not started is cancelled at once and never runs.

@@ -258,7 +258,7 @@ public sealed class KopiClientTests
 
     private sealed record NoKindArgs : IJobArgs;
 
-    private sealed class RecordingDriver : IKopiDriver, IKopiExecutor
+    internal sealed class RecordingDriver : IKopiDriver, IKopiExecutor
     {
         public List<JobInsertParams> Inserts { get; } = [];
 

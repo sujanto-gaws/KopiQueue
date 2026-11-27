@@ -212,16 +212,6 @@ public abstract partial class DriverConformanceTests<TFixture>
     }
 
     [Fact]
-    public async Task Unique_jobs_are_rejected_until_they_are_supported()
-    {
-        var schema = await MigratedAsync();
-        var unique = new JobInsertParams { Kind = "k", ArgsJson = "{}", Queue = "q", State = JobState.Available, Priority = 1, MaxAttempts = 1, UniqueKey = [1] };
-
-        await Assert.ThrowsAsync<NotSupportedException>(() => schema.Driver.GetExecutor().JobInsertManyAsync([unique], Ct));
-        await Assert.ThrowsAsync<NotSupportedException>(() => schema.Driver.GetExecutor().JobInsertFastAsync([unique], Ct));
-    }
-
-    [Fact]
     public async Task A_foreign_or_completed_transaction_is_rejected()
     {
         var schema = await MigratedAsync();

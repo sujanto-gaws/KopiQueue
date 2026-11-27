@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json.Nodes;
@@ -347,6 +348,13 @@ public sealed class KopiClientOptions
     /// cleaner deletes it (FR-MNT-04). Default: 7 days; <c>null</c> keeps discarded jobs forever.
     /// </summary>
     public TimeSpan? DiscardedJobRetention { get; init; } = TimeSpan.FromDays(7);
+
+    /// <summary>
+    /// How the args of unique jobs are written into their unique keys (DQ-8). Default:
+    /// <see cref="UniqueArgsEncoding.GoCompatible"/>, which gives River's key for the same values however the args were
+    /// serialised.
+    /// </summary>
+    public UniqueArgsEncoding UniqueArgsEncoding { get; init; } = UniqueArgsEncoding.GoCompatible;
 }
 
 /// <summary>Settings of one queue (design §7).</summary>
@@ -412,6 +420,7 @@ public sealed partial class KopiClient : IKopiClient
     private readonly IJobArgsSerializer _serializer;
     private readonly TimeProvider _timeProvider;
     private readonly KopiClientOptions _options;
+    private readonly ConcurrentDictionary<Type, IReadOnlySet<string>> _uniqueMembers = new();
 
     /// <summary>Creates a client on <paramref name="driver"/>.</summary>
     /// <param name="driver">The database driver, for example <c>new NpgsqlDriver(dataSource)</c>.</param>
@@ -423,6 +432,12 @@ public sealed partial class KopiClient : IKopiClient
         _options = options ?? new KopiClientOptions();
         _serializer = _options.ArgsSerializer ?? SystemTextJsonArgsSerializer.Default;
         _timeProvider = _options.TimeProvider ?? TimeProvider.System;
+        if (!Enum.IsDefined(_options.UniqueArgsEncoding))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options), _options.UniqueArgsEncoding, $"{nameof(KopiClientOptions.UniqueArgsEncoding)} is not a defined value.");
+        }
+
         ClientId = _options.ClientId ?? DefaultClientId();
     }
 
@@ -479,6 +494,13 @@ public sealed partial class KopiClient : IKopiClient
         if (inserts.Length == 0)
         {
             return 0;
+        }
+
+        var unique = Array.FindIndex(inserts, i => i.UniqueKey is not null);
+        if (unique >= 0)
+        {
+            throw new NotSupportedException(
+                $"Job {unique} is unique, which the fast insert does not support: it cannot return or skip duplicates. Use InsertManyAsync.");
         }
 
         var count = await Executor(transaction).JobInsertFastAsync(inserts, cancellationToken).ConfigureAwait(false);
@@ -568,6 +590,10 @@ public sealed partial class KopiClient : IKopiClient
         await executor.JobCancelAsync(id, cancellationToken).ConfigureAwait(false)
         ?? throw new KopiQueueNotFoundException($"Job {id} does not exist.");
 
+    /// <summary>How unique keys are built for args of <paramref name="argsType"/>; their marked members are looked up once.</summary>
+    private JobValidation.UniqueContext Unique(Type argsType) =>
+        new(() => _uniqueMembers.GetOrAdd(argsType, _serializer.GetUniqueMemberNames), _options.UniqueArgsEncoding);
+
     private void WakeIfPooled(DbTransaction? transaction, IEnumerable<JobInsertParams> inserts)
     {
         if (transaction is null)
@@ -591,7 +617,7 @@ public sealed partial class KopiClient : IKopiClient
             var request = requests[i] ?? throw new ArgumentException($"Job {i} is null.", nameof(jobs));
             var type = request.Args.GetType();
             inserts[i] = JobValidation.ToInsertParams(
-                JobKindRegistry.GetKind(type), _serializer.Serialize(request.Args, type), request.Options, now, $"Job {i}: ", nameof(jobs));
+                JobKindRegistry.GetKind(type), _serializer.Serialize(request.Args, type), request.Options, now, $"Job {i}: ", nameof(jobs), Unique(type));
         }
 
         return inserts;
@@ -602,7 +628,8 @@ public sealed partial class KopiClient : IKopiClient
     {
         ArgumentNullException.ThrowIfNull(args);
         var kind = JobKindRegistry.GetKind<TArgs>();
-        var insert = JobValidation.ToInsertParams(kind, _serializer.Serialize(args, typeof(TArgs)), options, _timeProvider.GetUtcNow());
+        var insert = JobValidation.ToInsertParams(
+            kind, _serializer.Serialize(args, typeof(TArgs)), options, _timeProvider.GetUtcNow(), unique: Unique(typeof(TArgs)));
 
         var results = await executor.JobInsertManyAsync([insert], cancellationToken).ConfigureAwait(false);
         var result = results.Count == 1

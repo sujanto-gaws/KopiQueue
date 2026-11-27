@@ -74,6 +74,9 @@ public sealed class KopiQueueOptions
 
     /// <inheritdoc cref="KopiClientOptions.DiscardedJobRetention"/>
     public TimeSpan? DiscardedJobRetention { get; set; } = TimeSpan.FromDays(7);
+
+    /// <inheritdoc cref="KopiClientOptions.UniqueArgsEncoding"/>
+    public UniqueArgsEncoding UniqueArgsEncoding { get; set; } = UniqueArgsEncoding.GoCompatible;
 }
 
 /// <summary>Settings of one queue in <see cref="KopiQueueOptions.Queues"/>.</summary>

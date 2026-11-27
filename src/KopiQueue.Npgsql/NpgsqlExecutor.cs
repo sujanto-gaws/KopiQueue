@@ -114,7 +114,30 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
             return [];
         }
 
-        var count = jobs.Count;
+        // A unique key the batch repeats is inserted once: later jobs with it are duplicates of the first (FR-UNQ-05).
+        // Insert states (available, scheduled) are in every valid unique-states set, so the first always holds the slot.
+        var firstWithKey = new Dictionary<byte[], int>(UniqueKeyComparer.Instance);
+        var sent = new List<JobInsertParams>(jobs.Count);
+        var duplicateOf = new int[jobs.Count];
+        for (var i = 0; i < jobs.Count; i++)
+        {
+            var job = CheckSupported(jobs, i, allowUnique: true);
+            duplicateOf[i] = -1;
+            if (job.UniqueKey is { } key)
+            {
+                if (firstWithKey.TryGetValue(key, out var first))
+                {
+                    duplicateOf[i] = first;
+                    continue;
+                }
+
+                firstWithKey.Add(key, i);
+            }
+
+            sent.Add(job);
+        }
+
+        var count = sent.Count;
         var args = new string[count];
         var kinds = new string[count];
         var maxAttempts = new short[count];
@@ -129,7 +152,7 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
 
         for (var i = 0; i < count; i++)
         {
-            var job = CheckSupported(jobs, i);
+            var job = sent[i];
             args[i] = job.ArgsJson;
             kinds[i] = job.Kind;
             maxAttempts[i] = checked((short)job.MaxAttempts);
@@ -143,7 +166,7 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
             uniqueStates[i] = job.UniqueStates;
         }
 
-        var notifyQueues = NotifyQueues(jobs);
+        var notifyQueues = NotifyQueues(sent);
         NpgsqlBatchCommand? notify = null;
         if (notifyQueues.Length > 0)
         {
@@ -160,10 +183,43 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
                 Array(NpgsqlDbType.Bytea, uniqueKeys), Array(NpgsqlDbType.Integer, uniqueStates),
             ],
             notify,
+            reader => (
+                Result: new JobInsertResult(ReadJob(reader), UniqueSkippedAsDuplicate: reader.GetBoolean(16)),
+                Key: reader.IsDBNull(17) ? null : reader.GetFieldValue<byte[]>(17)),
             cancellationToken).ConfigureAwait(false);
+        if (rows.Count != count)
+        {
+            throw new InvalidOperationException($"The insert returned {rows.Count} rows for {count} jobs.");
+        }
 
-        // Ids ascend in input order (the statement inserts ordered by ordinal); RETURNING order is not guaranteed.
-        return [.. rows.OrderBy(r => r.Id).Select(r => new JobInsertResult(r, UniqueSkippedAsDuplicate: false))];
+        // RETURNING order is not guaranteed. A unique job's row is found by its key, which the batch sends once. The
+        // other jobs were all inserted, in input order, so their ids ascend with the input.
+        var byKey = new Dictionary<byte[], JobInsertResult>(UniqueKeyComparer.Instance);
+        foreach (var row in rows.Where(r => r.Key is not null))
+        {
+            byKey.Add(row.Key!, row.Result);
+        }
+
+        using var plain = rows.Where(r => r.Key is null).Select(r => r.Result).OrderBy(r => r.Job.Id).GetEnumerator();
+        var results = new JobInsertResult[jobs.Count];
+        for (var i = 0; i < jobs.Count; i++)
+        {
+            if (duplicateOf[i] >= 0)
+            {
+                results[i] = new JobInsertResult(results[duplicateOf[i]].Job, UniqueSkippedAsDuplicate: true);
+            }
+            else if (jobs[i].UniqueKey is { } key)
+            {
+                results[i] = byKey[key];
+            }
+            else
+            {
+                plain.MoveNext();
+                results[i] = plain.Current;
+            }
+        }
+
+        return results;
     }
 
     /// <summary>
@@ -175,7 +231,7 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
         ArgumentNullException.ThrowIfNull(jobs);
         for (var i = 0; i < jobs.Count; i++)
         {
-            CheckSupported(jobs, i);
+            CheckSupported(jobs, i, allowUnique: false);
         }
 
         if (jobs.Count == 0)
@@ -708,13 +764,21 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
     private static NpgsqlParameter Array<T>(NpgsqlDbType elementType, T[] values) =>
         new() { NpgsqlDbType = NpgsqlDbType.Array | elementType, Value = values };
 
-    /// <summary>Rejects what the driver cannot insert yet, before any SQL runs.</summary>
-    private static JobInsertParams CheckSupported(IReadOnlyList<JobInsertParams> jobs, int index)
+    /// <summary>Rejects what the insert cannot store, before any SQL runs.</summary>
+    /// <param name="jobs">The batch.</param>
+    /// <param name="index">The job to check.</param>
+    /// <param name="allowUnique">Whether the insert handles unique jobs; <c>COPY</c> cannot skip duplicates.</param>
+    private static JobInsertParams CheckSupported(IReadOnlyList<JobInsertParams> jobs, int index, bool allowUnique)
     {
         var job = jobs[index] ?? throw new ArgumentException($"Job {index} is null.", nameof(jobs));
-        if (job.UniqueKey is not null)
+        if (job.UniqueKey is not null && !allowUnique)
         {
-            throw new NotSupportedException("Unique jobs are not supported yet.");
+            throw new NotSupportedException($"Job {index} is unique, which the fast insert does not support: COPY cannot skip duplicates.");
+        }
+
+        if (job.UniqueKey is { Length: not 32 } || (job.UniqueKey is null) != (job.UniqueStates is null))
+        {
+            throw new ArgumentException($"Job {index} needs both a 32-byte unique key and unique states, or neither.", nameof(jobs));
         }
 
         foreach (var tag in job.Tags)
@@ -743,7 +807,12 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
     /// Runs <paramref name="sql"/>, which returns job rows, and then <paramref name="then"/> if given, as one batch. Without a
     /// caller transaction PostgreSQL runs a batch as one implicit transaction, so the two commit or fail together.
     /// </summary>
-    private async Task<List<JobRow>> QueryAsync(string sql, NpgsqlParameter[] parameters, NpgsqlBatchCommand? then, CancellationToken cancellationToken)
+    private Task<List<JobRow>> QueryAsync(string sql, NpgsqlParameter[] parameters, NpgsqlBatchCommand? then, CancellationToken cancellationToken) =>
+        QueryAsync(sql, parameters, then, ReadJob, cancellationToken);
+
+    /// <summary>As the overload above, reading each row with <paramref name="read"/>.</summary>
+    private async Task<List<T>> QueryAsync<T>(
+        string sql, NpgsqlParameter[] parameters, NpgsqlBatchCommand? then, Func<NpgsqlDataReader, T> read, CancellationToken cancellationToken)
     {
         var connection = transaction?.Connection;
         var ownConnection = connection is null;
@@ -768,10 +837,10 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
                 var reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
                 await using (reader.ConfigureAwait(false))
                 {
-                    var rows = new List<JobRow>();
+                    var rows = new List<T>();
                     while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                     {
-                        rows.Add(ReadJob(reader));
+                        rows.Add(read(reader));
                     }
 
                     // Drain the follow-up command so that its errors surface here.
@@ -855,4 +924,19 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
         "scheduled" => JobState.Scheduled,
         _ => throw new InvalidOperationException($"Unknown job state '{state}' in the database."),
     };
+}
+
+/// <summary>Compares unique keys by their bytes.</summary>
+internal sealed class UniqueKeyComparer : IEqualityComparer<byte[]>
+{
+    public static readonly UniqueKeyComparer Instance = new();
+
+    public bool Equals(byte[]? x, byte[]? y) => x.AsSpan().SequenceEqual(y);
+
+    public int GetHashCode(byte[] obj)
+    {
+        var hash = new HashCode();
+        hash.AddBytes(obj);
+        return hash.ToHashCode();
+    }
 }

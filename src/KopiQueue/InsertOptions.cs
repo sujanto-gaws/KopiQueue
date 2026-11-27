@@ -39,6 +39,16 @@ public sealed class InsertOptions
 
     /// <summary>Metadata stored with the job, as a JSON object. Default: empty.</summary>
     public JsonObject? Metadata { get; init; }
+
+    /// <summary>
+    /// Makes the job unique (FR-UNQ-01): if a job with the same unique key holds its slot, the insert returns that job
+    /// with <see cref="InsertResult.UniqueSkippedAsDuplicate"/> set, and inserts nothing. Default: <c>null</c>, not unique.
+    /// </summary>
+    /// <remarks>
+    /// Works with <see cref="IKopiClient.InsertAsync{TArgs}(TArgs, InsertOptions?, CancellationToken)"/> and
+    /// <see cref="IKopiClient.InsertManyAsync"/>, but not with <see cref="IKopiClient.InsertManyFastAsync"/>.
+    /// </remarks>
+    public UniqueOptions? Unique { get; init; }
 }
 
 /// <summary>The defaults for options that an insert leaves unset.</summary>

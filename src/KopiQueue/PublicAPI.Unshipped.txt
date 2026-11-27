@@ -599,3 +599,28 @@ KopiQueue.KopiClient.JobCancelAsync(long id, System.Data.Common.DbTransaction! t
 KopiQueue.KopiClient.JobCancelAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<KopiQueue.JobRow!>!
 [KQ0001]KopiQueue.Drivers.IKopiExecutor.JobCancelAsync(long id, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<KopiQueue.JobRow?>!
 [KQ0001]KopiQueue.Drivers.IKopiExecutor.JobListCancelAttemptedAsync(System.Collections.Generic.IReadOnlyList<long>! ids, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<long>!>!
+KopiQueue.InsertOptions.Unique.get -> KopiQueue.UniqueOptions?
+KopiQueue.InsertOptions.Unique.init -> void
+KopiQueue.KopiClientOptions.UniqueArgsEncoding.get -> KopiQueue.UniqueArgsEncoding
+KopiQueue.KopiClientOptions.UniqueArgsEncoding.init -> void
+KopiQueue.KopiQueueOptions.UniqueArgsEncoding.get -> KopiQueue.UniqueArgsEncoding
+KopiQueue.KopiQueueOptions.UniqueArgsEncoding.set -> void
+KopiQueue.Serialization.IJobArgsSerializer.GetUniqueMemberNames(System.Type! argsType) -> System.Collections.Generic.IReadOnlySet<string!>!
+KopiQueue.Serialization.SystemTextJsonArgsSerializer.GetUniqueMemberNames(System.Type! argsType) -> System.Collections.Generic.IReadOnlySet<string!>!
+KopiQueue.UniqueArgsEncoding
+KopiQueue.UniqueArgsEncoding.GoCompatible = 0 -> KopiQueue.UniqueArgsEncoding
+KopiQueue.UniqueArgsEncoding.Verbatim = 1 -> KopiQueue.UniqueArgsEncoding
+KopiQueue.UniqueKeyAttribute
+KopiQueue.UniqueKeyAttribute.UniqueKeyAttribute() -> void
+KopiQueue.UniqueOptions
+KopiQueue.UniqueOptions.ByArgs.get -> bool
+KopiQueue.UniqueOptions.ByArgs.init -> void
+KopiQueue.UniqueOptions.ByPeriod.get -> System.TimeSpan?
+KopiQueue.UniqueOptions.ByPeriod.init -> void
+KopiQueue.UniqueOptions.ByQueue.get -> bool
+KopiQueue.UniqueOptions.ByQueue.init -> void
+KopiQueue.UniqueOptions.ByState.get -> System.Collections.Generic.IReadOnlyList<KopiQueue.JobState>?
+KopiQueue.UniqueOptions.ByState.init -> void
+KopiQueue.UniqueOptions.ExcludeKind.get -> bool
+KopiQueue.UniqueOptions.ExcludeKind.init -> void
+KopiQueue.UniqueOptions.UniqueOptions() -> void
