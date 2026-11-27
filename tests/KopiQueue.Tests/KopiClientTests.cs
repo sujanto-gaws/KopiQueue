@@ -324,7 +324,7 @@ public sealed class KopiClientTests
                     SkipAsDuplicate))]);
         }
 
-        public Task<JobRow?> JobGetByIdAsync(long id, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<JobRow?> JobGetByIdAsync(long id, CancellationToken cancellationToken) => Task.FromResult<JobRow?>(null);
 
         public Task<IReadOnlyList<JobRow>> JobGetAvailableAsync(JobGetAvailableParams parameters, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
@@ -365,6 +365,35 @@ public sealed class KopiClientTests
             Task.FromResult<IReadOnlyList<long>>([]);
 
         public Task<JobRow?> JobCancelAsync(long id, CancellationToken cancellationToken) =>
+            Task.FromResult<JobRow?>(null);
+
+        /// <summary>The list queries received, in order.</summary>
+        public List<JobListQuery> Lists { get; } = [];
+
+        /// <summary>What a list returns, cut to the query's maximum.</summary>
+        public IReadOnlyList<JobRow> ListResult { get; set; } = [];
+
+        /// <summary>The delete-many queries received, in order.</summary>
+        public List<JobDeleteManyQuery> DeleteManys { get; } = [];
+
+        public Task<IReadOnlyList<JobRow>> JobListAsync(JobListQuery query, CancellationToken cancellationToken)
+        {
+            Calls++;
+            Lists.Add(query);
+            return Task.FromResult<IReadOnlyList<JobRow>>([.. ListResult.Take(query.Max)]);
+        }
+
+        public Task<JobDeleteResult?> JobDeleteAsync(long id, CancellationToken cancellationToken) =>
+            Task.FromResult<JobDeleteResult?>(null);
+
+        public Task<IReadOnlyList<JobRow>> JobDeleteManyAsync(JobDeleteManyQuery query, CancellationToken cancellationToken)
+        {
+            Calls++;
+            DeleteManys.Add(query);
+            return Task.FromResult<IReadOnlyList<JobRow>>([]);
+        }
+
+        public Task<JobRow?> JobRetryAsync(long id, CancellationToken cancellationToken) =>
             Task.FromResult<JobRow?>(null);
 
         public Task<IReadOnlyList<long>> JobListCancelAttemptedAsync(IReadOnlyList<long> ids, CancellationToken cancellationToken) =>

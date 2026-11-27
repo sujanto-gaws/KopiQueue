@@ -237,6 +237,18 @@ public sealed class KopiClientLifecycleTests
             return Task.FromResult(DeletedFinalized);
         }
 
+        public Task<IReadOnlyList<JobRow>> JobListAsync(JobListQuery query, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<JobDeleteResult?> JobDeleteAsync(long id, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<JobRow>> JobDeleteManyAsync(JobDeleteManyQuery query, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<JobRow?> JobRetryAsync(long id, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<JobRow?> JobCancelAsync(long id, CancellationToken cancellationToken) =>
             Task.FromResult<JobRow?>(null);
 

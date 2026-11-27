@@ -35,7 +35,7 @@ public sealed class QueueListParams
     public string? After { get; init; }
 }
 
-/// <summary>How <see cref="IKopiClient.QueuePauseAsync"/> and <see cref="IKopiClient.QueueResumeAsync"/> apply.</summary>
+/// <summary>How <see cref="IKopiClient.QueuePauseAsync(string, QueuePauseOptions?, CancellationToken)"/> and <see cref="IKopiClient.QueueResumeAsync(string, QueuePauseOptions?, CancellationToken)"/> apply.</summary>
 public sealed class QueuePauseOptions
 {
     /// <summary>
@@ -46,7 +46,7 @@ public sealed class QueuePauseOptions
     public bool LocalOnly { get; init; }
 }
 
-/// <summary>A queue named in a call does not exist, or, for a local pause or resume, this client does not work it.</summary>
+/// <summary>A job or queue named in a call does not exist, or, for a local pause or resume, this client does not work the queue.</summary>
 public class KopiQueueNotFoundException : Exception
 {
     /// <summary>Creates an exception with a default message.</summary>

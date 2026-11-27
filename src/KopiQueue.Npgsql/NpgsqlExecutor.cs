@@ -38,6 +38,10 @@ internal sealed class NpgsqlStatements
         JobDeleteFinalized = Load("job_delete_finalized.sql");
         JobCancel = Load("job_cancel.sql");
         JobListCancelAttempted = Load("job_list_cancel_attempted.sql");
+        _jobList = JobListVariants(Load("job_list.sql"));
+        JobDelete = Load("job_delete.sql");
+        JobDeleteMany = Load("job_delete_many.sql");
+        JobRetry = Load("job_retry.sql");
         LeaderAttemptElect = Load("leader_attempt_elect.sql");
         LeaderAttemptReelect = Load("leader_attempt_reelect.sql");
         LeaderResign = Load("leader_resign.sql");
@@ -52,6 +56,8 @@ internal sealed class NpgsqlStatements
 
     /// <summary>The configured schema, unquoted, or <c>null</c> for the connection's current schema.</summary>
     public string? Schema { get; }
+
+    private readonly string[] _jobList;
 
     public string JobInsertMany { get; }
 
@@ -75,6 +81,12 @@ internal sealed class NpgsqlStatements
 
     public string JobListCancelAttempted { get; }
 
+    public string JobDelete { get; }
+
+    public string JobDeleteMany { get; }
+
+    public string JobRetry { get; }
+
     public string LeaderAttemptElect { get; }
 
     public string LeaderAttemptReelect { get; }
@@ -94,6 +106,43 @@ internal sealed class NpgsqlStatements
     public string QueueResume { get; }
 
     public string QueueUpdate { get; }
+
+    /// <summary>The job list statement for a sort and direction.</summary>
+    public string JobList(JobListOrderBy orderBy, bool descending) => _jobList[((int)orderBy * 2) + (descending ? 1 : 0)];
+
+    /// <summary>
+    /// Renders <c>job_list.sql</c> for every sort and direction: by ID alone, or by a time and then ID, with a <c>null</c>
+    /// time as <c>infinity</c> so that it sorts last ascending and first descending, as <see cref="IKopiExecutor.JobListAsync"/> says.
+    /// </summary>
+    private static string[] JobListVariants(string sql)
+    {
+        var orders = Enum.GetValues<JobListOrderBy>();
+        var variants = new string[orders.Length * 2];
+        foreach (var orderBy in orders)
+        {
+            var column = orderBy switch
+            {
+                JobListOrderBy.Id => null,
+                JobListOrderBy.CreatedAt => "created_at",
+                JobListOrderBy.ScheduledAt => "scheduled_at",
+                JobListOrderBy.AttemptedAt => "attempted_at",
+                JobListOrderBy.FinalizedAt => "finalized_at",
+                _ => throw new InvalidOperationException($"No SQL for job list order {orderBy}."),
+            };
+            foreach (var descending in new[] { false, true })
+            {
+                var (op, direction) = descending ? ("<", "DESC") : (">", "ASC");
+                var (after, order) = column is null
+                    ? ($"j.id {op} $7::bigint", $"j.id {direction}")
+                    : ($"(coalesce(j.{column}, 'infinity'::timestamptz), j.id) {op} (coalesce($8::timestamptz, 'infinity'::timestamptz), $7::bigint)",
+                       $"coalesce(j.{column}, 'infinity'::timestamptz) {direction}, j.id {direction}");
+                variants[((int)orderBy * 2) + (descending ? 1 : 0)] = sql.Replace("@@after@@", after, StringComparison.Ordinal)
+                    .Replace("@@order@@", order, StringComparison.Ordinal);
+            }
+        }
+
+        return variants;
+    }
 
     /// <summary>The binary <c>COPY</c> command of the fast insert path. Its columns match <see cref="NpgsqlExecutor.JobInsertFastAsync"/>.</summary>
     public string JobInsertFast { get; }
@@ -483,6 +532,82 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
             cancellationToken).ConfigureAwait(false);
         return rows.Count == 0 ? null : rows[0];
     }
+
+    public async Task<IReadOnlyList<JobRow>> JobListAsync(JobListQuery query, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(query.Filter, nameof(query));
+        ArgumentOutOfRangeException.ThrowIfLessThan(query.Max, 1, nameof(query));
+        if (!Enum.IsDefined(query.OrderBy))
+        {
+            throw new ArgumentOutOfRangeException(nameof(query), query.OrderBy, "Unknown job list order.");
+        }
+
+        return await RowsAsync(
+            statements.JobList(query.OrderBy, query.Descending),
+            [
+                .. FilterParameters(query.Filter),
+                new() { NpgsqlDbType = NpgsqlDbType.Bigint, Value = (object?)query.After?.Id ?? DBNull.Value },
+                new() { NpgsqlDbType = NpgsqlDbType.TimestampTz, Value = (object?)query.After?.Value ?? DBNull.Value },
+                new() { NpgsqlDbType = NpgsqlDbType.Integer, Value = query.Max },
+            ],
+            ReadJob,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<JobDeleteResult?> JobDeleteAsync(long id, CancellationToken cancellationToken)
+    {
+        var rows = await RowsAsync(
+            statements.JobDelete,
+            [new() { NpgsqlDbType = NpgsqlDbType.Bigint, Value = id }],
+            reader => new JobDeleteResult(ReadJob(reader), Deleted: reader.GetBoolean(16)),
+            cancellationToken).ConfigureAwait(false);
+        return rows.Count == 0 ? null : rows[0];
+    }
+
+    public async Task<IReadOnlyList<JobRow>> JobDeleteManyAsync(JobDeleteManyQuery query, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(query.Filter, nameof(query));
+        ArgumentOutOfRangeException.ThrowIfLessThan(query.Max, 1, nameof(query));
+        return await RowsAsync(
+            statements.JobDeleteMany,
+            [.. FilterParameters(query.Filter), new() { NpgsqlDbType = NpgsqlDbType.Integer, Value = query.Max }],
+            ReadJob,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<JobRow?> JobRetryAsync(long id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var rows = await RowsAsync(
+                statements.JobRetry,
+                [
+                    new() { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)statements.Schema ?? DBNull.Value },
+                    new() { NpgsqlDbType = NpgsqlDbType.Bigint, Value = id },
+                ],
+                ReadJob,
+                cancellationToken).ConfigureAwait(false);
+            return rows.Count == 0 ? null : rows[0];
+        }
+        catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            throw new InvalidOperationException(
+                $"Job {id} cannot be made available: it is unique, and another job holds its unique key in a state its uniqueness covers.", e);
+        }
+    }
+
+    /// <summary>The filters of <c>job_list.sql</c> and <c>job_delete_many.sql</c>, <c>$1</c> to <c>$6</c>.</summary>
+    private static NpgsqlParameter[] FilterParameters(JobFilter filter) =>
+    [
+        new() { NpgsqlDbType = NpgsqlDbType.Array | NpgsqlDbType.Bigint, Value = (object?)filter.Ids?.ToArray() ?? DBNull.Value },
+        new() { NpgsqlDbType = NpgsqlDbType.Array | NpgsqlDbType.Text, Value = (object?)filter.Kinds?.ToArray() ?? DBNull.Value },
+        new() { NpgsqlDbType = NpgsqlDbType.Array | NpgsqlDbType.Text, Value = (object?)filter.Queues?.ToArray() ?? DBNull.Value },
+        new() { NpgsqlDbType = NpgsqlDbType.Array | NpgsqlDbType.Text, Value = (object?)filter.States?.Select(ToDatabase).ToArray() ?? DBNull.Value },
+        new() { NpgsqlDbType = NpgsqlDbType.Array | NpgsqlDbType.Smallint, Value = (object?)filter.Priorities?.Select(p => checked((short)p)).ToArray() ?? DBNull.Value },
+        new() { NpgsqlDbType = NpgsqlDbType.Jsonb, Value = (object?)filter.MetadataContains?.ToJsonString() ?? DBNull.Value },
+    ];
 
     public async Task<IReadOnlyList<long>> JobListCancelAttemptedAsync(IReadOnlyList<long> ids, CancellationToken cancellationToken)
     {
