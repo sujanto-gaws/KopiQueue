@@ -1,6 +1,6 @@
 # KopiQueue — Technical Design
 
-**Version:** 0.4 (draft) · **Date:** 2026-11-26 · **Related:** [Requirements](01-requirements.md), [Plan](03-plan.md)
+**Version:** 0.5 (draft) · **Date:** 2026-11-27 · **Related:** [Requirements](01-requirements.md), [Plan](03-plan.md)
 
 ---
 
