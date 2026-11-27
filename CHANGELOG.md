@@ -4,13 +4,9 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ## [Unreleased]
 
-### Fixed
+## [0.4.0-beta.1] - 2026-11-27
 
-- Concurrent bulk inserts of the same unique jobs in different orders no longer deadlock on PostgreSQL. Rows are inserted in unique-key order, while inserted jobs keep ids in input order. ([#145](https://github.com/sujanto-gaws/KopiQueue/pull/145))
-
-### Changed
-
-- Clean-room (ADR-008): River is a reference only, and KopiQueue's tests and CI no longer run a River client or River's CLI. The River interop suite (`RiverInteropTests`, `tests/compat/go`), the tests that ran River's CLI against the main line, and the spike 0.8 Go harness are removed, and CI no longer installs Go. The migration tests still compare every version, up and down, with the catalog goldens recorded from River v0.51.2. The state-bitmask check now compares against a recorded truth table.
+Milestones M2 to M4: execution, leadership and maintenance, unique and periodic jobs, and the admin API. `0.2.0-alpha.1` and `0.3.0-alpha.1` were not released ([#82](https://github.com/sujanto-gaws/KopiQueue/issues/82), [#83](https://github.com/sujanto-gaws/KopiQueue/issues/83)), so this release lists their changes too. Upgrading from 0.1.0-alpha.1: finalised jobs are now deleted after a retention, see the job cleaner below.
 
 ### Added
 
@@ -65,7 +61,12 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ### Changed
 
+- Clean-room (ADR-008): River is a reference only, and KopiQueue's tests and CI no longer run a River client or River's CLI. The River interop suite (`RiverInteropTests`, `tests/compat/go`), the tests that ran River's CLI against the main line, and the spike 0.8 Go harness are removed, and CI no longer installs Go. The migration tests still compare every version, up and down, with the catalog goldens recorded from River v0.51.2. The state-bitmask check now compares against a recorded truth table.
 - Requirements 0.5: a worker no longer sets a `MaxAttempts` default (FR-DEF-04); per-type defaults come from the args type (FR-DEF-05). DQ-1 is closed: `WorkAsync` returns `Task`. ([#22](https://github.com/sujanto-gaws/KopiQueue/issues/22), [#73](https://github.com/sujanto-gaws/KopiQueue/issues/73))
+
+### Fixed
+
+- Concurrent bulk inserts of the same unique jobs in different orders no longer deadlock on PostgreSQL. Rows are inserted in unique-key order, while inserted jobs keep ids in input order. ([#145](https://github.com/sujanto-gaws/KopiQueue/pull/145))
 
 ## [0.1.0-alpha.1] - 2026-11-26
 
@@ -85,5 +86,6 @@ First preview (milestone M1, schema and insert): migrate a PostgreSQL database t
 - PostgreSQL: the River-compatible migration line `main`, versions 1–8, matching River v0.51.2. Every version leaves the same catalog as River's CLI, up and down, so KopiQueue and River can each continue a schema the other migrated. Works with a custom schema and table prefix. ([#12](https://github.com/sujanto-gaws/KopiQueue/issues/12))
 - Migration engine: embedded, versioned up/down SQL per migration line, a lock so concurrent runners apply each version once, and one transaction per migration together with its version row. Failures raise `KopiQueueMigrationException`. ([#11](https://github.com/sujanto-gaws/KopiQueue/issues/11))
 
-[Unreleased]: https://github.com/sujanto-gaws/KopiQueue/compare/v0.1.0-alpha.1...HEAD
+[Unreleased]: https://github.com/sujanto-gaws/KopiQueue/compare/v0.4.0-beta.1...HEAD
+[0.4.0-beta.1]: https://github.com/sujanto-gaws/KopiQueue/compare/v0.1.0-alpha.1...v0.4.0-beta.1
 [0.1.0-alpha.1]: https://github.com/sujanto-gaws/KopiQueue/releases/tag/v0.1.0-alpha.1
