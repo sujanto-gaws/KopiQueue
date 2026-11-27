@@ -356,6 +356,9 @@ public sealed class QueueMaintainerTests
         public Task<IReadOnlyList<JobRow>> JobRescueManyAsync(IReadOnlyList<JobRescueParams> jobs, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<JobRow>>([]);
 
+        public Task<IReadOnlyList<long>> JobDeleteFinalizedAsync(JobDeleteFinalizedParams parameters, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<long>>([]);
+
         private QueueRow Row(string name) => new()
         {
             Name = name,

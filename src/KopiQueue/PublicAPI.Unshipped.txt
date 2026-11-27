@@ -570,3 +570,26 @@ KopiQueue.KopiQueueOptions.RescueStuckJobsAfter.set -> void
 [KQ0001]override KopiQueue.Drivers.JobListStuckResult.ToString() -> string!
 [KQ0001]static KopiQueue.Drivers.JobListStuckResult.operator !=(KopiQueue.Drivers.JobListStuckResult? left, KopiQueue.Drivers.JobListStuckResult? right) -> bool
 [KQ0001]static KopiQueue.Drivers.JobListStuckResult.operator ==(KopiQueue.Drivers.JobListStuckResult? left, KopiQueue.Drivers.JobListStuckResult? right) -> bool
+KopiQueue.KopiClientOptions.CancelledJobRetention.get -> System.TimeSpan?
+KopiQueue.KopiClientOptions.CancelledJobRetention.init -> void
+KopiQueue.KopiClientOptions.CompletedJobRetention.get -> System.TimeSpan?
+KopiQueue.KopiClientOptions.CompletedJobRetention.init -> void
+KopiQueue.KopiClientOptions.DiscardedJobRetention.get -> System.TimeSpan?
+KopiQueue.KopiClientOptions.DiscardedJobRetention.init -> void
+KopiQueue.KopiQueueOptions.CancelledJobRetention.get -> System.TimeSpan?
+KopiQueue.KopiQueueOptions.CancelledJobRetention.set -> void
+KopiQueue.KopiQueueOptions.CompletedJobRetention.get -> System.TimeSpan?
+KopiQueue.KopiQueueOptions.CompletedJobRetention.set -> void
+KopiQueue.KopiQueueOptions.DiscardedJobRetention.get -> System.TimeSpan?
+KopiQueue.KopiQueueOptions.DiscardedJobRetention.set -> void
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobDeleteFinalizedAsync(KopiQueue.Drivers.JobDeleteFinalizedParams! parameters, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<long>!>!
+[KQ0001]KopiQueue.Drivers.JobDeleteFinalizedParams
+[KQ0001]KopiQueue.Drivers.JobDeleteFinalizedParams.CancelledRetention.get -> System.TimeSpan?
+[KQ0001]KopiQueue.Drivers.JobDeleteFinalizedParams.CancelledRetention.init -> void
+[KQ0001]KopiQueue.Drivers.JobDeleteFinalizedParams.CompletedRetention.get -> System.TimeSpan?
+[KQ0001]KopiQueue.Drivers.JobDeleteFinalizedParams.CompletedRetention.init -> void
+[KQ0001]KopiQueue.Drivers.JobDeleteFinalizedParams.DiscardedRetention.get -> System.TimeSpan?
+[KQ0001]KopiQueue.Drivers.JobDeleteFinalizedParams.DiscardedRetention.init -> void
+[KQ0001]KopiQueue.Drivers.JobDeleteFinalizedParams.JobDeleteFinalizedParams() -> void
+[KQ0001]KopiQueue.Drivers.JobDeleteFinalizedParams.Max.get -> int
+[KQ0001]KopiQueue.Drivers.JobDeleteFinalizedParams.Max.init -> void

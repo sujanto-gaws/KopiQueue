@@ -225,6 +225,18 @@ public sealed class KopiClientLifecycleTests
         public Task<IReadOnlyList<JobRow>> JobRescueManyAsync(IReadOnlyList<JobRescueParams> jobs, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<JobRow>>([]);
 
+        /// <summary>The job cleaner's last call, for <c>JobCleanerTests</c>.</summary>
+        public JobDeleteFinalizedParams? LastDeleteFinalized { get; private set; }
+
+        /// <summary>The IDs the job cleaner's call "deletes". Default: none.</summary>
+        public IReadOnlyList<long> DeletedFinalized { get; init; } = [];
+
+        public Task<IReadOnlyList<long>> JobDeleteFinalizedAsync(JobDeleteFinalizedParams parameters, CancellationToken cancellationToken)
+        {
+            LastDeleteFinalized = parameters;
+            return Task.FromResult(DeletedFinalized);
+        }
+
         public Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<JobRow>>([]);
 
