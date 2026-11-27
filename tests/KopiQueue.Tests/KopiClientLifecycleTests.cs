@@ -87,6 +87,8 @@ public sealed class KopiClientLifecycleTests
         { "a lease shorter than two intervals", new KopiClientOptions { Queues = TwoQueues(), Workers = Workers(), LeaderTtl = TimeSpan.FromSeconds(9) } },
         { "a zero queue retention", new KopiClientOptions { Queues = TwoQueues(), Workers = Workers(), QueueRetention = TimeSpan.Zero } },
         { "a queue retention under 5 minutes", new KopiClientOptions { Queues = TwoQueues(), Workers = Workers(), QueueRetention = TimeSpan.FromMinutes(4) } },
+        { "a zero scheduler interval", new KopiClientOptions { Queues = TwoQueues(), Workers = Workers(), SchedulerInterval = TimeSpan.Zero } },
+        { "a negative scheduler interval", new KopiClientOptions { Queues = TwoQueues(), Workers = Workers(), SchedulerInterval = TimeSpan.FromSeconds(-1) } },
         { "ListenNotify on a driver that cannot listen", new KopiClientOptions { Queues = TwoQueues(), Workers = Workers(), NotificationMode = NotificationMode.ListenNotify } },
     };
 
@@ -207,6 +209,15 @@ public sealed class KopiClientLifecycleTests
 
         public Task<IReadOnlyList<string>> QueueDeleteExpiredAsync(QueueDeleteExpiredParams parameters, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<string>>([]);
+
+        /// <summary>The parameters of the last scheduler batch.</summary>
+        public JobScheduleParams? LastSchedule { get; private set; }
+
+        public Task<IReadOnlyList<JobScheduleResult>> JobScheduleAsync(JobScheduleParams parameters, CancellationToken cancellationToken)
+        {
+            LastSchedule = parameters;
+            return Task.FromResult<IReadOnlyList<JobScheduleResult>>([new JobScheduleResult(1, "default", JobState.Available)]);
+        }
 
         public Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<JobRow>>([]);

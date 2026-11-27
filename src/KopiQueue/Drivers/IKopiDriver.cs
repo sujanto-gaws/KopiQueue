@@ -100,6 +100,29 @@ public interface IKopiExecutor
     Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken);
 
     /// <summary>
+    /// The scheduler's batch (design §5.7, FR-SCH-01, FR-MNT-02), in one statement: makes up to
+    /// <see cref="JobScheduleParams.Max"/> <see cref="JobState.Scheduled"/> and <see cref="JobState.Retryable"/> jobs that
+    /// are due by the database's clock <see cref="JobState.Available"/>, most overdue first. Nothing else about them
+    /// changes. Jobs locked by another transaction are skipped; the statement never waits for them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A unique job (design §5.6) whose unique states leave out <see cref="JobState.Retryable"/> may find its slot taken by
+    /// a duplicate inserted while it waited, or by another due duplicate in the same batch: the oldest due one keeps the
+    /// slot if it is free. Each job that would conflict is <see cref="JobState.Discarded"/> instead, finalised at the
+    /// database's now with <see cref="JobScheduleParams.UniqueConflictError"/> appended to its errors, and the rest of the
+    /// batch still goes ahead. A conflicting job whose unique states include <see cref="JobState.Discarded"/> cannot be
+    /// discarded without conflicting either, so it stays <see cref="JobState.Retryable"/> until the slot is free.
+    /// </para>
+    /// <para>
+    /// On a driver with <see cref="DriverCapabilities.ListenNotify"/>, each queue that got an available job is notified once,
+    /// in the same transaction, so the notification is delivered only on commit (design §4.3).
+    /// </para>
+    /// </remarks>
+    /// <returns>The jobs the batch changed, in ID order: promoted and discarded.</returns>
+    Task<IReadOnlyList<JobScheduleResult>> JobScheduleAsync(JobScheduleParams parameters, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Tries to win the leader lease (design §5.5, FR-MNT-01): takes it when nobody holds it, when its holder's lease has
     /// expired by the database's clock, or when <see cref="LeaderElectParams.LeaderId"/> already holds it, in which case
     /// the lease is extended and its election time kept. A won lease expires <see cref="LeaderElectParams.Ttl"/> after the
@@ -245,6 +268,30 @@ public sealed class JobGetAvailableParams
     /// <summary>How many entries <see cref="JobRow.AttemptedBy"/> keeps, newest last. Default: 100, as River.</summary>
     public int MaxAttemptedBy { get; init; } = 100;
 }
+
+/// <summary>What one batch of <see cref="IKopiExecutor.JobScheduleAsync"/> does.</summary>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed class JobScheduleParams
+{
+    /// <summary>The message KopiQueue records on a job discarded for a unique conflict.</summary>
+    public const string DefaultUniqueConflictError =
+        "Discarded by the scheduler: another job with the same unique key holds its unique slot, so this job cannot be retried.";
+
+    /// <summary>The most jobs to change: at least 1.</summary>
+    public required int Max { get; init; }
+
+    /// <summary>The message of the error appended to a job discarded for a unique conflict. Default: <see cref="DefaultUniqueConflictError"/>.</summary>
+    public string UniqueConflictError { get; init; } = DefaultUniqueConflictError;
+}
+
+/// <summary>A job that <see cref="IKopiExecutor.JobScheduleAsync"/> changed.</summary>
+/// <param name="Id">The job.</param>
+/// <param name="Queue">Its queue.</param>
+/// <param name="State">Its new state: <see cref="JobState.Available"/>, or <see cref="JobState.Discarded"/> after a unique conflict.</param>
+/// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>
+[Experimental(DiagnosticIds.ExperimentalDriver)]
+public sealed record JobScheduleResult(long Id, string Queue, JobState State);
 
 /// <summary>A client asking for the leader lease (<see cref="IKopiExecutor.LeaderAttemptElectAsync"/>, <see cref="IKopiExecutor.LeaderAttemptReelectAsync"/>).</summary>
 /// <remarks>Experimental (<c>KQ0001</c>): see <see cref="IKopiDriver"/>.</remarks>

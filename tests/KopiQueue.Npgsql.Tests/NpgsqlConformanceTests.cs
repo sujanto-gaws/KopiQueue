@@ -49,6 +49,16 @@ public sealed class NpgsqlConformanceFixture : DriverConformanceFixture
                 cmd.Parameters.Add(new NpgsqlParameter { Value = kind });
                 return (long)(await cmd.ExecuteScalarAsync(ct))!;
             },
-            dataSource.DisposeAsync);
+            dataSource.DisposeAsync,
+            async (id, key, states, ct) =>
+            {
+                // unique_states is bit(8); an integer cast keeps its low 8 bits, so available = 1 and scheduled = 128.
+                await using var cmd = dataSource.CreateCommand(
+                    $"UPDATE {name}.river_job SET unique_key = $2, unique_states = $3::integer::bit(8) WHERE id = $1");
+                cmd.Parameters.Add(new NpgsqlParameter { Value = id });
+                cmd.Parameters.Add(new NpgsqlParameter { Value = key });
+                cmd.Parameters.Add(new NpgsqlParameter { Value = (int)states });
+                await cmd.ExecuteNonQueryAsync(ct);
+            });
     }
 }

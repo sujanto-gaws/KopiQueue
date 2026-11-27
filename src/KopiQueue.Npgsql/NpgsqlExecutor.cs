@@ -32,6 +32,7 @@ internal sealed class NpgsqlStatements
         JobInsertFast = Load("job_insert_fast.sql").Trim();
         JobGetAvailable = Load("job_get_available.sql");
         JobSetStateIfRunningMany = Load("job_set_state_if_running_many.sql");
+        JobSchedule = Load("job_schedule.sql");
         LeaderAttemptElect = Load("leader_attempt_elect.sql");
         LeaderAttemptReelect = Load("leader_attempt_reelect.sql");
         LeaderResign = Load("leader_resign.sql");
@@ -56,6 +57,8 @@ internal sealed class NpgsqlStatements
     public string JobGetAvailable { get; }
 
     public string JobSetStateIfRunningMany { get; }
+
+    public string JobSchedule { get; }
 
     public string LeaderAttemptElect { get; }
 
@@ -317,6 +320,23 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
                 Array(NpgsqlDbType.Text, states),
             ],
             then: null,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<JobScheduleResult>> JobScheduleAsync(JobScheduleParams parameters, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentOutOfRangeException.ThrowIfLessThan(parameters.Max, 1, nameof(parameters));
+        ArgumentException.ThrowIfNullOrEmpty(parameters.UniqueConflictError, nameof(parameters));
+
+        return await RowsAsync(
+            statements.JobSchedule,
+            [
+                new() { NpgsqlDbType = NpgsqlDbType.Integer, Value = parameters.Max },
+                new() { NpgsqlDbType = NpgsqlDbType.Text, Value = parameters.UniqueConflictError },
+                new() { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)statements.Schema ?? DBNull.Value },
+            ],
+            reader => new JobScheduleResult(reader.GetInt64(0), reader.GetString(1), FromDatabase(reader.GetString(2))),
             cancellationToken).ConfigureAwait(false);
     }
 

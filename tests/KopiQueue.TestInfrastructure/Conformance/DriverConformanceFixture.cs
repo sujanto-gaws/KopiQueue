@@ -83,11 +83,16 @@ public abstract class DriverConformanceFixture : IAsyncLifetime
 /// <param name="beginTransactionAsync">Opens a new connection and begins a caller transaction on it.</param>
 /// <param name="countJobsAsync">Counts committed jobs of a kind, outside any transaction.</param>
 /// <param name="dispose">Releases the driver's resources, such as its data source.</param>
+/// <param name="setUniqueAsync">
+/// Gives a committed job a unique key and unique states (a bitmask, design §5.6), which the executor's insert cannot do
+/// until unique inserts land (plan task 4.2). <c>null</c> when the driver has no such helper; cases that need it then skip.
+/// </param>
 public sealed class ConformanceSchema(
     IKopiDriver driver,
     Func<CancellationToken, Task<CallerTransaction>> beginTransactionAsync,
     Func<string, CancellationToken, Task<long>> countJobsAsync,
-    Func<ValueTask> dispose) : IAsyncDisposable
+    Func<ValueTask> dispose,
+    Func<long, byte[], byte, CancellationToken, Task>? setUniqueAsync = null) : IAsyncDisposable
 {
     /// <summary>The driver under test.</summary>
     public IKopiDriver Driver { get; } = driver;
@@ -97,6 +102,13 @@ public sealed class ConformanceSchema(
 
     /// <summary>Counts committed jobs of <paramref name="kind"/>.</summary>
     public Task<long> CountJobsAsync(string kind, CancellationToken cancellationToken) => countJobsAsync(kind, cancellationToken);
+
+    /// <summary>Whether <see cref="SetUniqueAsync"/> is available.</summary>
+    public bool CanSetUnique => setUniqueAsync is not null;
+
+    /// <summary>Sets the unique key and the unique states of committed job <paramref name="id"/>.</summary>
+    public Task SetUniqueAsync(long id, byte[] key, byte states, CancellationToken cancellationToken) =>
+        (setUniqueAsync ?? throw new NotSupportedException("The driver's fixture cannot set unique keys."))(id, key, states, cancellationToken);
 
     /// <inheritdoc />
     public ValueTask DisposeAsync() => dispose();

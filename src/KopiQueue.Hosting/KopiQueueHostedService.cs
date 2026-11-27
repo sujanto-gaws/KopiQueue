@@ -63,5 +63,6 @@ internal static class KopiQueueClientFactory
         ElectInterval = options.ElectInterval,
         LeaderTtl = options.LeaderTtl,
         QueueRetention = options.QueueRetention,
+        SchedulerInterval = options.SchedulerInterval,
     };
 }

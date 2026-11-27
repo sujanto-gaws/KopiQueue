@@ -504,3 +504,31 @@ KopiQueue.QueueRow.UpdatedAt.init -> void
 [KQ0001]KopiQueue.Drivers.QueueUpdateParams.Name.get -> string!
 [KQ0001]KopiQueue.Drivers.QueueUpdateParams.Name.init -> void
 [KQ0001]KopiQueue.Drivers.QueueUpdateParams.QueueUpdateParams() -> void
+KopiQueue.KopiClientOptions.SchedulerInterval.get -> System.TimeSpan
+KopiQueue.KopiClientOptions.SchedulerInterval.init -> void
+KopiQueue.KopiQueueOptions.SchedulerInterval.get -> System.TimeSpan
+KopiQueue.KopiQueueOptions.SchedulerInterval.set -> void
+[KQ0001]KopiQueue.Drivers.IKopiExecutor.JobScheduleAsync(KopiQueue.Drivers.JobScheduleParams! parameters, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<KopiQueue.Drivers.JobScheduleResult!>!>!
+[KQ0001]KopiQueue.Drivers.JobScheduleParams
+[KQ0001]KopiQueue.Drivers.JobScheduleParams.JobScheduleParams() -> void
+[KQ0001]KopiQueue.Drivers.JobScheduleParams.Max.get -> int
+[KQ0001]KopiQueue.Drivers.JobScheduleParams.Max.init -> void
+[KQ0001]KopiQueue.Drivers.JobScheduleParams.UniqueConflictError.get -> string!
+[KQ0001]KopiQueue.Drivers.JobScheduleParams.UniqueConflictError.init -> void
+[KQ0001]const KopiQueue.Drivers.JobScheduleParams.DefaultUniqueConflictError = "Discarded by the scheduler: another job with the same unique key holds its unique slot, so this job cannot be retried." -> string!
+[KQ0001]KopiQueue.Drivers.JobScheduleResult
+[KQ0001]KopiQueue.Drivers.JobScheduleResult.JobScheduleResult(long Id, string! Queue, KopiQueue.JobState State) -> void
+[KQ0001]KopiQueue.Drivers.JobScheduleResult.Id.get -> long
+[KQ0001]KopiQueue.Drivers.JobScheduleResult.Id.init -> void
+[KQ0001]KopiQueue.Drivers.JobScheduleResult.Queue.get -> string!
+[KQ0001]KopiQueue.Drivers.JobScheduleResult.Queue.init -> void
+[KQ0001]KopiQueue.Drivers.JobScheduleResult.State.get -> KopiQueue.JobState
+[KQ0001]KopiQueue.Drivers.JobScheduleResult.State.init -> void
+[KQ0001]KopiQueue.Drivers.JobScheduleResult.Deconstruct(out long Id, out string! Queue, out KopiQueue.JobState State) -> void
+[KQ0001]KopiQueue.Drivers.JobScheduleResult.<Clone>$() -> KopiQueue.Drivers.JobScheduleResult!
+[KQ0001]KopiQueue.Drivers.JobScheduleResult.Equals(KopiQueue.Drivers.JobScheduleResult? other) -> bool
+[KQ0001]override KopiQueue.Drivers.JobScheduleResult.Equals(object? obj) -> bool
+[KQ0001]override KopiQueue.Drivers.JobScheduleResult.GetHashCode() -> int
+[KQ0001]override KopiQueue.Drivers.JobScheduleResult.ToString() -> string!
+[KQ0001]static KopiQueue.Drivers.JobScheduleResult.operator !=(KopiQueue.Drivers.JobScheduleResult? left, KopiQueue.Drivers.JobScheduleResult? right) -> bool
+[KQ0001]static KopiQueue.Drivers.JobScheduleResult.operator ==(KopiQueue.Drivers.JobScheduleResult? left, KopiQueue.Drivers.JobScheduleResult? right) -> bool
