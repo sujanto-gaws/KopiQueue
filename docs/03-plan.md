@@ -196,7 +196,7 @@ Each task lists the requirement IDs it satisfies. Estimates are in engineer-days
 |---|------|----|-----|
 | 7.1 | Benchmarks and tuning on both drivers | 8 | NFR-PERF-01..07 |
 | 7.2 | Stress and chaos suite on both drivers (killed connections and processes, DB restart, SQL Server failover); **72 h soak per driver before GA** | 6 | NFR-REL-01..06 |
-| 7.3 | River compatibility suite (Go ↔ KQ) and a River UI smoke test | 4 | NFR-COMP-05 |
+| 7.3 | River compatibility goldens: one suite for the catalog (every version up and down), the state bitmask, the unique-key vectors, notification channels and payloads, and the job rows each outcome leaves. No River client, CLI or River UI is run (ADR-008) | 4 | NFR-COMP-05 |
 | 7.4 | Managed-service verification: RDS, Azure Flexible, Neon/Supabase, PgBouncer; **Azure SQL Database and Managed Instance** | 4 | NFR-COMP-02a, -04 |
 | 7.5 | Trimming and Native AOT validation | 2 | NFR-COMP-06 |
 | 7.6 | Security review on both drivers | 2.5 | NFR-SEC-01..05 |
