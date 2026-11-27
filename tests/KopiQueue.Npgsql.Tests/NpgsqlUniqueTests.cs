@@ -95,6 +95,30 @@ public sealed class NpgsqlUniqueTests(PostgresFixture db) : IClassFixture<Postgr
         Assert.Equal(1L, await count.ExecuteScalarAsync(Ct));
     }
 
+    [Fact]
+    public async Task Uniqueness_from_the_args_type_keeps_one_pending_job_per_customer_without_options_at_the_call_site()
+    {
+        // UC-4 with args-level defaults (plan task 4.5, FR-DEF-05): the args type declares its queue and uniqueness.
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var (driver, schema) = await MigratedAsync(ds);
+        var client = new KopiClient(driver);
+
+        var first = await client.InsertAsync(new SyncCustomerArgs(42, "web"), cancellationToken: Ct);
+        var again = await client.InsertAsync(new SyncCustomerArgs(42, "web"), cancellationToken: Ct);
+        var other = await client.InsertAsync(new SyncCustomerArgs(43, "web"), cancellationToken: Ct);
+        var many = await client.InsertManyAsync([new(new SyncCustomerArgs(42, "web")), new(new SyncCustomerArgs(44, "web"))], cancellationToken: Ct);
+
+        Assert.Equal(("sync", 3), (first.Job.Queue, first.Job.MaxAttempts));
+        Assert.True(again.UniqueSkippedAsDuplicate);
+        Assert.Equal(first.Job.Id, again.Job.Id);
+        Assert.False(other.UniqueSkippedAsDuplicate);
+        Assert.Equal([true, false], many.Select(r => r.UniqueSkippedAsDuplicate));
+        await using var cmd = ds.CreateCommand($"SELECT count(*) FROM {schema}.river_job WHERE kind = 'sync_customer_defaults'");
+        Assert.Equal(3L, await cmd.ExecuteScalarAsync(Ct));
+        Assert.Equal("11110101", (await UniqueOfAsync(ds, schema, first.Job.Id)).States);
+    }
+
     private static async Task<(string Key, string States)> UniqueOfAsync(NpgsqlDataSource ds, string schema, long id)
     {
         await using var cmd = ds.CreateCommand($"SELECT encode(unique_key, 'hex'), unique_states::text FROM {schema}.river_job WHERE id = $1");
@@ -118,6 +142,12 @@ public sealed class NpgsqlUniqueTests(PostgresFixture db) : IClassFixture<Postgr
     }
 
     /// <summary>The golden vectors' <c>golden_tagged</c> args; Go tagged region, customer and omit as unique.</summary>
+    [JobKind("sync_customer_defaults")]
+    public sealed record SyncCustomerArgs(long CustomerId, string RequestedBy) : IJobArgsWithInsertOptions
+    {
+        public InsertOptions GetInsertOptions() => new() { Queue = "sync", MaxAttempts = 3, Unique = new() { ByArgs = true } };
+    }
+
     [JobKind("golden_tagged")]
     public sealed record GoldenTaggedArgs([property: UniqueKey] string Region, [property: UniqueKey] GoldenCustomer Customer, string Note) : IJobArgs;
 

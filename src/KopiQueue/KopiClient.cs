@@ -926,7 +926,8 @@ public sealed partial class KopiClient : IKopiClient
         ArgumentNullException.ThrowIfNull(request);
         var type = request.Args.GetType();
         return JobValidation.ToInsertParams(
-            JobKindRegistry.GetKind(type), _serializer.Serialize(request.Args, type), request.Options, now, unique: Unique(type));
+            JobKindRegistry.GetKind(type), _serializer.Serialize(request.Args, type), InsertOptions.Resolve(request.Options, request.Args), now,
+            unique: Unique(type));
     }
 
     /// <summary>Validates and resolves every request before any SQL runs, so an invalid job inserts nothing.</summary>
@@ -941,7 +942,8 @@ public sealed partial class KopiClient : IKopiClient
             var request = requests[i] ?? throw new ArgumentException($"Job {i} is null.", nameof(jobs));
             var type = request.Args.GetType();
             inserts[i] = JobValidation.ToInsertParams(
-                JobKindRegistry.GetKind(type), _serializer.Serialize(request.Args, type), request.Options, now, $"Job {i}: ", nameof(jobs), Unique(type));
+                JobKindRegistry.GetKind(type), _serializer.Serialize(request.Args, type), InsertOptions.Resolve(request.Options, request.Args), now,
+                $"Job {i}: ", nameof(jobs), Unique(type));
         }
 
         return inserts;
@@ -953,7 +955,7 @@ public sealed partial class KopiClient : IKopiClient
         ArgumentNullException.ThrowIfNull(args);
         var kind = JobKindRegistry.GetKind<TArgs>();
         var insert = JobValidation.ToInsertParams(
-            kind, _serializer.Serialize(args, typeof(TArgs)), options, _timeProvider.GetUtcNow(), unique: Unique(typeof(TArgs)));
+            kind, _serializer.Serialize(args, typeof(TArgs)), InsertOptions.Resolve(options, args), _timeProvider.GetUtcNow(), unique: Unique(typeof(TArgs)));
 
         var results = await executor.JobInsertManyAsync([insert], cancellationToken).ConfigureAwait(false);
         var result = results.Count == 1

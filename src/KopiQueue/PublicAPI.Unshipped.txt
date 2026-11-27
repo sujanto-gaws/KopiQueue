@@ -767,3 +767,5 @@ KopiQueue.KopiQueueJobRunningException.KopiQueueJobRunningException(string? mess
 [KQ0001]static KopiQueue.Drivers.JobDeleteResult.operator ==(KopiQueue.Drivers.JobDeleteResult? left, KopiQueue.Drivers.JobDeleteResult? right) -> bool
 [KQ0001]static KopiQueue.Drivers.JobListPosition.operator !=(KopiQueue.Drivers.JobListPosition? left, KopiQueue.Drivers.JobListPosition? right) -> bool
 [KQ0001]static KopiQueue.Drivers.JobListPosition.operator ==(KopiQueue.Drivers.JobListPosition? left, KopiQueue.Drivers.JobListPosition? right) -> bool
+KopiQueue.IJobArgsWithInsertOptions
+KopiQueue.IJobArgsWithInsertOptions.GetInsertOptions() -> KopiQueue.InsertOptions?

@@ -19,6 +19,38 @@ public interface IJobArgs;
 #pragma warning restore CA1040
 
 /// <summary>
+/// An args type that supplies its own default insert options (FR-DEF-05), as River's <c>JobArgsWithInsertOpts</c> does:
+/// every insert of it, and every periodic insert, starts from them.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Each option is resolved on its own: the insert's own option if set, otherwise this one, otherwise the client's
+/// default (<see cref="InsertDefaults"/>). A list or object option (<see cref="InsertOptions.Tags"/>,
+/// <see cref="InsertOptions.Metadata"/>, <see cref="InsertOptions.Unique"/>) is replaced whole, not merged.
+/// </para>
+/// <para>
+/// The options are validated with the insert's, so an invalid one fails each insert with <see cref="ArgumentException"/>.
+/// They are read from the args at each insert, so they can depend on the args' values. A method rather than a property,
+/// so that it is never serialised into the job's args.
+/// </para>
+/// </remarks>
+/// <example>
+/// <code>
+/// [JobKind("sync_customer")]
+/// public sealed record SyncCustomerArgs(long CustomerId) : IJobArgsWithInsertOptions
+/// {
+///     public InsertOptions GetInsertOptions() =>
+///         new() { Queue = "sync", MaxAttempts = 5, Unique = new() { ByArgs = true, ByPeriod = TimeSpan.FromHours(1) } };
+/// }
+/// </code>
+/// </example>
+public interface IJobArgsWithInsertOptions : IJobArgs
+{
+    /// <summary>The default insert options for these args, or <c>null</c> for none.</summary>
+    InsertOptions? GetInsertOptions();
+}
+
+/// <summary>
 /// Declares the stable kind of an <see cref="IJobArgs"/> type (FR-DEF-01). The kind is stored with each job and selects
 /// its worker, so it must not change once jobs of the type exist.
 /// </summary>
