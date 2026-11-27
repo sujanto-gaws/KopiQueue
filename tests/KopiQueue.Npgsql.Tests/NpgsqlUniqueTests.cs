@@ -96,6 +96,38 @@ public sealed class NpgsqlUniqueTests(PostgresFixture db) : IClassFixture<Postgr
     }
 
     [Fact]
+    public async Task Concurrent_bulk_inserts_of_the_same_unique_jobs_in_different_orders_store_each_once_without_deadlocking()
+    {
+        // Plan task 4.6: eight clients insert the same 40 unique jobs at once, each batch in its own order, five times.
+        db.SkipIfUnavailable();
+        await using var ds = db.CreateDataSource();
+        var (driver, schema) = await MigratedAsync(ds);
+
+        for (var round = 0; round < 5; round++)
+        {
+            var customers = Enumerable.Range(round * 100, 40).Select(i => (long)i).ToArray();
+            var batches = await Task.WhenAll(Enumerable.Range(0, 8).Select(client => Task.Run(
+                () => new KopiClient(driver).InsertManyAsync(
+                    [.. customers.OrderBy(c => HashCode.Combine(c, client, round)).Select(c => new InsertRequest(new SyncCustomerArgs(c, "bulk")))],
+                    cancellationToken: Ct),
+                Ct)));
+
+            foreach (var customer in customers)
+            {
+                // Each customer: one insert stored it, the seven others got that same job back as a duplicate.
+                var results = batches.Select(b => b.Single(r => CustomerOf(r.Job) == customer)).ToArray();
+                Assert.Single(results, r => !r.UniqueSkippedAsDuplicate);
+                Assert.Single(results.Select(r => r.Job.Id).Distinct());
+            }
+        }
+
+        await using var count = ds.CreateCommand($"SELECT count(*), count(DISTINCT unique_key) FROM {schema}.river_job WHERE kind = 'sync_customer_defaults'");
+        await using var reader = await count.ExecuteReaderAsync(Ct);
+        Assert.True(await reader.ReadAsync(Ct));
+        Assert.Equal((200L, 200L), (reader.GetInt64(0), reader.GetInt64(1)));
+    }
+
+    [Fact]
     public async Task Uniqueness_from_the_args_type_keeps_one_pending_job_per_customer_without_options_at_the_call_site()
     {
         // UC-4 with args-level defaults (plan task 4.5, FR-DEF-05): the args type declares its queue and uniqueness.
@@ -117,6 +149,12 @@ public sealed class NpgsqlUniqueTests(PostgresFixture db) : IClassFixture<Postgr
         await using var cmd = ds.CreateCommand($"SELECT count(*) FROM {schema}.river_job WHERE kind = 'sync_customer_defaults'");
         Assert.Equal(3L, await cmd.ExecuteScalarAsync(Ct));
         Assert.Equal("11110101", (await UniqueOfAsync(ds, schema, first.Job.Id)).States);
+    }
+
+    private static long CustomerOf(JobRow job)
+    {
+        using var json = System.Text.Json.JsonDocument.Parse(job.ArgsJson);
+        return json.RootElement.GetProperty("customerId").GetInt64();
     }
 
     private static async Task<(string Key, string States)> UniqueOfAsync(NpgsqlDataSource ds, string schema, long id)

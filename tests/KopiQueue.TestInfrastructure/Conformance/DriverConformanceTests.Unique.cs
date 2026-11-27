@@ -216,6 +216,29 @@ public abstract partial class DriverConformanceTests<TFixture>
         await Assert.ThrowsAsync<NotSupportedException>(() => client.InsertManyFastAsync([new(new ConformanceArgs(4), byArgs)], tx.Transaction, Ct));
     }
 
+    [Fact]
+    public async Task Concurrent_batches_sharing_unique_keys_in_different_orders_neither_deadlock_nor_store_a_key_twice()
+    {
+        // Plan task 4.6. Each batch holds the same keys in its own order; a driver that took key slots in input order
+        // would let two batches each hold a key the other waits for.
+        var schema = await MigratedAsync();
+        var kind = UniqueKind();
+        for (var round = 0; round < 3; round++)
+        {
+            var keys = Enumerable.Range(0, 30).Select(_ => NewUniqueKey()).ToArray();
+            var batches = await Task.WhenAll(Enumerable.Range(0, 8).Select(batch => Task.Run(
+                () => schema.Driver.GetExecutor().JobInsertManyAsync(
+                    [.. keys.Select((key, i) => (key, i)).OrderBy(x => HashCode.Combine(x.i, batch, round)).Select(x => Unique(Job(kind), x.key))],
+                    Ct),
+                Ct)));
+
+            Assert.Equal(30, batches.Sum(b => b.Count(r => !r.UniqueSkippedAsDuplicate)));
+            Assert.Equal(30, batches.SelectMany(b => b).Select(r => r.Job.Id).Distinct().Count());
+        }
+
+        Assert.Equal(90, await schema.CountJobsAsync(kind, Ct));
+    }
+
     /// <summary>A random 32-byte unique key, so that committed cases never meet each other's keys.</summary>
     protected static byte[] NewUniqueKey() => RandomNumberGenerator.GetBytes(32);
 
