@@ -310,7 +310,18 @@ public sealed partial class KopiClient
             _timeProvider,
             loggers.CreateLogger<JobExecutor>());
         var notifier = listener is null ? null : new Notifier(listener, timeProvider: _timeProvider, logger: loggers.CreateLogger<Notifier>());
-        var maintenance = new MaintenanceHost(MaintenanceServices(_driver, _options, _serializer, loggers), timeProvider: _timeProvider, logger: loggers.CreateLogger<MaintenanceHost>());
+        var periodic = new PeriodicEnqueuer(
+            _driver,
+            PeriodicJobs,
+            Prepare,
+            new PeriodicEnqueuerOptions { CatchUpWindow = _options.LeaderTtl + _options.ElectInterval },
+            inserted => WakeIfPooled(null, inserted),
+            _timeProvider,
+            loggers.CreateLogger<PeriodicEnqueuer>());
+        var maintenance = new MaintenanceHost(
+            [.. MaintenanceServices(_driver, _options, _serializer, loggers), periodic],
+            timeProvider: _timeProvider,
+            logger: loggers.CreateLogger<MaintenanceHost>());
         var elector = new Elector(
             _driver,
             new ElectorOptions { ClientId = ClientId, ElectInterval = _options.ElectInterval, LeaderTtl = _options.LeaderTtl },

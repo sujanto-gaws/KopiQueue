@@ -268,6 +268,9 @@ public sealed class KopiClientTests
 
         public bool ReturnNothing { get; init; }
 
+        /// <summary>When set, the batch insert throws it instead of recording.</summary>
+        public Exception? FailWith { get; set; }
+
         public int Calls { get; private set; }
 
         public int FastCalls { get; private set; }
@@ -298,6 +301,11 @@ public sealed class KopiClientTests
         public Task<IReadOnlyList<JobInsertResult>> JobInsertManyAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken)
         {
             Calls++;
+            if (FailWith is { } failure)
+            {
+                return Task.FromException<IReadOnlyList<JobInsertResult>>(failure);
+            }
+
             var first = Inserts.Count;
             Inserts.AddRange(jobs);
             if (ReturnNothing)

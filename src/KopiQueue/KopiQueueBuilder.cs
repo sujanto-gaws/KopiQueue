@@ -113,6 +113,11 @@ public sealed class KopiQueueBuilder
     /// <summary>The retry policy set with <see cref="UseRetryPolicy"/>, if any.</summary>
     public IRetryPolicy? RetryPolicy { get; private set; }
 
+    /// <summary>The periodic jobs added with <see cref="AddPeriodicJob"/>.</summary>
+    public IReadOnlyList<PeriodicJob> PeriodicJobs => _periodicJobs;
+
+    private readonly List<PeriodicJob> _periodicJobs = [];
+
     /// <summary>Creates the driver; set by <see cref="UseDriver"/>.</summary>
     internal Func<IServiceProvider, IKopiDriver>? DriverFactory { get; private set; }
 
@@ -124,6 +129,21 @@ public sealed class KopiQueueBuilder
     {
         ArgumentNullException.ThrowIfNull(name);
         return Configure(o => o.Queues[name] = new QueueSettings { MaxWorkers = maxWorkers });
+    }
+
+    /// <summary>Adds a job the leader inserts on a schedule (FR-PER-01); see <see cref="KopiClientOptions.PeriodicJobs"/>.</summary>
+    /// <param name="job">The periodic job.</param>
+    /// <returns>This builder.</returns>
+    /// <example>
+    /// <code>
+    /// kq.AddPeriodicJob(PeriodicJob.Create(PeriodicSchedule.Cron("0 2 * * *"), () => new RebuildSearchIndexArgs()));
+    /// </code>
+    /// </example>
+    public KopiQueueBuilder AddPeriodicJob(PeriodicJob job)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        _periodicJobs.Add(job);
+        return this;
     }
 
     /// <summary>Changes the settings in code.</summary>

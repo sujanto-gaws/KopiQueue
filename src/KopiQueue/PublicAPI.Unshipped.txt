@@ -624,3 +624,31 @@ KopiQueue.UniqueOptions.ByState.init -> void
 KopiQueue.UniqueOptions.ExcludeKind.get -> bool
 KopiQueue.UniqueOptions.ExcludeKind.init -> void
 KopiQueue.UniqueOptions.UniqueOptions() -> void
+KopiQueue.KopiClient.PeriodicJobs.get -> KopiQueue.PeriodicJobBundle!
+KopiQueue.KopiClientOptions.PeriodicJobs.get -> System.Collections.Generic.IReadOnlyList<KopiQueue.PeriodicJob!>?
+KopiQueue.KopiClientOptions.PeriodicJobs.init -> void
+KopiQueue.KopiQueueBuilder.AddPeriodicJob(KopiQueue.PeriodicJob! job) -> KopiQueue.KopiQueueBuilder!
+KopiQueue.KopiQueueBuilder.PeriodicJobs.get -> System.Collections.Generic.IReadOnlyList<KopiQueue.PeriodicJob!>!
+KopiQueue.PeriodicJob
+KopiQueue.PeriodicJob.Constructor.get -> System.Func<KopiQueue.InsertRequest?>!
+KopiQueue.PeriodicJob.Id.get -> string?
+KopiQueue.PeriodicJob.Id.init -> void
+KopiQueue.PeriodicJob.PeriodicJob(KopiQueue.PeriodicSchedule! schedule, System.Func<KopiQueue.InsertRequest?>! constructor) -> void
+KopiQueue.PeriodicJob.RunOnStart.get -> bool
+KopiQueue.PeriodicJob.RunOnStart.init -> void
+KopiQueue.PeriodicJob.Schedule.get -> KopiQueue.PeriodicSchedule!
+KopiQueue.PeriodicJobBundle
+KopiQueue.PeriodicJobBundle.Add(KopiQueue.PeriodicJob! job) -> KopiQueue.PeriodicJobHandle!
+KopiQueue.PeriodicJobBundle.AddMany(System.Collections.Generic.IEnumerable<KopiQueue.PeriodicJob!>! jobs) -> System.Collections.Generic.IReadOnlyList<KopiQueue.PeriodicJobHandle!>!
+KopiQueue.PeriodicJobBundle.Clear() -> void
+KopiQueue.PeriodicJobBundle.Count.get -> int
+KopiQueue.PeriodicJobBundle.Remove(KopiQueue.PeriodicJobHandle! handle) -> bool
+KopiQueue.PeriodicJobBundle.RemoveById(string! id) -> bool
+KopiQueue.PeriodicJobHandle
+KopiQueue.PeriodicJobHandle.Job.get -> KopiQueue.PeriodicJob!
+KopiQueue.PeriodicSchedule
+abstract KopiQueue.PeriodicSchedule.LatestAtOrBefore(System.DateTimeOffset atOrBefore) -> System.DateTimeOffset?
+abstract KopiQueue.PeriodicSchedule.NextAfter(System.DateTimeOffset after) -> System.DateTimeOffset?
+static KopiQueue.PeriodicJob.Create<TArgs>(KopiQueue.PeriodicSchedule! schedule, System.Func<TArgs>! args, KopiQueue.InsertOptions? options = null) -> KopiQueue.PeriodicJob!
+static KopiQueue.PeriodicSchedule.Cron(string! expression, System.TimeZoneInfo? timeZone = null) -> KopiQueue.PeriodicSchedule!
+static KopiQueue.PeriodicSchedule.Every(System.TimeSpan interval) -> KopiQueue.PeriodicSchedule!

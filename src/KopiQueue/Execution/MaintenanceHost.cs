@@ -21,6 +21,15 @@ internal interface IMaintenanceService
     /// <summary>Runs one batch and returns how many rows it handled, at most <see cref="BatchSize"/>.</summary>
     /// <param name="cancellationToken">Fires when the client stops leading or stops.</param>
     Task<int> RunBatchAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Waits before the next batch. Default: <paramref name="wait"/>, the interval with jitter. A service with no fixed
+    /// interval, such as the periodic enqueuer, decides for itself.
+    /// </summary>
+    /// <param name="wait">The host's wait: the interval with jitter.</param>
+    /// <param name="time">The clock.</param>
+    /// <param name="cancellationToken">Fires when the client stops leading or stops.</param>
+    Task WaitAsync(TimeSpan wait, TimeProvider time, CancellationToken cancellationToken) => Task.Delay(wait, time, cancellationToken);
 }
 
 /// <summary>Settings of a <see cref="MaintenanceHost"/>.</summary>
@@ -166,7 +175,7 @@ internal sealed partial class MaintenanceHost : IAsyncDisposable
             {
                 if (wait > TimeSpan.Zero)
                 {
-                    await Task.Delay(wait, _time, stop).ConfigureAwait(false);
+                    await service.WaitAsync(wait, _time, stop).ConfigureAwait(false);
                 }
                 else
                 {

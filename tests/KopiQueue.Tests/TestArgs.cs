@@ -24,7 +24,11 @@ public sealed record SyncCustomerArgs(
     [property: UniqueKey, JsonPropertyName("tenant")] string TenantName,
     string RequestedBy) : IJobArgs;
 
+[JobKind("rebuild_index")]
+public sealed record RebuildIndexArgs(string Index) : IJobArgs;
+
 [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
+[JsonSerializable(typeof(RebuildIndexArgs))]
 [JsonSerializable(typeof(SendEmailArgs))]
 [JsonSerializable(typeof(ResizeArgs))]
 [JsonSerializable(typeof(LargeResizeArgs))]
