@@ -694,6 +694,62 @@ This spec is for the contributor who writes the scheduler (#35).
 - **FR-SCH-02 says "within ≤ 5 s".** A 5 s interval with ±10% jitter can take up to 5.5 s, and a busy producer adds its fetch latency on top. Either the requirement states the bound as "within `SchedulerInterval` + 10%", or the default interval comes down (for example to 4.5 s). This is the owner's decision.
 - **The discarded job's error:** River's docs don't say whether an error is appended to a job discarded for a unique conflict. Recommendation, KopiQueue's own choice: append one, like the rescuer's "stuck" error (§5.7 table), so `errors` explains why the job ended. Its text is KopiQueue's.
 
+#### Rescuer: behaviour spec (plan task 3.4, FR-MNT-03, NFR-REL-02, UC-9)
+
+This spec is for the contributor who writes the rescuer (#36).
+- **Clean-room:** its author has read River's job queries (disclosed on #111–#113), so it states behaviour only. It contains no SQL, and nothing taken from River's source.
+- **Sources:** KopiQueue's requirements and design, and River's public docs: [maintenance services, rescuer](https://riverqueue.com/docs/maintenance-services#rescuer), [stuck jobs](https://riverqueue.com/docs/stuck-jobs) and [job retries](https://riverqueue.com/docs/job-retries).
+- **The implementer** must not read River's source (CONTRIBUTING.md) or run River (ADR-008). Where this spec is silent, decide from the sources above, or ask on #36.
+
+**What it does**
+1. **Where it runs:** on the leader only, as an `IMaintenanceService` named `rescuer` (task 3.2). Every minute (±10% jitter), and at once again after a full batch of 1,000. River's docs: "The rescuer looks for 'stuck' jobs and either enqueues them to be reworked, or discards them if they've hit their maximum allowed attempts".
+2. **What counts as stuck:**
+   - **Candidates:** jobs in state `running` whose `attempted_at` (set when the job was fetched) is older than `RescueStuckJobsAfter`, judged by the **database's** clock.
+   - **Longer worker timeouts:** a candidate whose worker's effective timeout is longer gets at least that long. River's docs: jobs with their own `Timeout()` "will be given at least that timeout duration before they're considered stuck".
+   - **No timeout:** a worker timeout of `Timeout.InfiniteTimeSpan` disables age-based rescue for that job. River's docs: "disabling a worker timeout disables ordinary timeout-based rescue".
+   - **How to get the effective timeout:** resolve the job the way the executor does (§5.2): the worker's `Timeout(job)`, else the client's `JobTimeout`. That needs the args deserialized. If they can't be (unknown kind, bad args), use the client's `JobTimeout`.
+3. **What happens to a stuck job:**
+   - **Attempts left** (`attempt < max_attempts`): the job becomes `retryable`, with `scheduled_at` set by the same retry rules as a failed attempt (§5.4: the worker's `NextRetry(job)`, else the client's `IRetryPolicy`, else the default policy). It becomes `available` instead if that time is within `SchedulerInterval`, as the executor does (§5.2).
+   - **No attempts left:** the job becomes `discarded`, with `finalized_at` set to the database's now.
+   - **Either way:** the stuck attempt counts as used. `attempt` was already incremented when the job was fetched, and the rescuer doesn't change it.
+   - **The error:** one error is appended to `errors`, in the format the executor writes (attempt, time, message, no trace). Its message is KopiQueue's own wording, saying the job was still running after the threshold and was rescued.
+4. **Guarded update:**
+   - The rescuer changes a job only if it is **still `running` with the same `attempted_at`** it saw. A job that has finished, or been fetched again, since the rescuer read it is left alone.
+   - Reading candidates and updating them are separate short statements. No lock is held between them, and each statement handles at most the batch size (FR-MNT-07).
+5. **The original attempt may still be running.** This is at-least-once delivery. River's docs: such jobs "will be rescheduled to run again, potentially alongside an existing execution attempt for the same job".
+   - If that attempt later finishes, its completion write changes nothing: `JobSetStateIfRunningMany` only touches jobs still `running` (§5.3). The same applies once the rescued attempt has itself been fetched and is running again.
+   - `RescueStuckJobsAfter` is therefore an upper bound on how long a job may run. Document it as such.
+6. **Notification:** a rescued job made `available` directly sends the queue's `river_insert` notification, one per queue per batch, on commit, as the scheduler does. `retryable` and `discarded` jobs don't notify; the scheduler announces a `retryable` job when it promotes it.
+7. **Result:** the service returns the number of jobs it handled (rescued plus discarded), so a full batch runs again at once.
+
+**Configuration**
+- `KopiClientOptions.RescueStuckJobsAfter`, and the same on `KopiQueueOptions`, mapped in `KopiQueueHostedService.ToClientOptions`.
+- Default: `JobTimeout` + 1 h (§7).
+- Validation: must be greater than `JobTimeout`, as River's docs require ("Must be greater than JobTimeout if both it and JobTimeout are configured").
+
+**Driver operations** (experimental, `KQ0001`, KopiQueue's own names)
+- One to list stuck candidates (`running`, `attempted_at` before a given time, oldest first, at most `Max`, without locking).
+- One to apply a batch of guarded rescues (per job: id, expected `attempted_at`, new state, `scheduled_at`, `finalized_at`, the error to append), returning the jobs it changed.
+- PostgreSQL SQL goes in `src/KopiQueue.Npgsql/Sql/`; SQL Server follows in task 5.6 (#52).
+
+**Tests the task needs** (with 3.8, #40)
+- **Conformance:**
+  - candidates are listed by state and age only;
+  - the guard leaves alone a job that finished or was fetched again after it was read;
+  - retry and discard write the right columns and append exactly one error.
+- **Unit (fake clock and driver):**
+  - the threshold uses the longer of `RescueStuckJobsAfter` and the worker's timeout;
+  - an infinite worker timeout is never rescued by age;
+  - retry when attempts are left and discard when none are;
+  - the worker's `NextRetry` wins over the policy;
+  - a retry due within `SchedulerInterval` goes straight to `available`;
+  - the option's validation and mapping.
+- **Rescue after a crash:** use `NpgsqlLeaderKillTests` and `tests/KopiQueue.TestNode` (#127). Give the node a worker that blocks, kill the node that holds a running job, and check that the leader rescues the job and a survivor completes it. With a short `RescueStuckJobsAfter`, this meets M3's exit criterion "stuck jobs are rescued".
+
+**Open questions for the owner**
+- **Unknown kinds.** River's docs say an unknown kind "can be discarded by the leader". KopiQueue's rolling-deploy behaviour is the opposite: a job whose kind this client has no worker for is retried until a client that has the worker takes it (`NpgsqlClientIntegrationTests`, task 2.9). The spec follows KopiQueue: rescue it with the client's defaults, and don't discard it for being unknown. Confirm, or choose River's documented behaviour.
+- **The default threshold.** River's docs: "one hour, or JobTimeout plus one hour in case JobTimeout has been configured to be larger than one hour". KopiQueue's §7: `JobTimeout` + 1 h. With the default 1 min `JobTimeout`, that's 1 h 1 min instead of 1 h. Either keep KopiQueue's simpler rule, or match River's.
+
 ### 5.8 Cancellation of a running job across clients
 
 1. `JobCancelAsync(id)` runs an `UPDATE` in one statement: if the job is not running, set it to `cancelled` and finalise it. If it is running, set `metadata.cancel_attempted_at = now()` only. Then `pg_notify('river_control', {action: cancel, job_id, queue})`.
