@@ -113,8 +113,7 @@ public sealed class QueueMaintainerTests
         var db = new FakeQueues(time);
         var connection = new FakeConnection();
         await using var notifier = new Notifier(new FakeListener(connection), timeProvider: time);
-        await notifier.StartAsync(Ct);
-        await WaitFor(() => notifier.IsConnected);
+        await notifier.StartAndResyncAsync(Ct);
         await using var client = await StartedAsync(db, time, ["a"], notifier);
 
         await Settle(time, TimeSpan.FromSeconds(5));

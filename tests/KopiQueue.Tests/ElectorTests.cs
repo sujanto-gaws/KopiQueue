@@ -193,8 +193,7 @@ public sealed class ElectorTests
         lease.Hold("other", TimeSpan.FromHours(1));
         var connection = new FakeConnection();
         await using var notifier = new Notifier(new FakeListener(connection), timeProvider: time);
-        await notifier.StartAsync(Ct);
-        await AdvanceUntil(time, () => notifier.IsConnected);
+        await notifier.StartAndResyncAsync(Ct);
         await using var elector = new Elector(lease, Options(), notifier, timeProvider: time);
         await elector.StartAsync(Ct);
         await AdvanceUntil(time, () => lease.Attempts == 1);
@@ -213,8 +212,7 @@ public sealed class ElectorTests
         lease.Hold("other", TimeSpan.FromHours(1));
         var connection = new FakeConnection();
         await using var notifier = new Notifier(new FakeListener(connection), timeProvider: time);
-        await notifier.StartAsync(Ct);
-        await AdvanceUntil(time, () => notifier.IsConnected);
+        await notifier.StartAndResyncAsync(Ct);
         await using var elector = new Elector(lease, Options(), notifier, timeProvider: time);
         await elector.StartAsync(Ct);
         await AdvanceUntil(time, () => lease.Attempts == 1);

@@ -66,10 +66,13 @@ public sealed class MaintenanceHostTests
         service.Script.Enqueue(4);
         await using var host = Host(time, service);
 
+        var start = time.GetUtcNow();
         await host.OnLeadershipChangedAsync(true, Ct);
-        await AdvanceUntil(time, () => service.Batches == 4);
 
-        Assert.Equal(service.At[0], service.At[3]); // the backlog drained without waiting
+        // The backlog drains without waiting, so it needs no fake time at all. Advancing the clock here would make the
+        // check depend on how quickly the loop's thread is scheduled.
+        await WaitUntil(() => service.Batches == 4);
+        Assert.All(service.At.Take(4), at => Assert.Equal(start, at));
         await AdvanceUntil(time, () => service.Batches == 5);
         Assert.InRange(service.At[4] - service.At[3], Interval - Step, Interval + Step);
     }
@@ -164,6 +167,17 @@ public sealed class MaintenanceHostTests
         }
 
         return time.GetUtcNow() - start;
+    }
+
+    /// <summary>Waits in real time, without advancing the fake clock, until <paramref name="condition"/> holds.</summary>
+    private static async Task WaitUntil(Func<bool> condition)
+    {
+        var limit = DateTime.UtcNow.AddSeconds(20);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < limit, "The condition was not met within 20 s without advancing fake time.");
+            await Task.Delay(5, Ct);
+        }
     }
 
     private static async Task Settle(FakeTimeProvider time, TimeSpan duration)
