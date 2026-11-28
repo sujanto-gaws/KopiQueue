@@ -47,8 +47,8 @@ public sealed class SqlServerSessionCheckTests(SqlServerFixture db) : IClassFixt
         db.SkipIfUnavailable();
         await using var conn = await db.OpenConnectionAsync(Ct);
 
-        var settings = await ReadAsync(conn, Ct);
-        await EnsureAsync(conn, Ct);
+        var settings = await ReadAsync(conn, null, Ct);
+        await EnsureAsync(conn, null, Ct);
 
         Assert.True(settings.CompatibilityLevel >= MinimumCompatibilityLevel);
         Assert.Empty(Evaluate(settings));
@@ -70,7 +70,7 @@ public sealed class SqlServerSessionCheckTests(SqlServerFixture db) : IClassFixt
             await cmd.ExecuteNonQueryAsync(Ct);
         }
 
-        var ex = await Assert.ThrowsAsync<KopiQueueConfigurationException>(() => EnsureAsync(conn, Ct));
+        var ex = await Assert.ThrowsAsync<KopiQueueConfigurationException>(() => EnsureAsync(conn, null, Ct));
 
         Assert.Contains(named, ex.Message, StringComparison.Ordinal);
     }

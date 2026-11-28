@@ -31,11 +31,14 @@ internal static class SqlServerSessionCheck
         """;
 
     /// <summary>Reads the settings of <paramref name="connection"/>'s session and throws if KopiQueue cannot work in it.</summary>
+    /// <param name="connection">The open connection.</param>
+    /// <param name="transaction">The transaction open on it, if any: SqlClient requires every command to enlist in it.</param>
+    /// <param name="cancellationToken">Cancels the query.</param>
     /// <exception cref="KopiQueueConfigurationException">A setting is wrong; the message names each one.</exception>
-    public static async Task EnsureAsync(SqlConnection connection, CancellationToken cancellationToken)
+    public static async Task EnsureAsync(SqlConnection connection, SqlTransaction? transaction, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(connection);
-        var settings = await ReadAsync(connection, cancellationToken).ConfigureAwait(false);
+        var settings = await ReadAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         var problems = Evaluate(settings);
         if (problems.Count > 0)
         {
@@ -46,10 +49,10 @@ internal static class SqlServerSessionCheck
     }
 
     /// <summary>Reads the settings of <paramref name="connection"/>'s session.</summary>
-    public static async Task<SessionSettings> ReadAsync(SqlConnection connection, CancellationToken cancellationToken)
+    public static async Task<SessionSettings> ReadAsync(SqlConnection connection, SqlTransaction? transaction, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(connection);
-        var command = new SqlCommand(Query, connection);
+        var command = new SqlCommand(Query, connection, transaction);
         await using (command.ConfigureAwait(false))
         {
             var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -115,4 +118,33 @@ internal static class SqlServerSessionCheck
         bool QuotedIdentifier,
         bool NumericRoundAbort,
         int? CompatibilityLevel);
+}
+
+/// <summary>
+/// Runs <see cref="SqlServerSessionCheck"/> on the driver's pooled sessions until one passes, then never again.
+/// </summary>
+/// <remarks>
+/// The pool is KopiQueue's own (<c>Application Name=KopiQueue</c>), and SqlClient resets a session's SET options when
+/// it reuses it, so every pooled session has the settings the first one had. Once a check passes, later operations skip
+/// the round trip. A failed check is not remembered, so a fixed database passes on the next operation.
+/// </remarks>
+internal sealed class SqlServerSessionGate
+{
+    private volatile bool _passed;
+
+    /// <summary>Whether a check has passed.</summary>
+    public bool Passed => _passed;
+
+    /// <summary>Checks <paramref name="connection"/>'s session unless a check has already passed.</summary>
+    /// <exception cref="KopiQueueConfigurationException">A setting is wrong.</exception>
+    public async Task EnsureAsync(SqlConnection connection, CancellationToken cancellationToken)
+    {
+        if (_passed)
+        {
+            return;
+        }
+
+        await SqlServerSessionCheck.EnsureAsync(connection, transaction: null, cancellationToken).ConfigureAwait(false);
+        _passed = true;
+    }
 }

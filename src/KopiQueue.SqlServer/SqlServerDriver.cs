@@ -1,5 +1,8 @@
+using System.Data.Common;
+using KopiQueue.Drivers;
 using KopiQueue.Migrations;
 using KopiQueue.SqlServer.Migrations;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 
 namespace KopiQueue.SqlServer;
@@ -34,11 +37,29 @@ public sealed class SqlServerDriverOptions
 /// Unless the connection string names an application, the driver's connections get <c>Application Name=KopiQueue</c>,
 /// which gives them a connection pool of their own.
 /// </para>
+/// <para>
+/// SQL Server cannot notify other processes, so clients on this driver find new work by polling (FR-DB-04). Every session
+/// the driver uses is first checked for the settings KopiQueue's tables need: see <see cref="CreateMigrator"/>.
+/// </para>
 /// <para>Thread-safe. The driver holds no connections of its own: it opens pooled ones per operation.</para>
 /// </remarks>
-public sealed class SqlServerDriver
+public sealed class SqlServerDriver : IKopiDriver
 {
+    /// <summary>
+    /// SQL Server's capabilities: no LISTEN/NOTIFY, so the client polls (FR-DB-04); no bulk-copy path, because
+    /// <c>SqlBulkCopy</c> takes page locks that stall every producer (ADR-014); and at most 1,000 rows per statement, the
+    /// batched insert size of spike 0.10, safely below the 2,000-row lock-escalation cap of spike 0.9 (design §8.1).
+    /// </summary>
+    private static readonly DriverCapabilities SqlServerCapabilities = new()
+    {
+        ListenNotify = false,
+        BulkCopy = false,
+        MaxRowsPerStatement = 1000,
+    };
+
     private readonly SqlServerMigrationDriver _migrationDriver;
+    private readonly SqlServerStatements _statements;
+    private readonly SqlServerSessionGate _pooledSessions = new();
 
     /// <summary>Creates a driver for the database <paramref name="connectionString"/> names.</summary>
     /// <param name="connectionString">A SqlClient connection string. It is not opened here.</param>
@@ -56,6 +77,7 @@ public sealed class SqlServerDriver
 
         Connections = new SqlServerConnectionFactory(connectionString);
         _migrationDriver = new SqlServerMigrationDriver(Connections, options.Schema, options.TablePrefix);
+        _statements = new SqlServerStatements(_migrationDriver.SchemaQualifier, _migrationDriver.TablePrefix);
         Schema = options.Schema;
         TablePrefix = options.TablePrefix;
     }
@@ -77,4 +99,24 @@ public sealed class SqlServerDriver
     /// </remarks>
     public KopiMigrator CreateMigrator(ILoggerFactory? loggerFactory = null) =>
         new(_migrationDriver, SqlServerMigrationDriver.MainLineName, SqlServerMigrationDriver.MainLine, loggerFactory);
+
+    DriverCapabilities IKopiDriver.Capabilities => SqlServerCapabilities;
+
+    /// <summary>SQL Server has no LISTEN/NOTIFY, so there is no listener and clients poll (FR-DB-04).</summary>
+    IKopiListener? IKopiDriver.CreateListener() => null;
+
+    IKopiExecutor IKopiDriver.GetExecutor() => new SqlServerExecutor(_statements, Connections, _pooledSessions, transaction: null);
+
+    IKopiExecutor IKopiDriver.GetExecutor(DbTransaction transaction)
+    {
+        ArgumentNullException.ThrowIfNull(transaction);
+        if (transaction is not SqlTransaction sqlTransaction)
+        {
+            throw new ArgumentException(
+                $"The SQL Server driver needs a SqlTransaction from Microsoft.Data.SqlClient, not a {transaction.GetType().FullName}.",
+                nameof(transaction));
+        }
+
+        return new SqlServerExecutor(_statements, Connections, _pooledSessions, sqlTransaction);
+    }
 }

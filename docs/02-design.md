@@ -473,7 +473,8 @@ SQL Server notes:
 - **Session options.** Filtered indexes and indexed computed columns need `ANSI_NULLS`, `QUOTED_IDENTIFIER`, `ANSI_PADDING`, `ANSI_WARNINGS`, `ARITHABORT` and `CONCAT_NULL_YIELDS_NULL` ON, and `NUMERIC_ROUNDABORT` OFF, in every session that writes the table. SqlClient's defaults satisfy this, with one subtlety verified in M0: SqlClient leaves `ARITHABORT` **OFF**, but at compatibility level ≥ 90 `ANSI_WARNINGS ON` implies it.
   - `SqlServerSessionCheck` reads the session's options and the database's compatibility level, which must be at least 150 (NFR-COMP-02a).
   - When a session would break writes, it throws `KopiQueueConfigurationException`, naming each wrong setting. Such a session usually comes from other code, for example code that ran `SET ANSI_WARNINGS OFF`.
-  - The migrator runs the check on every session it opens. The executor will run it on first use (task 5.2).
+  - The migrator runs the check on every session it opens.
+  - The executor (task 5.2) checks pooled sessions until one passes, once per driver. They come from KopiQueue's own pool, and SqlClient resets a session's SET options when it reuses it, which a test confirms. A caller's session is checked on the first operation of each executor made for its transaction, since the caller's code may have changed it.
 - Every batch statement stays below 5,000 rows (the lock-escalation threshold), so row locks never escalate to a table lock while producers fetch.
 
 ## 5. Key algorithms
@@ -1244,7 +1245,8 @@ public sealed record JobInsertResult(JobRow Job, bool UniqueSkippedAsDuplicate);
 - `JobRow` (namespace `KopiQueue`) is the stored job: `JobState`, args and metadata as JSON text, tags, `AttemptedBy`, `Errors` as typed `AttemptError` entries, and UTC `DateTimeOffset` times. Nothing in it is PostgreSQL-specific.
 - A single insert is a batch of one, so there is no separate `JobInsertAsync`.
 - `JobInsertManyAsync` returns the rows in input order. PostgreSQL inserts them with one `INSERT ... SELECT FROM unnest(...)` statement, with every column as an array parameter.
-- A completed caller transaction is not checked up front: Npgsql 11 keeps `NpgsqlTransaction.Connection` set after commit. The executor's next operation throws `InvalidOperationException` instead.
+- A completed caller transaction is not checked up front: Npgsql 11 keeps `NpgsqlTransaction.Connection` set after commit. The executor's next operation throws `InvalidOperationException` instead. SqlClient clears `SqlTransaction.Connection` once the transaction commits or rolls back, so the SQL Server executor throws the same exception before it sends anything.
+- On SQL Server (plan task 5.2), `JobRow` and `QueueRow` are read from `datetime2(6)` as UTC `DateTimeOffset` values, and `DateTimeOffset` parameters are converted to UTC, whatever their offset. `tags` and `attempted_by` are read from their JSON arrays, and `errors` from its JSON array of River's error objects; `NULL` reads as an empty list. The state names and the error format live in the core (`StoredJob`), so both drivers write the same values.
 
 **Interface review against the SQL Server spikes (plan task 1.4).** Each finding of spikes [0.9](spikes/0.9-sqlserver-fetch-and-locking.md) and [0.10](spikes/0.10-sqlserver-unique-bulk-poll.md) that reaches the interface, and how the interface absorbs it:
 

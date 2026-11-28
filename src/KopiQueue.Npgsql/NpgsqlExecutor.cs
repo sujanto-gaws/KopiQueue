@@ -6,6 +6,7 @@ using KopiQueue.Drivers;
 using KopiQueue.Migrations;
 using Npgsql;
 using NpgsqlTypes;
+using static KopiQueue.Drivers.StoredJob;
 
 namespace KopiQueue.Npgsql;
 
@@ -853,26 +854,6 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
         }
     }
 
-    /// <summary>
-    /// Formats an error as River stores it: <c>{"at": ..., "attempt": n, "error": "...", "trace": "..."}</c>, with the
-    /// time in UTC as Go's RFC 3339 with up to nanosecond fractions, and an empty trace when there is none.
-    /// </summary>
-    internal static string FormatError(AttemptError error)
-    {
-        using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            writer.WriteStartObject();
-            writer.WriteString("at", error.At.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'", CultureInfo.InvariantCulture));
-            writer.WriteNumber("attempt", error.Attempt);
-            writer.WriteString("error", error.Error);
-            writer.WriteString("trace", error.Trace ?? string.Empty);
-            writer.WriteEndObject();
-        }
-
-        return Encoding.UTF8.GetString(buffer.ToArray());
-    }
-
     /// <summary>The fetch order (FR-EXE-02): <c>priority, scheduled_at, id</c>.</summary>
     private static int FetchOrder(JobRow a, JobRow b)
     {
@@ -1005,49 +986,6 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
         CreatedAt = reader.GetFieldValue<DateTimeOffset>(13),
         ScheduledAt = reader.GetFieldValue<DateTimeOffset>(14),
         FinalizedAt = reader.IsDBNull(15) ? null : reader.GetFieldValue<DateTimeOffset>(15),
-    };
-
-    /// <summary>Parses one element of <c>errors</c>: <c>{"at": ..., "attempt": n, "error": "...", "trace": "..."}</c>.</summary>
-    internal static AttemptError ParseError(string json)
-    {
-        using var document = JsonDocument.Parse(json);
-        var root = document.RootElement;
-        var at = root.TryGetProperty("at", out var a) && a.ValueKind == JsonValueKind.String
-            ? DateTimeOffset.Parse(a.GetString()!, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal)
-            : default;
-        var attempt = root.TryGetProperty("attempt", out var n) && n.TryGetInt32(out var value) ? value : 0;
-        var error = root.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString()! : string.Empty;
-        // River stores an empty trace when there is none.
-        var trace = root.TryGetProperty("trace", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() is { Length: > 0 } text
-            ? text
-            : null;
-        return new AttemptError(at, attempt, error, trace);
-    }
-
-    internal static string ToDatabase(JobState state) => state switch
-    {
-        JobState.Available => "available",
-        JobState.Cancelled => "cancelled",
-        JobState.Completed => "completed",
-        JobState.Discarded => "discarded",
-        JobState.Pending => "pending",
-        JobState.Retryable => "retryable",
-        JobState.Running => "running",
-        JobState.Scheduled => "scheduled",
-        _ => throw new ArgumentOutOfRangeException(nameof(state), state, "Unknown job state."),
-    };
-
-    internal static JobState FromDatabase(string state) => state switch
-    {
-        "available" => JobState.Available,
-        "cancelled" => JobState.Cancelled,
-        "completed" => JobState.Completed,
-        "discarded" => JobState.Discarded,
-        "pending" => JobState.Pending,
-        "retryable" => JobState.Retryable,
-        "running" => JobState.Running,
-        "scheduled" => JobState.Scheduled,
-        _ => throw new InvalidOperationException($"Unknown job state '{state}' in the database."),
     };
 }
 

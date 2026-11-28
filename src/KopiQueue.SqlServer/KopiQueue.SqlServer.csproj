@@ -15,6 +15,8 @@
   <ItemGroup>
     <!-- KopiQueue's own migration line "main" for SQL Server (design §4.4, plan task 5.1). -->
     <EmbeddedResource Include="Migrations\**\*.sql" LogicalName="kopi-migrations/%(RecursiveDir)%(Filename)%(Extension)" />
+    <!-- The executor's statements (design §8.1), rendered once per driver for its schema and prefix. -->
+    <EmbeddedResource Include="Sql\*.sql" LogicalName="kopi-sql/%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

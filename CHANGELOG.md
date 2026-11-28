@@ -15,6 +15,13 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
   - **Session check:** every migrator session first checks its SET options and the database's compatibility level (150 or later). It throws `KopiQueueConfigurationException`, naming each wrong setting, instead of failing later on a filtered index.
   - **Application name:** connections get `Application Name=KopiQueue` unless the connection string names an application.
   - ([#47](https://github.com/sujanto-gaws/KopiQueue/issues/47))
+- SQL Server driver foundations (FR-DB-02, FR-INS-02):
+  - **`SqlServerDriver` is an `IKopiDriver`.** It has no listener, so clients on it poll (FR-DB-04), and it caps statements at 1,000 rows.
+  - **Caller transactions:** `GetExecutor(DbTransaction)` takes a `SqlTransaction` and runs in it. Another client's transaction throws `ArgumentException`; a completed one throws `InvalidOperationException`.
+  - **Session check:** the executor checks the SET options and compatibility level of the sessions it runs on, as the migrator does.
+  - **Rows:** jobs and queues are read with UTC times, and with tags, attempted-by and errors as lists.
+  - Only reading a job by ID and a queue by name works so far. The other operations follow in later M5 tasks and throw `NotSupportedException` until then.
+  - ([#48](https://github.com/sujanto-gaws/KopiQueue/issues/48))
 
 ## [0.4.0-beta.1] - 2026-11-27
 
