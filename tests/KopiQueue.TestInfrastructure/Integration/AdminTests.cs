@@ -1,18 +1,17 @@
 using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using KopiQueue.Drivers;
-using KopiQueue.Migrations;
-using KopiQueue.TestInfrastructure;
-using Npgsql;
+using Xunit;
 
-namespace KopiQueue.Npgsql.Tests;
+namespace KopiQueue.TestInfrastructure.Integration;
 
 /// <summary>
-/// The admin API on a real PostgreSQL (plan task 4.4: FR-ADM-01..05, FR-ERR-07): keyset pages through the client's
+/// The admin API on a real database (plan task 4.4: FR-ADM-01..05, FR-ERR-07): keyset pages through the client's
 /// cursors, a retried job running again on a working client, a running job that cannot be deleted, and every
 /// transaction variant committing or rolling back with the caller's transaction.
 /// </summary>
-public sealed class NpgsqlAdminTests(PostgresFixture db) : IClassFixture<PostgresFixture>
+public abstract class AdminTests<TFixture>(TFixture db)
+    where TFixture : IntegrationFixture
 {
     private const string Queue = "admin_work";
 
@@ -21,9 +20,8 @@ public sealed class NpgsqlAdminTests(PostgresFixture db) : IClassFixture<Postgre
     [Fact]
     public async Task Cursors_page_through_every_matching_job_once_in_each_order()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var client = new KopiClient(driver);
         var now = DateTimeOffset.UtcNow;
         var inserted = await client.InsertManyAsync(
@@ -67,9 +65,8 @@ public sealed class NpgsqlAdminTests(PostgresFixture db) : IClassFixture<Postgre
     {
         // Plan task 4.6: 300 jobs whose times tie often and are often missing (never attempted, not finalised), paged in
         // every order, both ways, by 1, 7 and 64, against the same jobs sorted in memory (a missing time last ascending).
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var client = new KopiClient(driver);
         var executor = driver.GetExecutor();
         var now = DateTimeOffset.UtcNow;
@@ -126,9 +123,8 @@ public sealed class NpgsqlAdminTests(PostgresFixture db) : IClassFixture<Postgre
     [Fact]
     public async Task Paging_by_id_while_jobs_are_inserted_and_deleted_returns_no_job_twice_and_every_job_that_stays()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var client = new KopiClient(driver);
         var kept = (await client.InsertManyAsync([.. Enumerable.Range(0, 200).Select(i => new InsertRequest(new AdminArgs(i)))], cancellationToken: Ct))
             .Select(r => r.Job.Id).ToHashSet();
@@ -168,9 +164,8 @@ public sealed class NpgsqlAdminTests(PostgresFixture db) : IClassFixture<Postgre
     [Fact]
     public async Task A_retried_discarded_job_runs_again_on_a_working_client_with_one_more_attempt()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var worker = new AdminWorker();
         var working = await StartedAsync(driver, worker);
         try
@@ -196,9 +191,8 @@ public sealed class NpgsqlAdminTests(PostgresFixture db) : IClassFixture<Postgre
     [Fact]
     public async Task A_running_job_cannot_be_deleted_until_it_has_stopped()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var worker = new AdminWorker();
         var working = await StartedAsync(driver, worker);
         try
@@ -226,22 +220,19 @@ public sealed class NpgsqlAdminTests(PostgresFixture db) : IClassFixture<Postgre
     [InlineData(true)]
     public async Task Every_transaction_variant_commits_or_rolls_back_with_the_callers_transaction(bool commit)
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, schema) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var client = new KopiClient(driver);
         var scheduled = DateTimeOffset.UtcNow.AddHours(1);
         var jobs = (await client.InsertManyAsync(
             [.. Enumerable.Range(0, 4).Select(i => new InsertRequest(new AdminArgs(i), new InsertOptions { ScheduledAt = scheduled }))],
             cancellationToken: Ct)).Select(r => r.Job.Id).ToArray();
-        await using (var cmd = ds.CreateCommand($"INSERT INTO {schema}.river_queue (name, metadata, created_at, updated_at) VALUES ('q1', '{{}}', now(), now()), ('q2', '{{}}', now(), now())"))
-        {
-            await cmd.ExecuteNonQueryAsync(Ct);
-        }
+        await schema.InsertQueueAsync("q1", TimeSpan.Zero, paused: false, Ct);
+        await schema.InsertQueueAsync("q2", TimeSpan.Zero, paused: false, Ct);
 
-        await using (var connection = await ds.OpenConnectionAsync(Ct))
-        await using (var tx = await connection.BeginTransactionAsync(Ct))
+        await using (var caller = await schema.BeginTransactionAsync(Ct))
         {
+            var tx = caller.Transaction;
             Assert.Equal(JobState.Available, (await client.JobRetryAsync(jobs[0], tx, Ct)).State);
             Assert.Equal(jobs[1], (await client.JobDeleteAsync(jobs[1], tx, Ct))!.Id);
             Assert.Equal([jobs[2]], (await client.JobDeleteManyAsync(new JobDeleteManyParams { Ids = [jobs[2]] }, tx, Ct)).Select(j => j.Id));
@@ -270,9 +261,8 @@ public sealed class NpgsqlAdminTests(PostgresFixture db) : IClassFixture<Postgre
     [Fact]
     public async Task A_unique_job_whose_key_a_newer_job_holds_cannot_be_retried()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var worker = new AdminWorker();
         var working = await StartedAsync(driver, worker);
         try
@@ -323,19 +313,6 @@ public sealed class NpgsqlAdminTests(PostgresFixture db) : IClassFixture<Postgre
             Assert.True(DateTime.UtcNow < deadline, $"Job {id} is {row.State}, not {state}, after 15 s.");
             await Task.Delay(20, Ct);
         }
-    }
-
-    private static async Task<(IKopiDriver Driver, string Schema)> MigratedAsync(NpgsqlDataSource ds)
-    {
-        var schema = "a_" + Guid.NewGuid().ToString("N")[..12];
-        await using (var cmd = ds.CreateCommand($"CREATE SCHEMA {schema}"))
-        {
-            await cmd.ExecuteNonQueryAsync(Ct);
-        }
-
-        var driver = new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = schema });
-        await driver.CreateMigrator().MigrateAsync(MigrationDirection.Up, cancellationToken: Ct);
-        return (driver, schema);
     }
 
     /// <summary><c>N</c> below 0: fails its first attempt. 0: runs until released. Above 0: completes.</summary>

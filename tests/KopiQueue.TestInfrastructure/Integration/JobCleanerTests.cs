@@ -1,29 +1,23 @@
 using KopiQueue.Drivers;
-using KopiQueue.Migrations;
-using KopiQueue.TestInfrastructure;
-using Npgsql;
+using Xunit;
 
-namespace KopiQueue.Npgsql.Tests;
+namespace KopiQueue.TestInfrastructure.Integration;
 
 /// <summary>
-/// The job cleaner on a real PostgreSQL (plan task 3.5: FR-MNT-04, FR-MNT-07; design §5.7): only the leader deletes
+/// The job cleaner on a real database (plan task 3.5: FR-MNT-04, FR-MNT-07; design §5.7): only the leader deletes
 /// finalised jobs past their retention, no retention keeps everything, and deleting a job frees its unique slot.
 /// </summary>
-public sealed class NpgsqlJobCleanerTests(PostgresFixture db) : IClassFixture<PostgresFixture>
+public abstract class JobCleanerTests<TFixture>(TFixture db)
+    where TFixture : IntegrationFixture
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task A_follower_deletes_nothing_and_the_leader_deletes_expired_jobs_as_soon_as_it_wins()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, schema) = await MigratedAsync(ds);
-        await using (var cmd = ds.CreateCommand(
-            $"INSERT INTO {schema}.river_leader (leader_id, elected_at, expires_at) VALUES ('someone-else', now(), now() + interval '1 hour')"))
-        {
-            await cmd.ExecuteNonQueryAsync(Ct);
-        }
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
+        await schema.SetLeaderAsync("someone-else", TimeSpan.FromHours(1), Ct);
 
         var executor = driver.GetExecutor();
         var expired = new[]
@@ -44,13 +38,10 @@ public sealed class NpgsqlJobCleanerTests(PostgresFixture db) : IClassFixture<Po
         {
             // Many election attempts as a follower: nothing is deleted.
             await Task.Delay(TimeSpan.FromSeconds(1.5), Ct);
-            Assert.Equal("someone-else", await LeaderAsync(ds, schema));
+            Assert.Equal("someone-else", await schema.LeaderAsync(Ct));
             Assert.Equal([.. expired, .. kept], await PresentAsync(executor, [.. expired, .. kept]));
 
-            await using (var cmd = ds.CreateCommand($"DELETE FROM {schema}.river_leader"))
-            {
-                await cmd.ExecuteNonQueryAsync(Ct);
-            }
+            await schema.DeleteLeaderAsync(Ct);
 
             var deadline = DateTime.UtcNow.AddSeconds(10);
             while ((await PresentAsync(executor, expired)).Count > 0)
@@ -59,7 +50,7 @@ public sealed class NpgsqlJobCleanerTests(PostgresFixture db) : IClassFixture<Po
                 await Task.Delay(50, Ct);
             }
 
-            Assert.Equal("follower", await LeaderAsync(ds, schema));
+            Assert.Equal("follower", await schema.LeaderAsync(Ct));
             Assert.Equal(kept, await PresentAsync(executor, kept));
         }
         finally
@@ -71,9 +62,8 @@ public sealed class NpgsqlJobCleanerTests(PostgresFixture db) : IClassFixture<Po
     [Fact]
     public async Task An_insert_only_client_deletes_nothing()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, schema) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var executor = driver.GetExecutor();
         var expired = await FinalizedAsync(executor, JobState.Completed, TimeSpan.FromDays(2));
 
@@ -84,7 +74,7 @@ public sealed class NpgsqlJobCleanerTests(PostgresFixture db) : IClassFixture<Po
             await Task.Delay(TimeSpan.FromSeconds(1), Ct);
 
             Assert.NotNull(await executor.JobGetByIdAsync(expired, Ct));
-            Assert.Null(await LeaderAsync(ds, schema));
+            Assert.Null(await schema.LeaderAsync(Ct));
         }
         finally
         {
@@ -95,9 +85,8 @@ public sealed class NpgsqlJobCleanerTests(PostgresFixture db) : IClassFixture<Po
     [Fact]
     public async Task With_no_retention_the_leader_keeps_every_finalised_job()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, schema) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var executor = driver.GetExecutor();
         long[] ancient =
         [
@@ -109,12 +98,7 @@ public sealed class NpgsqlJobCleanerTests(PostgresFixture db) : IClassFixture<Po
         var client = await StartedAsync(driver, "keeper", keepAll: true);
         try
         {
-            var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (await LeaderAsync(ds, schema) is null)
-            {
-                Assert.True(DateTime.UtcNow < deadline, "The client did not become leader.");
-                await Task.Delay(50, Ct);
-            }
+            await schema.WaitForLeaderAsync(l => l is not null, TimeSpan.FromSeconds(5), Ct);
 
             await Task.Delay(TimeSpan.FromSeconds(1), Ct);
             Assert.Equal(ancient, await PresentAsync(executor, ancient));
@@ -128,33 +112,26 @@ public sealed class NpgsqlJobCleanerTests(PostgresFixture db) : IClassFixture<Po
     [Fact]
     public async Task Deleting_a_completed_unique_job_frees_its_slot_for_a_duplicate()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, schema) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var executor = driver.GetExecutor();
 
         // Unique inserts arrive with M4 (#42), so the keys are set directly; the pinned schema's unique index enforces them.
         var completed = await FinalizedAsync(executor, JobState.Completed, TimeSpan.FromDays(2));
-        await SetUniqueAsync(ds, schema, completed);
+        await SetUniqueAsync(schema, completed);
         var duplicate = (await executor.JobInsertManyAsync([Job("cleaner_work")], Ct)).Single().Job.Id;
 
-        var taken = await Assert.ThrowsAsync<PostgresException>(() => SetUniqueAsync(ds, schema, duplicate));
-        Assert.Equal(PostgresErrorCodes.UniqueViolation, taken.SqlState); // the completed job holds the slot
+        var taken = await Assert.ThrowsAnyAsync<Exception>(() => SetUniqueAsync(schema, duplicate));
+        Assert.True(schema.IsUniqueViolation(taken), taken.Message); // the completed job holds the slot
 
         Assert.Equal([completed], await executor.JobDeleteFinalizedAsync(new JobDeleteFinalizedParams { CompletedRetention = TimeSpan.FromDays(1), Max = 10 }, Ct));
 
-        await SetUniqueAsync(ds, schema, duplicate);
+        await SetUniqueAsync(schema, duplicate);
     }
 
     /// <summary>Gives job <paramref name="id"/> a fixed unique key under the default unique states (design §5.6), which include completed.</summary>
-    private static async Task SetUniqueAsync(NpgsqlDataSource ds, string schema, long id)
-    {
-        await using var cmd = ds.CreateCommand($"UPDATE {schema}.river_job SET unique_key = $2, unique_states = $3::bit(8) WHERE id = $1");
-        cmd.Parameters.Add(new NpgsqlParameter { Value = id });
-        cmd.Parameters.Add(new NpgsqlParameter { Value = new byte[] { 1, 2, 3, 4 } });
-        cmd.Parameters.Add(new NpgsqlParameter { Value = "11110101" });
-        Assert.Equal(1, await cmd.ExecuteNonQueryAsync(Ct));
-    }
+    private static Task SetUniqueAsync(IntegrationSchema schema, long id) =>
+        schema.SetUniqueAsync(id, [.. Enumerable.Range(1, 32).Select(i => (byte)i)], 0b1111_0101, Ct);
 
     private static async Task<KopiClient> StartedAsync(IKopiDriver driver, string clientId, bool keepAll = false)
     {
@@ -205,25 +182,6 @@ public sealed class NpgsqlJobCleanerTests(PostgresFixture db) : IClassFixture<Po
         }
 
         return present;
-    }
-
-    private static async Task<string?> LeaderAsync(NpgsqlDataSource ds, string schema)
-    {
-        await using var cmd = ds.CreateCommand($"SELECT leader_id FROM {schema}.river_leader");
-        return await cmd.ExecuteScalarAsync(Ct) as string;
-    }
-
-    private static async Task<(IKopiDriver Driver, string Schema)> MigratedAsync(NpgsqlDataSource ds)
-    {
-        var schema = "c_" + Guid.NewGuid().ToString("N")[..12];
-        await using (var cmd = ds.CreateCommand($"CREATE SCHEMA {schema}"))
-        {
-            await cmd.ExecuteNonQueryAsync(Ct);
-        }
-
-        var driver = new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = schema });
-        await driver.CreateMigrator().MigrateAsync(MigrationDirection.Up, cancellationToken: Ct);
-        return (driver, schema);
     }
 
     [JobKind("cleaner_job")]

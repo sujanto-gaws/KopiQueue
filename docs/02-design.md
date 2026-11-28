@@ -1533,7 +1533,21 @@ As built in plan task 5.6. Each statement has the semantics of its PostgreSQL co
   - **Timing:** two tests that a loaded CI runner tripped get more room. The queue-retention case now waits 3.5 s against a 3 s retention, and the poll-only cancel allows 5 s against 1 s polls.
 - **Maintenance host (task 3.2, FR-MNT-07):** `MaintenanceHostTests` (fake services and clock: only while leading, full batches repeat at once, partial ones wait the interval, ±10% jitter, failures retried, a batch in progress is cancelled and awaited on losing leadership, leading again restarts) and an elector case showing maintenance stops before a failing leader's lease could pass to another client.
 - **Leader election (task 3.1, FR-MNT-01):** `ElectorTests` (fake lease and clock: winning, renewing, stepping down before the lease can pass on, resigning, waking on another client's resignation), conformance cases for the three lease operations, `NpgsqlLeadershipTests` (several clients, handover through the resignation in both notification modes, takeover after a crashed leader's lease expires, insert-only clients never compete), `NpgsqlLeaderKillTests` (M3's exit criterion with real processes: three `KopiQueue.TestNode` clients, the leader's process killed outright; the lease stays with it until it expires, then a survivor takes over within the TTL plus a few seconds, deletes an abandoned queue as the new leader, and the survivors work every job inserted after the kill); until 36f3d90, two River interop cases also checked that neither library takes the other's lease and each takes over when the other resigns.
-- SQL Server joins when its driver lands (M3). PostgreSQL-specific behaviour (River catalog equality, `pg_notify`, `COPY` details, constraint names) stays in `KopiQueue.Npgsql.Tests`.
+- **SQL Server** runs the conformance suite three ways (task 5.8): with READ_COMMITTED_SNAPSHOT off, with it on, and with SNAPSHOT on callers' transactions and pooled sessions. PostgreSQL-specific behaviour (River catalog equality, `pg_notify`, `COPY` details, constraint names) stays in `KopiQueue.Npgsql.Tests`, and SQL Server's (applocks, `unique_slot`, plan shapes) in `KopiQueue.SqlServer.Tests`.
+- **Shared client integration suites (task 5.8, FR-DB-06).** They live in `tests/KopiQueue.TestInfrastructure/Integration`, and run working clients end to end on each driver.
+  - **What a driver supplies:** an `IntegrationFixture` that creates a fresh migrated schema per test. Its `IntegrationSchema` adds the few typed helpers no executor operation provides:
+    - planting, deleting and reading the leader row;
+    - inserting an aged or paused queue row, and holding one locked;
+    - setting and reading a job's unique key and states;
+    - marking `cancel_attempted_at` directly;
+    - the database's clock;
+    - recognising a unique violation.
+  - **Reads:** everything else, including counts, goes through the driver's own executor. The SQL Server fixture's database has READ_COMMITTED_SNAPSHOT on, so those reads don't wait on running clients, as on PostgreSQL.
+  - **The suites** are those of tasks 2.3–2.9, 3.1, 3.3–3.7, 4.2–4.4: `ClientIntegrationTests`, `ClientLifecycleTests`, `ExecutionTests`, `ProducerIntegrationTests`, `LeadershipTests`, `SchedulerTests`, `RescuerTests`, `JobCleanerTests`, `QueueCleanerTests`, `QueuePauseTests`, `CancelTests`, `AdminTests`, `PeriodicTests` and `UniqueTests`. That's 62 cases.
+  - **On PostgreSQL**, each keeps the class name its tests had before (`NpgsqlClientIntegrationTests` and so on, as named above). `NpgsqlSchedulerTests`, `NpgsqlRescuerTests` and `NpgsqlUniqueTests` add their PostgreSQL-only cases to the shared ones: insert notifications on commit, and a River-inserted unique duplicate.
+  - **On SQL Server**, the classes are `SqlServer*Tests`; the unique suite is `SqlServerClientUniqueTests`, next to the driver's own `SqlServerUniqueTests`.
+  - **Without notifications:** four cases need LISTEN/NOTIFY and skip on SQL Server. They are the notification pick-up of a producer and of a client, the 20 s-interval leader handover and the notified cancel. Each has a poll-only counterpart that runs.
+  - **Still PostgreSQL-only:** the insert notification tests (`KopiClientInsertTests`), the insert-only client's sessions (`pg_stat_activity`), jsonb args formatting, `NpgsqlLeaderKillTests` (its `KopiQueue.TestNode` is built on Npgsql) and the hosting tests, which move with `UseSqlServer` in part 3.
 
 ## 12. Decision log (ADRs)
 

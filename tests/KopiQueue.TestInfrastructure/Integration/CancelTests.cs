@@ -1,18 +1,17 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using KopiQueue.Drivers;
-using KopiQueue.Migrations;
-using KopiQueue.TestInfrastructure;
-using Npgsql;
+using Xunit;
 
-namespace KopiQueue.Npgsql.Tests;
+namespace KopiQueue.TestInfrastructure.Integration;
 
 /// <summary>
-/// External cancel on a real PostgreSQL (plan task 3.7: FR-ERR-06, FR-ADM-05, FR-DB-05; design §5.8): a cancel reaches a
+/// External cancel on a real database (plan task 3.7: FR-ERR-06, FR-ADM-05, FR-DB-05; design §5.8): a cancel reaches a
 /// job running on another client through the notification or, without notifications, within the poll interval; the
 /// transactional variant waits for commit; and the worker's outcome decides how the job ends.
 /// </summary>
-public sealed class NpgsqlCancelTests(PostgresFixture db) : IClassFixture<PostgresFixture>
+public abstract class CancelTests<TFixture>(TFixture db)
+    where TFixture : IntegrationFixture
 {
     private const string Queue = "cancel_work";
 
@@ -21,9 +20,9 @@ public sealed class NpgsqlCancelTests(PostgresFixture db) : IClassFixture<Postgr
     [Fact]
     public async Task A_cancel_reaches_a_job_running_on_another_client_through_the_notification_and_cancels_it()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        Assert.SkipUnless(db.HasNotifications, "The driver has no notifications: the poll-only test covers it.");
+        var driver = schema.Driver;
         var worker = new CancelWorker();
         var working = await StartedAsync(driver, worker, NotificationMode.Auto, TimeSpan.FromSeconds(5)); // polls far too rarely to matter
         try
@@ -54,9 +53,8 @@ public sealed class NpgsqlCancelTests(PostgresFixture db) : IClassFixture<Postgr
     [Fact]
     public async Task Without_notifications_a_cancel_reaches_a_job_on_another_client_within_the_poll_interval()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var worker = new CancelWorker();
         var working = await StartedAsync(driver, worker, NotificationMode.PollOnly, TimeSpan.FromSeconds(1));
         try
@@ -81,9 +79,8 @@ public sealed class NpgsqlCancelTests(PostgresFixture db) : IClassFixture<Postgr
     [Fact]
     public async Task A_client_cancelling_a_job_it_runs_itself_cancels_it_at_once_even_without_notifications()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var worker = new CancelWorker();
         var working = await StartedAsync(driver, worker, NotificationMode.PollOnly, TimeSpan.FromSeconds(10));
         try
@@ -106,9 +103,8 @@ public sealed class NpgsqlCancelTests(PostgresFixture db) : IClassFixture<Postgr
     [Fact]
     public async Task A_cancel_in_a_transaction_has_no_effect_until_it_commits_and_none_after_a_rollback()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var worker = new CancelWorker();
         var working = await StartedAsync(driver, worker, NotificationMode.Auto, TimeSpan.FromSeconds(1));
         try
@@ -118,9 +114,9 @@ public sealed class NpgsqlCancelTests(PostgresFixture db) : IClassFixture<Postgr
             var later = (await admin.InsertAsync(new CancelArgs("wait"), new InsertOptions { Queue = Queue, ScheduledAt = DateTimeOffset.UtcNow.AddHours(1) }, Ct)).Job;
             await worker.Started(running.Id).WaitAsync(TimeSpan.FromSeconds(5), Ct);
 
-            await using (var connection = await ds.OpenConnectionAsync(Ct))
-            await using (var rolledBack = await connection.BeginTransactionAsync(Ct))
+            await using (var caller = await schema.BeginTransactionAsync(Ct))
             {
+                var rolledBack = caller.Transaction;
                 Assert.Equal(JobState.Running, (await admin.JobCancelAsync(running.Id, rolledBack, Ct)).State);
                 Assert.Equal(JobState.Cancelled, (await admin.JobCancelAsync(later.Id, rolledBack, Ct)).State);
                 await Task.Delay(TimeSpan.FromSeconds(1.5), Ct); // a notification and a poll would both have arrived by now
@@ -133,11 +129,10 @@ public sealed class NpgsqlCancelTests(PostgresFixture db) : IClassFixture<Postgr
             Assert.False(worker.TokenCancelled(running.Id));
             Assert.Equal(JobState.Scheduled, (await driver.GetExecutor().JobGetByIdAsync(later.Id, Ct))!.State);
 
-            await using (var connection = await ds.OpenConnectionAsync(Ct))
-            await using (var committed = await connection.BeginTransactionAsync(Ct))
+            await using (var caller = await schema.BeginTransactionAsync(Ct))
             {
-                await admin.JobCancelAsync(running.Id, committed, Ct);
-                await committed.CommitAsync(Ct);
+                await admin.JobCancelAsync(running.Id, caller.Transaction, Ct);
+                await caller.Transaction.CommitAsync(Ct);
             }
 
             await WaitForStateAsync(driver, running.Id, JobState.Cancelled);
@@ -152,9 +147,8 @@ public sealed class NpgsqlCancelTests(PostgresFixture db) : IClassFixture<Postgr
     [Fact]
     public async Task A_worker_that_ignores_the_cancel_and_succeeds_completes_its_job()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var worker = new CancelWorker();
         var working = await StartedAsync(driver, worker, NotificationMode.Auto, TimeSpan.FromSeconds(1));
         try
@@ -180,9 +174,8 @@ public sealed class NpgsqlCancelTests(PostgresFixture db) : IClassFixture<Postgr
     [Fact]
     public async Task Cancelling_jobs_that_have_not_started_finished_or_do_not_exist()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var admin = new KopiClient(driver);
         var waiting = (await admin.InsertAsync(new CancelArgs("wait"), new InsertOptions { Queue = Queue }, Ct)).Job;
 
@@ -232,19 +225,6 @@ public sealed class NpgsqlCancelTests(PostgresFixture db) : IClassFixture<Postgr
             Assert.True(DateTime.UtcNow < deadline, "The condition was not met within 15 s.");
             await Task.Delay(20, Ct);
         }
-    }
-
-    private static async Task<(IKopiDriver Driver, string Schema)> MigratedAsync(NpgsqlDataSource ds)
-    {
-        var schema = "k_" + Guid.NewGuid().ToString("N")[..12];
-        await using (var cmd = ds.CreateCommand($"CREATE SCHEMA {schema}"))
-        {
-            await cmd.ExecuteNonQueryAsync(Ct);
-        }
-
-        var driver = new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = schema });
-        await driver.CreateMigrator().MigrateAsync(MigrationDirection.Up, cancellationToken: Ct);
-        return (driver, schema);
     }
 
     /// <summary>"wait": runs until its token is cancelled, then lets the cancellation escape. "ignore": runs until released.</summary>
