@@ -1,0 +1,121 @@
+using System.Text.RegularExpressions;
+using KopiQueue.Migrations;
+using KopiQueue.SqlServer.Migrations;
+using Microsoft.Data.SqlClient;
+
+namespace KopiQueue.SqlServer.Tests;
+
+/// <summary>Parts of the SQL Server driver that need no database (plan task 5.1).</summary>
+public sealed partial class SqlServerDriverUnitTests
+{
+    [Fact]
+    public void The_main_line_is_embedded_with_one_transactional_version()
+    {
+        var migration = Assert.Single(SqlServerMigrationDriver.MainLine);
+
+        Assert.Equal(("main", 1, "initial schema"), (migration.Line, migration.Version, migration.Name));
+        Assert.True(migration.Up.InTransaction);
+        Assert.True(migration.Down.InTransaction);
+    }
+
+    [Fact]
+    public void Every_name_the_main_line_creates_carries_the_prefix()
+    {
+        // Constraint names are scoped to the schema, so an unprefixed one would stop two prefixes sharing a schema.
+        foreach (var migration in SqlServerMigrationDriver.MainLine)
+        {
+            var names = ObjectName().Matches(migration.Up.Sql).Select(m => m.Groups["name"].Value).ToList();
+
+            Assert.NotEmpty(names);
+            Assert.All(names, name => Assert.StartsWith("{{prefix}}", name, StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void The_main_line_renders_for_a_schema_and_prefix()
+    {
+        foreach (var migration in SqlServerMigrationDriver.MainLine)
+        {
+            foreach (var script in new[] { migration.Up, migration.Down })
+            {
+                // Comments may mention the default prefix; statements may not.
+                var sql = string.Join('\n', MigrationTemplate.Render(script.Sql, "[queue].", "jobs_")
+                    .Split('\n').Where(line => !line.TrimStart().StartsWith("--", StringComparison.Ordinal)));
+
+                Assert.DoesNotContain("{{", sql, StringComparison.Ordinal);
+                Assert.DoesNotContain("kopi_", sql, StringComparison.Ordinal);
+                Assert.Contains("[queue].jobs_job", sql, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public void Scripts_split_into_batches_at_GO_lines()
+    {
+        Assert.Equal(["SELECT 1;\n"], SqlServerMigrationDriver.SplitBatches("SELECT 1;"));
+        Assert.Equal(
+            ["SELECT 1;\n", "CREATE VIEW v AS SELECT 2 AS x;\n", "SELECT 3;\n"],
+            SqlServerMigrationDriver.SplitBatches("SELECT 1;\r\nGO\r\nCREATE VIEW v AS SELECT 2 AS x;\n  go  \nSELECT 3;\nGO\n\nGO"));
+        Assert.Empty(SqlServerMigrationDriver.SplitBatches("\nGO\n  \n"));
+
+        // Only a line of its own is a separator.
+        Assert.Single(SqlServerMigrationDriver.SplitBatches("SELECT 1 AS GO;\nSELECT 'GO';\nGOTO done;\ndone:"));
+    }
+
+    [Fact]
+    public void The_migration_lock_is_keyed_by_schema_and_prefix()
+    {
+        var connections = new SqlServerConnectionFactory("Server=unused");
+
+        Assert.Equal("kopi_migrate:dbo.kopi_", new SqlServerMigrationDriver(connections).LockResource);
+        Assert.Equal("kopi_migrate:queue.jobs_", new SqlServerMigrationDriver(connections, "queue", "jobs_").LockResource);
+        Assert.True(SqlServerMigrationDriver.LockResourceFor(new string('s', 63), new string('p', 32)).Length <= 255);
+    }
+
+    [Fact]
+    public void The_migration_table_is_quoted_and_schema_qualified()
+    {
+        var driver = new SqlServerMigrationDriver(new SqlServerConnectionFactory("Server=unused"), "Queue_1", "kopi_");
+
+        Assert.Equal("[Queue_1].", driver.SchemaQualifier);
+        Assert.Equal("[Queue_1].[kopi_migration]", driver.MigrationTable);
+        Assert.Equal("[a]]b]", SqlServerIdentifiers.Quote("a]b"));
+    }
+
+    [Theory]
+    [InlineData("Server=db;Database=app", "KopiQueue")]
+    [InlineData("Server=db;Database=app;Application Name=Billing", "Billing")]
+    [InlineData("Server=db;Database=app;App=Billing", "Billing")]
+    public void Connections_get_the_KopiQueue_application_name_by_default(string connectionString, string expected)
+    {
+        var factory = new SqlServerConnectionFactory(connectionString);
+
+        Assert.Equal(expected, new SqlConnectionStringBuilder(factory.ConnectionString).ApplicationName);
+    }
+
+    [Fact]
+    public void The_driver_rejects_unsafe_or_missing_options()
+    {
+        Assert.Throws<ArgumentException>(() => new SqlServerDriver("Server=unused", new SqlServerDriverOptions { Schema = "a]; DROP TABLE x; --" }));
+        Assert.Throws<ArgumentException>(() => new SqlServerDriver("Server=unused", new SqlServerDriverOptions { Schema = null! }));
+        Assert.Throws<ArgumentException>(() => new SqlServerDriver("Server=unused", new SqlServerDriverOptions { TablePrefix = "Bad" }));
+        Assert.Throws<ArgumentException>(() => new SqlServerDriver("Server=unused", new SqlServerDriverOptions { TablePrefix = "" }));
+        Assert.ThrowsAny<ArgumentException>(() => new SqlServerDriver(""));
+        Assert.ThrowsAny<ArgumentException>(() => new SqlServerDriver(null!));
+        Assert.ThrowsAny<ArgumentException>(() => new SqlServerDriver("Not a=connection;string=at all;Bogus Keyword=1"));
+    }
+
+    [Fact]
+    public void The_driver_defaults_to_dbo_and_the_kopi_prefix()
+    {
+        var driver = new SqlServerDriver("Server=unused");
+        var migrator = driver.CreateMigrator();
+
+        Assert.Equal(("dbo", "kopi_"), (driver.Schema, driver.TablePrefix));
+        Assert.Equal(("main", 1), (migrator.Line, migrator.LatestVersion));
+    }
+
+    // CONSTRAINT <name> and CREATE [UNIQUE] INDEX <name>: every name the script gives an object of its own.
+    [GeneratedRegex(@"(?:CONSTRAINT|INDEX)\s+(?<name>[^\s(]+)", RegexOptions.CultureInvariant)]
+    private static partial Regex ObjectName();
+}

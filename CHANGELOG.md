@@ -4,6 +4,18 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 
 ## [Unreleased]
 
+### Added
+
+- SQL Server schema and migrations (FR-MIG-01, FR-MIG-02, FR-MIG-05, FR-MIG-06, FR-DB-02), the first part of the SQL Server driver (M5):
+  - **Entry point:** `SqlServerDriver(connectionString, SqlServerDriverOptions)` with `CreateMigrator()`, the same `KopiMigrator` as on PostgreSQL. Insert, fetch and the rest of the driver follow in later M5 tasks.
+  - **Schema:** the `main` line, version 1, creates `kopi_job`, `kopi_leader`, `kopi_queue` and `kopi_migration` (design §4.4). The schema defaults to `dbo` and the prefix to `kopi_`. Two prefixes can share a schema.
+  - **Names compare as on PostgreSQL:** kinds, queues and states are case-sensitive whatever the database's collation.
+  - **Concurrent runs:** they serialise on a session-owned `sp_getapplock` lock for the schema and prefix. Each migration runs in its own transaction with its version row.
+  - **Batches:** a migration script may hold several batches separated by `GO` lines.
+  - **Session check:** every migrator session first checks its SET options and the database's compatibility level (150 or later). It throws `KopiQueueConfigurationException`, naming each wrong setting, instead of failing later on a filtered index.
+  - **Application name:** connections get `Application Name=KopiQueue` unless the connection string names an application.
+  - ([#47](https://github.com/sujanto-gaws/KopiQueue/issues/47))
+
 ## [0.4.0-beta.1] - 2026-11-27
 
 Milestones M2 to M4: execution, leadership and maintenance, unique and periodic jobs, and the admin API. `0.2.0-alpha.1` and `0.3.0-alpha.1` were not released ([#82](https://github.com/sujanto-gaws/KopiQueue/issues/82), [#83](https://github.com/sujanto-gaws/KopiQueue/issues/83)), so this release lists their changes too. Upgrading from 0.1.0-alpha.1: finalised jobs are now deleted after a retention, see the job cleaner below.

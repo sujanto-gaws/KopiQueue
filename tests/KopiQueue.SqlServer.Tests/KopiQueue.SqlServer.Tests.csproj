@@ -16,6 +16,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Migrations\Sql\**\*.sql" LogicalName="kopi-migrations/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
 

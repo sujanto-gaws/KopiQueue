@@ -1,1 +1,12 @@
 #nullable enable
+KopiQueue.SqlServer.SqlServerDriver
+KopiQueue.SqlServer.SqlServerDriver.CreateMigrator(Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null) -> KopiQueue.Migrations.KopiMigrator!
+KopiQueue.SqlServer.SqlServerDriver.Schema.get -> string!
+KopiQueue.SqlServer.SqlServerDriver.SqlServerDriver(string! connectionString, KopiQueue.SqlServer.SqlServerDriverOptions? options = null) -> void
+KopiQueue.SqlServer.SqlServerDriver.TablePrefix.get -> string!
+KopiQueue.SqlServer.SqlServerDriverOptions
+KopiQueue.SqlServer.SqlServerDriverOptions.Schema.get -> string!
+KopiQueue.SqlServer.SqlServerDriverOptions.Schema.init -> void
+KopiQueue.SqlServer.SqlServerDriverOptions.SqlServerDriverOptions() -> void
+KopiQueue.SqlServer.SqlServerDriverOptions.TablePrefix.get -> string!
+KopiQueue.SqlServer.SqlServerDriverOptions.TablePrefix.init -> void
