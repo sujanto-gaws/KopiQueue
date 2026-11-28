@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Macro benchmarks against a real database (design §11 "Benchmarks", plan task 5.9). See README.md. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- KQ0001: the benchmarks call the experimental driver API directly. CA2007: no synchronisation context here. -->
+    <NoWarn>$(NoWarn);KQ0001;CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\KopiQueue\KopiQueue.csproj" />
+    <ProjectReference Include="..\..\src\KopiQueue.SqlServer\KopiQueue.SqlServer.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -84,8 +84,12 @@ CREATE INDEX {{prefix}}job_finalized_idx ON {{schema}}{{prefix}}job (state, fina
 
 CREATE INDEX {{prefix}}job_kind_idx ON {{schema}}{{prefix}}job (kind);
 
--- Uniqueness. No filter is needed: a job that does not hold its key has unique_slot = id.
-CREATE UNIQUE INDEX {{prefix}}job_unique_idx ON {{schema}}{{prefix}}job (unique_key, unique_slot);
+-- Uniqueness: a job that does not hold its key has unique_slot = id, so the index allows any number of those. Only jobs
+-- with a key are indexed. unique_slot depends on state, so an unfiltered index would delete and insert an entry for
+-- every job at every state change: on a fetch or a complete, about 6 logical reads a job (plan task 5.9). Lookups name
+-- unique_key IS NOT NULL, which lets them seek this index.
+CREATE UNIQUE INDEX {{prefix}}job_unique_idx ON {{schema}}{{prefix}}job (unique_key, unique_slot)
+  WHERE unique_key IS NOT NULL;
 
 -- One row while a client leads. An ordinary table: it is written about every 5 s, so logging costs nothing worth saving.
 CREATE TABLE {{schema}}{{prefix}}leader (

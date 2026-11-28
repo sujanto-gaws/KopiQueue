@@ -20,7 +20,8 @@ FROM OPENJSON(@jobs) WITH (uk char(64) '$.uk') AS i
 JOIN {{schema}}{{prefix}}job AS j WITH (READCOMMITTEDLOCK, FORCESEEK ({{prefix}}job_unique_idx (unique_key, unique_slot)))
     ON j.unique_key = CONVERT(varbinary(32), i.uk, 2)
    AND j.unique_slot = 0
-WHERE i.uk IS NOT NULL;
+WHERE i.uk IS NOT NULL
+  AND j.unique_key IS NOT NULL; -- the unique index's filter, which FORCESEEK needs stated
 
 INSERT INTO {{schema}}{{prefix}}job (
     args, created_at, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states
