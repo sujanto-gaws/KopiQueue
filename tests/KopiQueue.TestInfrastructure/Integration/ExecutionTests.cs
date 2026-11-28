@@ -1,27 +1,25 @@
 using System.Collections.Concurrent;
 using KopiQueue.Drivers;
 using KopiQueue.Execution;
-using KopiQueue.Migrations;
 using KopiQueue.Serialization;
-using KopiQueue.TestInfrastructure;
-using Npgsql;
+using Xunit;
 
-namespace KopiQueue.Npgsql.Tests;
+namespace KopiQueue.TestInfrastructure.Integration;
 
 /// <summary>
-/// Producer, executor and completer together on a real PostgreSQL: jobs run and their outcomes are stored as River
+/// Producer, executor and completer together on a real database: jobs run and their outcomes are stored as River
 /// stores them (plan tasks 2.3–2.6: FR-EXE-01..08, FR-ERR-01..04, NFR-REL-03).
 /// </summary>
-public sealed class NpgsqlExecutionTests(PostgresFixture db) : IClassFixture<PostgresFixture>
+public abstract class ExecutionTests<TFixture>(TFixture db)
+    where TFixture : IntegrationFixture
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task Jobs_run_and_every_outcome_is_stored()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, schema) = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var client = new KopiClient(driver);
         var ids = new Dictionary<string, long>();
         foreach (var what in new[] { "complete", "fail", "fail-last", "snooze", "cancel" })
@@ -52,23 +50,24 @@ public sealed class NpgsqlExecutionTests(PostgresFixture db) : IClassFixture<Pos
         var snooze = await GetAsync(driver, ids["snooze"]);
         Assert.Equal((JobState.Scheduled, 0), (snooze.State, snooze.Attempt));
         Assert.Empty(snooze.Errors);
-        Assert.Contains("\"snoozes\": 1", snooze.MetadataJson, StringComparison.Ordinal);
+        using (var metadata = System.Text.Json.JsonDocument.Parse(snooze.MetadataJson))
+        {
+            Assert.Equal(1, metadata.RootElement.GetProperty("snoozes").GetInt32()); // compared as JSON: drivers space it differently
+        }
         Assert.InRange(snooze.ScheduledAt - DateTimeOffset.UtcNow, TimeSpan.FromMinutes(9), TimeSpan.FromMinutes(11));
 
         var cancel = await GetAsync(driver, ids["cancel"]);
         Assert.Equal(JobState.Cancelled, cancel.State);
         Assert.Equal("no longer wanted", Assert.Single(cancel.Errors).Error);
 
-        await using var cmd = ds.CreateCommand($"SELECT count(*) FROM {schema}.river_job WHERE state = 'running'");
-        Assert.Equal(0L, (long)(await cmd.ExecuteScalarAsync(Ct))!);
+        Assert.Equal(0, await schema.CountAsync(j => j.State == JobState.Running, Ct));
     }
 
     [Fact]
     public async Task A_job_cancelled_from_outside_while_running_ends_cancelled_even_though_its_worker_failed()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, schema) = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var worker = new GatedWorker(started, release);
@@ -76,11 +75,7 @@ public sealed class NpgsqlExecutionTests(PostgresFixture db) : IClassFixture<Pos
 
         await using var pipeline = await Pipeline.StartAsync(driver, new WorkerRegistry().Add(worker));
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
-        await using (var cmd = ds.CreateCommand(
-            $"UPDATE {schema}.river_job SET metadata = metadata || jsonb_build_object('cancel_attempted_at', now()) WHERE id = {id}"))
-        {
-            await cmd.ExecuteNonQueryAsync(Ct);
-        }
+        await schema.MarkCancelAttemptedAsync(id, Ct);
 
         release.SetResult();
         var completed = await pipeline.WaitForAsync(1);
@@ -95,9 +90,8 @@ public sealed class NpgsqlExecutionTests(PostgresFixture db) : IClassFixture<Pos
     [Fact]
     public async Task Many_jobs_complete_through_batched_writes()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, schema) = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         const int Jobs = 500;
         await driver.GetExecutor().JobInsertFastAsync(
             [.. Enumerable.Range(0, Jobs).Select(_ => new JobInsertParams
@@ -109,26 +103,12 @@ public sealed class NpgsqlExecutionTests(PostgresFixture db) : IClassFixture<Pos
         await using var pipeline = await Pipeline.StartAsync(driver, new WorkerRegistry().Add(new TaskWorker()), maxWorkers: 50);
         await pipeline.WaitForAsync(Jobs, TimeSpan.FromSeconds(60));
 
-        await using var cmd = ds.CreateCommand($"SELECT count(*) FROM {schema}.river_job WHERE state = 'completed' AND finalized_at IS NOT NULL");
-        Assert.Equal((long)Jobs, (long)(await cmd.ExecuteScalarAsync(Ct))!);
+        Assert.Equal(Jobs, await schema.CountAsync(j => j.State == JobState.Completed && j.FinalizedAt is not null, Ct));
         Assert.True(pipeline.Batches < Jobs / 2, $"{pipeline.Batches} writes for {Jobs} jobs: completions were not batched.");
     }
 
     private static async Task<JobRow> GetAsync(IKopiDriver driver, long id) =>
         await driver.GetExecutor().JobGetByIdAsync(id, Ct) ?? throw new InvalidOperationException($"Job {id} is missing.");
-
-    private static async Task<(IKopiDriver Driver, string Schema)> MigratedAsync(NpgsqlDataSource ds)
-    {
-        var schema = "x_" + Guid.NewGuid().ToString("N")[..12];
-        await using (var cmd = ds.CreateCommand($"CREATE SCHEMA {schema}"))
-        {
-            await cmd.ExecuteNonQueryAsync(Ct);
-        }
-
-        var driver = new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = schema });
-        await driver.CreateMigrator().MigrateAsync(MigrationDirection.Up, cancellationToken: Ct);
-        return (driver, schema);
-    }
 
     [JobKind("task")]
     public sealed record TaskArgs(string What) : IJobArgs;

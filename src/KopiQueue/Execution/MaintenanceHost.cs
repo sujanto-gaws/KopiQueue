@@ -161,8 +161,9 @@ internal sealed partial class MaintenanceHost : IAsyncDisposable
 
                 wait = handled >= service.BatchSize ? TimeSpan.Zero : Jittered(service.Interval);
             }
-            catch (OperationCanceledException) when (stop.IsCancellationRequested)
+            catch (Exception) when (stop.IsCancellationRequested)
             {
+                // A provider can report a command the stop cancelled as its own error (SqlClient: a SqlException), not a cancellation.
                 return;
             }
             catch (Exception e)

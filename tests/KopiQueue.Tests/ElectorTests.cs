@@ -158,6 +158,25 @@ public sealed class ElectorTests
     }
 
     [Fact]
+    public async Task Stopping_during_a_renewal_whose_cancellation_fails_as_a_provider_error_still_resigns()
+    {
+        // SqlClient can report a command cancelled by the stop as a SqlException, not an OperationCanceledException.
+        var (lease, time) = Lease();
+        await using var elector = Elector(lease, time);
+        await elector.StartAsync(Ct);
+        await AdvanceUntil(time, () => elector.IsLeader);
+        (lease.RenewalsHang, lease.CancelsAsProviderErrors) = (true, true);
+        var renewals = lease.Renewals;
+        await Settle(time, Interval + Step); // the next renewal is now in flight
+
+        await elector.StopAsync(Ct).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        Assert.Equal(renewals, lease.Renewals); // the hanging renewal never finished
+        Assert.Null(lease.Holder);
+        Assert.False(elector.IsLeader);
+    }
+
+    [Fact]
     public async Task Stopping_a_follower_resigns_nothing()
     {
         var (lease, time) = Lease();
@@ -343,6 +362,9 @@ public sealed class ElectorTests
 
         public volatile bool RenewalsHang;
 
+        /// <summary>A hanging renewal that is cancelled fails with a provider error, as SqlClient's can, not a cancellation.</summary>
+        public volatile bool CancelsAsProviderErrors;
+
         public Action? OnResign { get; set; }
 
         public DriverCapabilities Capabilities { get; } = new() { ListenNotify = true, BulkCopy = false };
@@ -388,7 +410,14 @@ public sealed class ElectorTests
         {
             if (RenewalsHang)
             {
-                await Task.Delay(Timeout.Infinite, cancellationToken);
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                }
+                catch (OperationCanceledException) when (CancelsAsProviderErrors)
+                {
+                    throw new DbExceptionStub("A severe error occurred on the current command.");
+                }
             }
 
             if (DatabaseDown)

@@ -168,8 +168,9 @@ internal abstract partial class JobCompleter : IJobCompleter, IStartStopService,
                 Report(batch, rows);
                 return true;
             }
-            catch (OperationCanceledException) when (Abort.IsCancellationRequested)
+            catch (Exception) when (Abort.IsCancellationRequested)
             {
+                // A provider can report a command the stop cancelled as its own error (SqlClient: a SqlException), not a cancellation.
                 LogAbandoned(batch.Count);
                 return false;
             }

@@ -2,17 +2,16 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using KopiQueue.Drivers;
 using KopiQueue.Execution;
-using KopiQueue.Migrations;
-using KopiQueue.TestInfrastructure;
-using Npgsql;
+using Xunit;
 
-namespace KopiQueue.Npgsql.Tests;
+namespace KopiQueue.TestInfrastructure.Integration;
 
 /// <summary>
-/// Producers fetching from a real PostgreSQL, woken by notifications, by their own client, or by the poll timer (plan
+/// Producers fetching from a real database, woken by notifications, by their own client, or by the poll timer (plan
 /// task 2.3: FR-EXE-01, FR-EXE-03, FR-EXE-04).
 /// </summary>
-public sealed class NpgsqlProducerTests(PostgresFixture db) : IClassFixture<PostgresFixture>
+public abstract class ProducerIntegrationTests<TFixture>(TFixture db)
+    where TFixture : IntegrationFixture
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
 
@@ -24,9 +23,9 @@ public sealed class NpgsqlProducerTests(PostgresFixture db) : IClassFixture<Post
     [Fact]
     public async Task An_insert_notification_from_another_client_wakes_the_producer()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        Assert.SkipUnless(db.HasNotifications, "The driver has no notifications.");
+        var driver = schema.Driver;
         var started = new ConcurrentQueue<JobRow>();
         await using var notifier = new Notifier(driver.CreateListener()!);
         await using var producer = new Producer(driver, Options("email", NoPoll), Record(started), notifier: notifier);
@@ -48,9 +47,8 @@ public sealed class NpgsqlProducerTests(PostgresFixture db) : IClassFixture<Post
     [Fact]
     public async Task An_insert_by_its_own_client_wakes_the_producer_without_notifications()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var client = new KopiClient(driver);
         var started = new ConcurrentQueue<JobRow>();
         await using var producer = new Producer(driver, Options("email", NoPoll), Record(started), localWaker: client.LocalWaker);
@@ -66,9 +64,8 @@ public sealed class NpgsqlProducerTests(PostgresFixture db) : IClassFixture<Post
     [Fact]
     public async Task Poll_only_producers_pick_up_jobs_at_the_poll_interval()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var started = new ConcurrentQueue<JobRow>();
         await using var producer = new Producer(driver, Options("email", TimeSpan.FromMilliseconds(200)), Record(started));
         await producer.StartAsync(Ct);
@@ -85,9 +82,8 @@ public sealed class NpgsqlProducerTests(PostgresFixture db) : IClassFixture<Post
     [Fact]
     public async Task Producers_of_several_clients_share_a_queue_without_running_a_job_twice()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, schema) = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         const int Jobs = 400;
         var started = new ConcurrentQueue<JobRow>();
         var peaks = new int[3];
@@ -132,8 +128,7 @@ public sealed class NpgsqlProducerTests(PostgresFixture db) : IClassFixture<Post
         Assert.All(peaks, peak => Assert.InRange(peak, 0, 5)); // never more than MaxWorkers at once per client
         Assert.All(started, j => Assert.Equal(1, j.Attempt));
         Assert.True(started.Select(j => j.AttemptedBy[0]).Distinct().Count() > 1, "One client took every job.");
-        await using var cmd = ds.CreateCommand($"SELECT count(*) FROM {schema}.river_job WHERE state = 'running' AND attempt = 1 AND cardinality(attempted_by) = 1");
-        Assert.Equal(Jobs, (long)(await cmd.ExecuteScalarAsync(Ct))!);
+        Assert.Equal(Jobs, await schema.CountAsync(j => j.State == JobState.Running && j.Attempt == 1 && j.AttemptedBy.Count == 1, Ct));
     }
 
     private static ProducerOptions Options(string queue, TimeSpan poll) =>
@@ -164,19 +159,6 @@ public sealed class NpgsqlProducerTests(PostgresFixture db) : IClassFixture<Post
             Assert.True(DateTime.UtcNow < deadline, "The condition was not met in time.");
             await Task.Delay(10, Ct);
         }
-    }
-
-    private static async Task<(IKopiDriver Driver, string Schema)> MigratedAsync(NpgsqlDataSource ds)
-    {
-        var schema = "p_" + Guid.NewGuid().ToString("N")[..12];
-        await using (var cmd = ds.CreateCommand($"CREATE SCHEMA {schema}"))
-        {
-            await cmd.ExecuteNonQueryAsync(Ct);
-        }
-
-        var driver = new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = schema });
-        await driver.CreateMigrator().MigrateAsync(MigrationDirection.Up, cancellationToken: Ct);
-        return (driver, schema);
     }
 
     [JobKind("email_send")]

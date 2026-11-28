@@ -390,8 +390,9 @@ internal sealed partial class Producer : IStartStopService, IAsyncDisposable
                     Wake();
                 }
             }
-            catch (OperationCanceledException) when (stop.IsCancellationRequested || _hardStop.IsCancellationRequested)
+            catch (Exception) when (stop.IsCancellationRequested || _hardStop.IsCancellationRequested)
             {
+                // A provider can report a command the stop cancelled as its own error (SqlClient: a SqlException), not a cancellation.
                 break;
             }
 #pragma warning disable CA1031 // A failed fetch (for example the database is down) must not end the loop: poll again.

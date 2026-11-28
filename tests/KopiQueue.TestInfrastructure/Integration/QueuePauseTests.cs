@@ -1,17 +1,16 @@
 using System.Text.Json.Nodes;
 using KopiQueue.Drivers;
-using KopiQueue.Migrations;
-using KopiQueue.TestInfrastructure;
-using Npgsql;
+using Xunit;
 
-namespace KopiQueue.Npgsql.Tests;
+namespace KopiQueue.TestInfrastructure.Integration;
 
 /// <summary>
-/// Queues on a real PostgreSQL (plan task 3.6: FR-QUE-02..04, FR-ADM-04): clients create their queues' rows, a pause
+/// Queues on a real database (plan task 3.6: FR-QUE-02..04, FR-ADM-04): clients create their queues' rows, a pause
 /// reaches listening and polling clients alike while running jobs finish, a queue paused before a client starts is never
 /// fetched, a local pause stops only its client, and the queue admin API reads, lists and updates queues.
 /// </summary>
-public sealed class NpgsqlQueuePauseTests(PostgresFixture db) : IClassFixture<PostgresFixture>
+public abstract class QueuePauseTests<TFixture>(TFixture db)
+    where TFixture : IntegrationFixture
 {
     private const string Queue = "pausable";
 
@@ -20,9 +19,8 @@ public sealed class NpgsqlQueuePauseTests(PostgresFixture db) : IClassFixture<Po
     [Fact]
     public async Task The_queue_api_reads_lists_and_updates_the_queues_clients_create()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, _) = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var worker = new PauseWorker();
         var client = await StartedAsync(driver, worker, "lister", NotificationMode.Auto, queues: ["q_a", "q_b", "q_c"]);
         try
@@ -59,9 +57,8 @@ public sealed class NpgsqlQueuePauseTests(PostgresFixture db) : IClassFixture<Po
     [InlineData(NotificationMode.PollOnly)]
     public async Task A_pause_reaches_every_client_within_the_poll_interval_and_running_jobs_finish(NotificationMode mode)
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, schema) = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var worker = new PauseWorker();
         var one = await StartedAsync(driver, worker, "one", mode);
         var two = await StartedAsync(driver, worker, "two", mode);
@@ -79,15 +76,15 @@ public sealed class NpgsqlQueuePauseTests(PostgresFixture db) : IClassFixture<Po
             }
 
             await Task.Delay(TimeSpan.FromSeconds(2.5), Ct);
-            Assert.Equal(4, await CountAsync(ds, schema, "available"));
+            Assert.Equal(4, await schema.CountAsync(j => j.State == JobState.Available, Ct));
 
             worker.Release.SetResult(); // the job running when the queue paused still finishes
-            await WaitForAsync(ds, schema, "completed", 1);
+            await schema.WaitForCountAsync(j => j.State == JobState.Completed, 1, TimeSpan.FromSeconds(15), Ct);
             Assert.Equal(JobState.Completed, (await driver.GetExecutor().JobGetByIdAsync(slow.Job.Id, Ct))!.State);
-            Assert.Equal(4, await CountAsync(ds, schema, "available"));
+            Assert.Equal(4, await schema.CountAsync(j => j.State == JobState.Available, Ct));
 
             await admin.QueueResumeAsync(Queue, cancellationToken: Ct);
-            await WaitForAsync(ds, schema, "completed", 5);
+            await schema.WaitForCountAsync(j => j.State == JobState.Completed, 5, TimeSpan.FromSeconds(15), Ct);
         }
         finally
         {
@@ -100,13 +97,9 @@ public sealed class NpgsqlQueuePauseTests(PostgresFixture db) : IClassFixture<Po
     [Fact]
     public async Task A_queue_paused_before_a_client_starts_is_never_fetched()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, schema) = await MigratedAsync(ds);
-        await using (var cmd = ds.CreateCommand($"INSERT INTO {schema}.river_queue (name, paused_at, updated_at) VALUES ('{Queue}', now(), now())"))
-        {
-            await cmd.ExecuteNonQueryAsync(Ct);
-        }
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
+        await schema.InsertQueueAsync(Queue, TimeSpan.Zero, paused: true, Ct);
 
         var admin = new KopiClient(driver);
         await admin.InsertAsync(new PauseArgs("ok"), new InsertOptions { Queue = Queue }, Ct);
@@ -114,10 +107,10 @@ public sealed class NpgsqlQueuePauseTests(PostgresFixture db) : IClassFixture<Po
         try
         {
             await Task.Delay(TimeSpan.FromSeconds(2.5), Ct);
-            Assert.Equal(1, await CountAsync(ds, schema, "available"));
+            Assert.Equal(1, await schema.CountAsync(j => j.State == JobState.Available, Ct));
 
             await admin.QueueResumeAsync(Queue, cancellationToken: Ct);
-            await WaitForAsync(ds, schema, "completed", 1);
+            await schema.WaitForCountAsync(j => j.State == JobState.Completed, 1, TimeSpan.FromSeconds(15), Ct);
         }
         finally
         {
@@ -128,9 +121,8 @@ public sealed class NpgsqlQueuePauseTests(PostgresFixture db) : IClassFixture<Po
     [Fact]
     public async Task A_local_pause_stops_only_its_own_client()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var (driver, schema) = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var worker = new PauseWorker();
         var one = await StartedAsync(driver, worker, "one", NotificationMode.Auto);
         var two = await StartedAsync(driver, worker, "two", NotificationMode.Auto);
@@ -144,19 +136,19 @@ public sealed class NpgsqlQueuePauseTests(PostgresFixture db) : IClassFixture<Po
                 await one.InsertAsync(new PauseArgs("ok"), new InsertOptions { Queue = Queue }, Ct);
             }
 
-            await WaitForAsync(ds, schema, "completed", 6);
-            Assert.Equal(["two"], await AttemptedByAsync(ds, schema));
+            await schema.WaitForCountAsync(j => j.State == JobState.Completed, 6, TimeSpan.FromSeconds(15), Ct);
+            Assert.Equal(["two"], await AttemptedByAsync(schema));
             Assert.Null((await one.QueueGetAsync(Queue, Ct))!.PausedAt); // nothing stored
 
             await two.QueuePauseAsync(Queue, local, Ct);
             await Task.Delay(200, Ct);
             await one.InsertAsync(new PauseArgs("ok"), new InsertOptions { Queue = Queue }, Ct);
             await Task.Delay(TimeSpan.FromSeconds(2.5), Ct);
-            Assert.Equal(1, await CountAsync(ds, schema, "available"));
+            Assert.Equal(1, await schema.CountAsync(j => j.State == JobState.Available, Ct));
 
             await one.QueueResumeAsync(Queue, local, Ct);
-            await WaitForAsync(ds, schema, "completed", 7);
-            Assert.Equal(["one", "two"], await AttemptedByAsync(ds, schema));
+            await schema.WaitForCountAsync(j => j.State == JobState.Completed, 7, TimeSpan.FromSeconds(15), Ct);
+            Assert.Equal(["one", "two"], await AttemptedByAsync(schema));
             await Assert.ThrowsAsync<KopiQueueNotFoundException>(() => one.QueuePauseAsync("elsewhere", local, Ct));
         }
         finally
@@ -180,47 +172,8 @@ public sealed class NpgsqlQueuePauseTests(PostgresFixture db) : IClassFixture<Po
         return client;
     }
 
-    private static async Task<long> CountAsync(NpgsqlDataSource ds, string schema, string state)
-    {
-        await using var cmd = ds.CreateCommand($"SELECT count(*) FROM {schema}.river_job WHERE state = '{state}'");
-        return (long)(await cmd.ExecuteScalarAsync(Ct))!;
-    }
-
-    private static async Task WaitForAsync(NpgsqlDataSource ds, string schema, string state, long count)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (await CountAsync(ds, schema, state) < count)
-        {
-            Assert.True(DateTime.UtcNow < deadline, $"Fewer than {count} jobs are {state} after 15 s.");
-            await Task.Delay(50, Ct);
-        }
-    }
-
-    private static async Task<List<string>> AttemptedByAsync(NpgsqlDataSource ds, string schema)
-    {
-        await using var cmd = ds.CreateCommand($"SELECT DISTINCT unnest(attempted_by) AS c FROM {schema}.river_job ORDER BY c");
-        var ids = new List<string>();
-        await using var reader = await cmd.ExecuteReaderAsync(Ct);
-        while (await reader.ReadAsync(Ct))
-        {
-            ids.Add(reader.GetString(0));
-        }
-
-        return ids;
-    }
-
-    private static async Task<(IKopiDriver Driver, string Schema)> MigratedAsync(NpgsqlDataSource ds)
-    {
-        var schema = "x_" + Guid.NewGuid().ToString("N")[..12];
-        await using (var cmd = ds.CreateCommand($"CREATE SCHEMA {schema}"))
-        {
-            await cmd.ExecuteNonQueryAsync(Ct);
-        }
-
-        var driver = new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = schema });
-        await driver.CreateMigrator().MigrateAsync(MigrationDirection.Up, cancellationToken: Ct);
-        return (driver, schema);
-    }
+    private static async Task<List<string>> AttemptedByAsync(IntegrationSchema schema) =>
+        [.. (await schema.JobsAsync(Ct)).SelectMany(j => j.AttemptedBy).Distinct().Order(StringComparer.Ordinal)];
 
     [JobKind("pause_job")]
     public sealed record PauseArgs(string What) : IJobArgs;

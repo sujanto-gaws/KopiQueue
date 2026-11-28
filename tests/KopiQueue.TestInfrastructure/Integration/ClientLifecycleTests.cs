@@ -1,21 +1,20 @@
 using KopiQueue.Drivers;
-using KopiQueue.Migrations;
-using KopiQueue.TestInfrastructure;
-using Npgsql;
+using Xunit;
 
-namespace KopiQueue.Npgsql.Tests;
+namespace KopiQueue.TestInfrastructure.Integration;
 
-/// <summary>A working <see cref="KopiClient"/> on PostgreSQL: start, pick-up, soft and hard stop (plan task 2.7: FR-HST-03, FR-EXE-03).</summary>
-public sealed class NpgsqlClientLifecycleTests(PostgresFixture db) : IClassFixture<PostgresFixture>
+/// <summary>A working <see cref="KopiClient"/> on a real database: start, pick-up, soft and hard stop (plan task 2.7: FR-HST-03, FR-EXE-03).</summary>
+public abstract class ClientLifecycleTests<TFixture>(TFixture db)
+    where TFixture : IntegrationFixture
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task A_job_inserted_by_another_client_is_picked_up_through_listen_long_before_the_next_poll()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var driver = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        Assert.SkipUnless(db.HasNotifications, "The driver has no notifications.");
+        var driver = schema.Driver;
         var client = Client(driver, new Work(), o => o with { FetchPollInterval = TimeSpan.FromMinutes(5) });
         await client.StartAsync(Ct);
         try
@@ -36,9 +35,8 @@ public sealed class NpgsqlClientLifecycleTests(PostgresFixture db) : IClassFixtu
     [Fact]
     public async Task Poll_only_picks_up_jobs_on_the_next_poll()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var driver = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var client = Client(driver, new Work(), o => o with { NotificationMode = NotificationMode.PollOnly, FetchPollInterval = TimeSpan.FromMilliseconds(200) });
         await client.StartAsync(Ct);
         try
@@ -56,9 +54,8 @@ public sealed class NpgsqlClientLifecycleTests(PostgresFixture db) : IClassFixtu
     [Fact]
     public async Task A_soft_stop_waits_for_running_jobs_and_stores_their_outcome()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var driver = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var work = new Work();
         var client = Client(driver, work);
         var id = (await client.InsertAsync(new LifecycleArgs("gated"), new InsertOptions { Queue = "work" }, Ct)).Job.Id;
@@ -79,9 +76,8 @@ public sealed class NpgsqlClientLifecycleTests(PostgresFixture db) : IClassFixtu
     [Fact]
     public async Task A_hard_stop_cancels_running_jobs_which_are_stored_available_to_run_again()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var driver = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var work = new Work();
         var client = Client(driver, work);
         var id = (await client.InsertAsync(new LifecycleArgs("gated"), new InsertOptions { Queue = "work" }, Ct)).Job.Id;
@@ -97,9 +93,8 @@ public sealed class NpgsqlClientLifecycleTests(PostgresFixture db) : IClassFixtu
     [Fact]
     public async Task The_soft_stop_timeout_turns_a_stop_into_a_hard_stop()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var driver = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var work = new Work();
         var client = Client(driver, work, o => o with { SoftStopTimeout = TimeSpan.FromMilliseconds(300) });
         var id = (await client.InsertAsync(new LifecycleArgs("gated"), new InsertOptions { Queue = "work" }, Ct)).Job.Id;
@@ -152,19 +147,6 @@ public sealed class NpgsqlClientLifecycleTests(PostgresFixture db) : IClassFixtu
 
     private static async Task<JobRow> GetAsync(IKopiDriver driver, long id) =>
         await driver.GetExecutor().JobGetByIdAsync(id, Ct) ?? throw new InvalidOperationException($"Job {id} is missing.");
-
-    private static async Task<IKopiDriver> MigratedAsync(NpgsqlDataSource ds)
-    {
-        var schema = "x_" + Guid.NewGuid().ToString("N")[..12];
-        await using (var cmd = ds.CreateCommand($"CREATE SCHEMA {schema}"))
-        {
-            await cmd.ExecuteNonQueryAsync(Ct);
-        }
-
-        var driver = new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = schema });
-        await driver.CreateMigrator().MigrateAsync(MigrationDirection.Up, cancellationToken: Ct);
-        return driver;
-    }
 
     private sealed record Settings
     {

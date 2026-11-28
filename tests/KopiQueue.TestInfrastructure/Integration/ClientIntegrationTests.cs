@@ -1,25 +1,23 @@
 using System.Collections.Concurrent;
 using KopiQueue.Drivers;
-using KopiQueue.Migrations;
-using KopiQueue.TestInfrastructure;
-using Npgsql;
+using Xunit;
 
-namespace KopiQueue.Npgsql.Tests;
+namespace KopiQueue.TestInfrastructure.Integration;
 
 /// <summary>
-/// Working clients on a real PostgreSQL: timeouts, retries, several clients on one queue, stopping under load and
+/// Working clients on a real database: timeouts, retries, several clients on one queue, stopping under load and
 /// rolling deploys (plan task 2.9: FR-EXE-04, -05, FR-ERR-01..04, FR-HST-03, NFR-REL-01, DQ-3).
 /// </summary>
-public sealed class NpgsqlClientIntegrationTests(PostgresFixture db) : IClassFixture<PostgresFixture>
+public abstract class ClientIntegrationTests<TFixture>(TFixture db)
+    where TFixture : IntegrationFixture
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task A_job_that_outlives_its_timeout_fails_with_a_timeout_error_and_is_retried()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var driver = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var worker = new ScriptedWorker { TimeoutAfter = TimeSpan.FromMilliseconds(200), RetryIn = TimeSpan.FromMinutes(10) };
         var id = await InsertAsync(driver, "hang");
 
@@ -36,9 +34,8 @@ public sealed class NpgsqlClientIntegrationTests(PostgresFixture db) : IClassFix
     [Fact]
     public async Task A_failing_job_is_retried_until_it_succeeds_with_each_error_recorded()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var driver = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var id = await InsertAsync(driver, "fail-twice");
 
         await using (await StartedAsync(driver, new ScriptedWorker { RetryIn = TimeSpan.FromMilliseconds(100) }))
@@ -54,9 +51,8 @@ public sealed class NpgsqlClientIntegrationTests(PostgresFixture db) : IClassFix
     [Fact]
     public async Task A_job_that_keeps_failing_is_discarded_after_its_last_attempt()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var driver = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var id = await InsertAsync(driver, "fail", maxAttempts: 3);
 
         await using (await StartedAsync(driver, new ScriptedWorker { RetryIn = TimeSpan.FromMilliseconds(100) }))
@@ -71,9 +67,8 @@ public sealed class NpgsqlClientIntegrationTests(PostgresFixture db) : IClassFix
     [Fact]
     public async Task A_short_snooze_runs_the_job_again_without_using_an_attempt()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var driver = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var id = await InsertAsync(driver, "snooze-once");
 
         await using (await StartedAsync(driver, new ScriptedWorker()))
@@ -82,16 +77,16 @@ public sealed class NpgsqlClientIntegrationTests(PostgresFixture db) : IClassFix
 
             Assert.Equal(1, job.Attempt); // the snoozed attempt was given back
             Assert.Empty(job.Errors);
-            Assert.Contains("\"snoozes\": 1", job.MetadataJson, StringComparison.Ordinal);
+            using var metadata = System.Text.Json.JsonDocument.Parse(job.MetadataJson);
+            Assert.Equal(1, metadata.RootElement.GetProperty("snoozes").GetInt32());
         }
     }
 
     [Fact]
     public async Task Several_clients_share_a_queue_run_each_job_once_and_respect_their_concurrency()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var driver = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         const int Jobs = 300;
         var workers = Enumerable.Range(0, 3).Select(_ => new ScriptedWorker { WorkFor = (2, 6) }).ToArray();
         var clients = new List<KopiClient>();
@@ -105,7 +100,7 @@ public sealed class NpgsqlClientIntegrationTests(PostgresFixture db) : IClassFix
             await driver.GetExecutor().JobInsertFastAsync(
                 [.. Enumerable.Range(0, Jobs).Select(_ => Params("ok"))],
                 Ct);
-            await WaitForCountAsync(ds, driver, "state = 'completed'", Jobs, TimeSpan.FromSeconds(60));
+            await schema.WaitForCountAsync(j => j.State == JobState.Completed, Jobs, TimeSpan.FromSeconds(60), Ct);
         }
         finally
         {
@@ -120,28 +115,27 @@ public sealed class NpgsqlClientIntegrationTests(PostgresFixture db) : IClassFix
         Assert.Equal(Jobs, ran.Distinct().Count());
         Assert.All(workers, w => Assert.InRange(w.Peak, 0, 4));
         Assert.True(workers.Count(w => !w.Ran.IsEmpty) > 1, "One client ran every job.");
-        Assert.Equal(Jobs, await CountAsync(ds, driver, "state = 'completed' AND attempt = 1 AND cardinality(attempted_by) = 1"));
+        Assert.Equal(Jobs, await schema.CountAsync(j => j.State == JobState.Completed && j.Attempt == 1 && j.AttemptedBy.Count == 1, Ct));
     }
 
     [Fact]
     public async Task Stopping_under_load_loses_no_job_and_leaves_none_running()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var driver = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         const int Jobs = 200;
         await driver.GetExecutor().JobInsertFastAsync([.. Enumerable.Range(0, Jobs).Select(_ => Params("ok"))], Ct);
         const int Finishing = 30;
         var worker = new ScriptedWorker { WorkFor = (5, 20), HangAfter = Finishing }; // later jobs run until cancelled
         var client = await StartedClientAsync(driver, worker, maxWorkers: 10);
 
-        await WaitForCountAsync(ds, driver, "state = 'completed'", Finishing, TimeSpan.FromSeconds(30));
+        await schema.WaitForCountAsync(j => j.State == JobState.Completed, Finishing, TimeSpan.FromSeconds(30), Ct);
         using var shutdown = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
         await client.StopAsync(shutdown.Token).WaitAsync(TimeSpan.FromSeconds(30), Ct);
 
-        Assert.Equal(Finishing, await CountAsync(ds, driver, "state = 'completed' AND attempt = 1"));
-        Assert.Equal(0, await CountAsync(ds, driver, "state = 'running'"));
-        Assert.Equal(Jobs - Finishing, await CountAsync(ds, driver, "state = 'available' AND attempt = 0 AND errors IS NULL"));
+        Assert.Equal(Finishing, await schema.CountAsync(j => j.State == JobState.Completed && j.Attempt == 1, Ct));
+        Assert.Equal(0, await schema.CountAsync(j => j.State == JobState.Running, Ct));
+        Assert.Equal(Jobs - Finishing, await schema.CountAsync(j => j.State == JobState.Available && j.Attempt == 0 && j.Errors.Count == 0, Ct));
         Assert.Equal(worker.Ran.Count - Finishing, worker.Interrupted); // the hard stop interrupted every job still running
         Assert.InRange(worker.Interrupted, 1, 10);
     }
@@ -149,9 +143,8 @@ public sealed class NpgsqlClientIntegrationTests(PostgresFixture db) : IClassFix
     [Fact]
     public async Task During_a_rolling_deploy_a_job_of_an_unknown_kind_is_retried_until_a_client_with_its_worker_takes_it()
     {
-        db.SkipIfUnavailable();
-        await using var ds = db.CreateDataSource();
-        var driver = await MigratedAsync(ds);
+        await using var schema = await db.CreateSchemaAsync(Ct);
+        var driver = schema.Driver;
         var id = (await new KopiClient(driver).InsertAsync(new NewKindArgs(), new InsertOptions { Queue = "it" }, Ct)).Job.Id;
 
         // The old version has no worker for the new kind: it fetches the job once (poll-only, long poll) and fails it.
@@ -232,36 +225,6 @@ public sealed class NpgsqlClientIntegrationTests(PostgresFixture db) : IClassFix
             Assert.True(DateTime.UtcNow < deadline, $"Job {id} is {job.State} at attempt {job.Attempt} with {job.Errors.Count} errors after 20 s.");
             await Task.Delay(20, Ct);
         }
-    }
-
-    private static async Task WaitForCountAsync(NpgsqlDataSource ds, IKopiDriver driver, string where, long count, TimeSpan limit)
-    {
-        var deadline = DateTime.UtcNow + limit;
-        long now;
-        while ((now = await CountAsync(ds, driver, where)) < count)
-        {
-            Assert.True(DateTime.UtcNow < deadline, $"{now} of {count} jobs match '{where}' after {limit}.");
-            await Task.Delay(20, Ct);
-        }
-    }
-
-    private static async Task<long> CountAsync(NpgsqlDataSource ds, IKopiDriver driver, string where)
-    {
-        await using var cmd = ds.CreateCommand($"SELECT count(*) FROM {((NpgsqlDriver)driver).Schema}.river_job WHERE {where}");
-        return (long)(await cmd.ExecuteScalarAsync(Ct))!;
-    }
-
-    private static async Task<IKopiDriver> MigratedAsync(NpgsqlDataSource ds)
-    {
-        var schema = "x_" + Guid.NewGuid().ToString("N")[..12];
-        await using (var cmd = ds.CreateCommand($"CREATE SCHEMA {schema}"))
-        {
-            await cmd.ExecuteNonQueryAsync(Ct);
-        }
-
-        var driver = new NpgsqlDriver(ds, new NpgsqlDriverOptions { Schema = schema });
-        await driver.CreateMigrator().MigrateAsync(MigrationDirection.Up, cancellationToken: Ct);
-        return driver;
     }
 
     private sealed class StoppingClient(KopiClient client) : IAsyncDisposable

@@ -192,8 +192,9 @@ internal sealed partial class Elector : IStartStopService, IAsyncDisposable
 
                 await _wake.WaitAsync(wait, _time, stop).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (stop.IsCancellationRequested)
+            catch (Exception) when (stop.IsCancellationRequested)
             {
+                // A provider can report a command the stop cancelled as its own error (SqlClient: a SqlException), not a cancellation.
                 return;
             }
         }
