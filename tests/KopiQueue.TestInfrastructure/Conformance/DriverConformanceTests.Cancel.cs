@@ -119,6 +119,22 @@ public abstract partial class DriverConformanceTests<TFixture>
     }
 
     [Fact]
+    public async Task A_cancel_ask_is_the_top_level_key_whatever_its_value()
+    {
+        // As PostgreSQL's jsonb ? operator: the key's presence at the top level counts, even with a null value (written
+        // by another tool), and the same key nested deeper does not.
+        var executor = (await MigratedAsync()).Driver.GetExecutor();
+        var kind = UniqueKind();
+        var queue = UniqueQueue();
+        var past = DateTimeOffset.UtcNow.AddSeconds(-1);
+        var nullValue = (await executor.JobInsertManyAsync([At(kind, queue, JobState.Available, past, metadata: """{"cancel_attempted_at": null}""")], Ct)).Single().Job;
+        await executor.JobInsertManyAsync([At(kind, queue, JobState.Available, past, metadata: """{"x": {"cancel_attempted_at": "2026-01-01T00:00:00Z"}}""")], Ct);
+        var running = await executor.JobGetAvailableAsync(new JobGetAvailableParams { Queue = queue, Max = 10, ClientId = "c" }, Ct);
+
+        Assert.Equal([nullValue.Id], await executor.JobListCancelAttemptedAsync([.. running.Select(j => j.Id).Order()], Ct));
+    }
+
+    [Fact]
     public async Task After_a_cancel_a_completed_cancelled_or_discarded_outcome_stands_and_a_retry_becomes_a_cancel()
     {
         var executor = (await MigratedAsync()).Driver.GetExecutor();

@@ -139,19 +139,6 @@ public sealed partial class SqlServerDriverUnitTests
     }
 
     [Fact]
-    public async Task Operations_of_later_tasks_say_which_task_adds_them()
-    {
-        // Nothing is opened, so no server is needed.
-        var executor = ((IKopiDriver)new SqlServerDriver("Server=unused")).GetExecutor();
-
-        var ex = await Assert.ThrowsAsync<NotSupportedException>(
-            () => executor.JobListCancelAttemptedAsync([1], TestContext.Current.CancellationToken));
-
-        Assert.Contains("JobListCancelAttemptedAsync", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("plan task 5.7", ex.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void Durations_travel_as_seconds_and_microseconds_so_weeks_fit_dateadd()
     {
         var parameters = SqlServerExecutor.Duration("retention", TimeSpan.FromDays(40) + TimeSpan.FromTicks(15), "p");

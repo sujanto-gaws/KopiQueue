@@ -113,7 +113,7 @@ It stops them in reverse order. The completer is stopped last among the executio
 - **Driver contract** (`KopiQueue.Drivers`, experimental): `IKopiDriver.CreateListener()` returns an `IKopiListener`, or `null` exactly when `Capabilities.ListenNotify` is false (a conformance case checks this). `ConnectAsync` opens one connection subscribed to every `NotificationTopic` (`Insert`, `Control`, `Leadership`); its `WaitForNotificationAsync` returns `KopiNotification(topic, payload)`. The listener only connects: reconnecting, backoff and resync belong to the core, so every driver gets the same rules. A `KopiQueueConfigurationException` from `ConnectAsync` means retrying cannot help.
 - **Notifier** (internal, one per client that works jobs): runs one loop that connects, raises **resync** on every subscriber, then fans notifications out by topic. A lost connection is reconnected after a delay that starts at 100 ms, doubles per failed attempt, is capped at 30 s, and is then shortened by up to 20% at random, so clients that lost the database together do not reconnect in lockstep, even at the cap; a successful connect resets it. The broken connection is disposed in the background with a 5 s timeout and never delays the reconnect. A configuration error disables the notifier for good (`IsDisabled`), and the client then only polls. Subscriber callbacks run on the loop, must only signal, and are isolated from each other. `IsConnected` is the health signal for task 6.5.
 - **PostgreSQL listener:** a connection made with `CloneWithAsync` from the data source, which carries its credentials over although `NpgsqlDataSource.ConnectionString` leaves the password out, with `Pooling=false`, `Keepalive=NotifierKeepAlive` (default 5 s) and `Enlist=false`. `NpgsqlDriverOptions.NotifierConnectionString` replaces the data source for this connection (PgBouncer in transaction mode, proxies). Without a configured schema it reads `current_schema()` after connecting. Every channel is checked against the 63-byte limit before `LISTEN` (schema ≤ 46 bytes), and each `LISTEN` quotes its channel. Measured in `NpgsqlNotifierTests`: a terminated backend is replaced and resynced at once; a black-holed connection with `Keepalive=1` is detected in about 2 s.
-- **LocalWaker** (internal, owned by `KopiClient`): after a pooled insert, whose commit the client knows about, it wakes this client's subscribers of each queue that received available jobs. Inserts in a caller's transaction are not announced: the client cannot see their commit (on PostgreSQL the `pg_notify` covers them; on SQL Server the EF commit interceptor, task 5.7, will). Skipped duplicates wake nobody.
+- **LocalWaker** (internal, owned by `KopiClient`): after a pooled insert, whose commit the client knows about, it wakes this client's subscribers of each queue that received available jobs. Inserts in a caller's transaction wait for their commit, which the client cannot see itself: they are recorded against the transaction (`TransactionWakes`, held weakly) and woken when a commit hook reports the commit, which the EF Core commit interceptor does (§6.3, task 5.7). Without a hook, PostgreSQL's `pg_notify` still covers them, and on SQL Server the next poll finds them. Skipped duplicates wake nobody.
 - **Modes:** `PollOnly` means no notifier; `Auto` means a notifier whenever the driver has a listener; `ListenNotify` requires one. The option arrives with the client options in task 2.7; until then only the mechanics exist.
 
 ### 3.4 Producer (plan task 2.3)
@@ -1173,6 +1173,14 @@ Once M2 adds queues and workers, a client without them must keep this behaviour:
 
 The commit interceptor described next needs the LocalWaker, so it arrives with the producers in M2 and the SQL Server driver in M3. With EF Core, the `KopiQueue.EntityFrameworkCore` package also registers a `DbTransactionInterceptor`. It sends the LocalWaker signal after `TransactionCommitted`, so EF inserts get low-latency pickup even on SQL Server. A raw `SqlTransaction` has no commit hook, so those jobs are picked up on the next poll.
 
+As built in plan task 5.7:
+
+- **Registration.** EF Core interceptors belong to a context's options, so a package cannot add one to contexts it doesn't build. The application adds it: `options.UseSqlServer(...).AddKopiQueueCommitInterceptor()`. The interceptor is one stateless instance and serves every context and client.
+- **What it wakes.** Inserts, bulk inserts and retries in a caller's transaction record the queues that got available jobs against that transaction, for the client that made them; a client that works no queues records nothing. The interceptor's `TransactionCommitted` wakes them once, and `TransactionRolledBack` forgets them. The records are held weakly by the transaction, so a transaction no hook reports leaves nothing behind.
+- **What it doesn't see.** Commits made outside EF Core, such as a `DbTransaction` passed to `UseTransaction` and then committed directly, and other processes: those jobs wait for the poll. A savepoint rolled back after an insert costs one fetch that finds nothing.
+- **PostgreSQL.** The interceptor works there too and saves the notification's round trip, but isn't needed.
+
+
 ### 6.4 Extensibility points
 
 | Seam | Interface | Default |
@@ -1425,6 +1433,7 @@ As built in plan task 5.6. Each statement has the semantics of its PostgreSQL co
   - Arrays match as sets.
   - A shared conformance case checks 19 edge cases on both drivers.
   - A filter may use at most 2,000 parameters.
+- **Cancel polling** (`job_list_cancel_attempted.sql`, plan task 5.7). The queue maintainer's poll asks which of its running jobs carry `metadata.cancel_attempted_at` (design §5.8). It reads with `READPAST`, so a job whose worker is completing it right now is passed over rather than waited for, and it tests the key's presence as PostgreSQL's `?` does, so a key with a `null` value counts.
 
 
 **Migrations lock** (plan task 5.1): `sp_getapplock @Resource = 'kopi_migrate:<schema>.<prefix>', @LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = 0`.

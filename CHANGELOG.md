@@ -39,6 +39,9 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
   - **Statement size:** no maintenance statement touches more than 1,000 rows, so none escalates to a table lock. Larger batches run as several statements in one transaction.
   - **Scheduler batches:** on drivers that limit rows per statement, the scheduler's batches are capped at that limit. A full batch still runs again at once.
   - **Without LISTEN/NOTIFY:** pause, resume, leader resignation and retried jobs reach other SQL Server clients at their next poll.
+- SQL Server control paths and the EF Core commit interceptor (FR-DB-04, FR-DB-05, [#53](https://github.com/sujanto-gaws/KopiQueue/issues/53)):
+  - **External cancel on SQL Server:** a cancel reaches a job running on another client within its `FetchPollInterval`, as pauses and resumes already did. The SQL Server driver now supports every operation.
+  - **`AddKopiQueueCommitInterceptor()`** on `DbContextOptionsBuilder` (`KopiQueue.EntityFrameworkCore`): when a context's transaction with jobs commits through EF Core, the inserting client's producers fetch them at once instead of at their next poll. Inserts, bulk inserts and retries in the transaction count; a rollback wakes nothing. It's the fast path on SQL Server and saves a round trip on PostgreSQL.
 
 ## [0.4.0-beta.1] - 2026-11-27
 

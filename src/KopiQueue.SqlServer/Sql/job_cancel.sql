@@ -4,7 +4,7 @@
 -- A job that has not started (available, scheduled, retryable, pending) becomes cancelled at once, finalised at the
 -- database's now, with no error appended. A running job stays running: metadata.cancel_attempted_at is set to the
 -- database's now (§4.1), and the completer's guard and the worker settle how it ends; SQL Server has no LISTEN/NOTIFY,
--- so the worker's client finds the request by polling (task 5.7). A finalised job is left as it is.
+-- so the worker's client finds the request by polling (job_list_cancel_attempted.sql). A finalised job is left as it is.
 -- Returns the job as it is after the call, or no row for an unknown id.
 DECLARE @now datetime2(6) = SYSUTCDATETIME();
 
