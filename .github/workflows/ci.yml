@@ -74,10 +74,17 @@ jobs:
           sudo systemctl stop pgbouncer || true
           sh tests/pgbouncer/start.sh kopi
       - run: dotnet build tests/KopiQueue.Npgsql.Tests -c $CONFIGURATION
+      - name: sample PostgreSQL connections (#160)
+        run: nohup sh tests/ci/pg-connections.sh sample "$RUNNER_TEMP/pg-connections.csv" > /dev/null 2>&1 &
+        env: { PGHOST: localhost, PGUSER: postgres, PGPASSWORD: kopi }
       - run: >-
           dotnet test --project tests/KopiQueue.Npgsql.Tests -c $CONFIGURATION --no-build
           --results-directory "$GITHUB_WORKSPACE/TestResults"
           --report-trx --coverage --coverage-output-format cobertura
+      - name: report PostgreSQL connections
+        if: always()
+        run: sh tests/ci/pg-connections.sh report "$RUNNER_TEMP/pg-connections.csv" | tee -a "$GITHUB_STEP_SUMMARY"
+        env: { PGHOST: localhost, PGUSER: postgres, PGPASSWORD: kopi }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
