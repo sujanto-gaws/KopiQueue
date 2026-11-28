@@ -1069,7 +1069,7 @@ builder.Services.AddNpgsqlDataSource(builder.Configuration.GetConnectionString("
 builder.Services.AddKopiQueue(kq =>
 {
     kq.UseNpgsql();                                  // resolves NpgsqlDataSource from DI
-    // or: kq.UseNpgsql(dataSource) / kq.UseKeyedNpgsql("jobs"); M3: kq.UseSqlServer(...)
+    // or: kq.UseNpgsql(dataSource) / kq.UseKeyedNpgsql("jobs") / kq.UseSqlServer(connectionString)
     kq.AddQueue("default", maxWorkers: 50);
     kq.AddQueue("email",   maxWorkers: 10);
     kq.AddWorker<SendEmailArgs, SendEmailWorker>();  // or AddWorker<SendEmailWorker>() outside trimmed/AOT apps
@@ -1079,7 +1079,9 @@ builder.Services.AddKopiQueue(kq =>
 .BindConfiguration("KopiQueue");                     // appsettings: queues, timeouts, retention
 ```
 
-**Hosting (plan task 2.8, FR-HST-01, -02, -04).** `AddKopiQueue` registers one `KopiClient` as itself and as `IKopiClient`, and an `IHostedService` that calls `StartAsync` when the host starts and `StopAsync` with the host's shutdown token, so `HostOptions.ShutdownTimeout` ends the soft stop. The settings that suit configuration are `KopiQueueOptions` (§7; `Queues:<name>:MaxWorkers`, times as `hh:mm:ss`, modes by name), bound with `BindConfiguration(section)` through the configuration binding source generator, so binding works in trimmed and Native AOT apps. Values bound from configuration override those set in code. The rest is code only, on the builder: the driver, workers, serialiser and retry policy. `IValidateOptions<KopiQueueOptions>` with `ValidateOnStart` runs the client's own checks (`KopiClient.StartAsync`) plus "a driver is configured" when the host starts, and fails startup with every problem listed. Without queues and workers the hosted client is insert-only and starts nothing. Several clients in one process (FR-HST-05, P2) are refused for now: a second `AddKopiQueue` throws. Health checks and migrate-on-startup (FR-MIG-07) come later. `samples/WorkerService` runs the whole thing on PostgreSQL, in both `Auto` and `PollOnly` modes.
+**Hosting (plan task 2.8, FR-HST-01, -02, -04).** `AddKopiQueue` registers one `KopiClient` as itself and as `IKopiClient`, and an `IHostedService` that calls `StartAsync` when the host starts and `StopAsync` with the host's shutdown token, so `HostOptions.ShutdownTimeout` ends the soft stop. The settings that suit configuration are `KopiQueueOptions` (§7; `Queues:<name>:MaxWorkers`, times as `hh:mm:ss`, modes by name), bound with `BindConfiguration(section)` through the configuration binding source generator, so binding works in trimmed and Native AOT apps. Values bound from configuration override those set in code. The rest is code only, on the builder: the driver, workers, serialiser and retry policy. `IValidateOptions<KopiQueueOptions>` with `ValidateOnStart` runs the client's own checks (`KopiClient.StartAsync`) plus "a driver is configured" when the host starts, and fails startup with every problem listed. Without queues and workers the hosted client is insert-only and starts nothing. Several clients in one process (FR-HST-05, P2) are refused for now: a second `AddKopiQueue` throws. Health checks and migrate-on-startup (FR-MIG-07) come later. `samples/WorkerService` runs the whole thing on PostgreSQL, in both `Auto` and `PollOnly` modes, or on SQL Server with `Sample:Database=SqlServer`.
+
+**SQL Server registration (plan task 5.8, FR-DB-03).** `UseSqlServer(connectionString, options)` in `KopiQueue.SqlServer`, or `UseSqlServer(sp => …, options)` to read the connection string from the application's services, such as `IConfiguration`, when the client is created. SqlClient has no data source to register in DI, as Npgsql has, so there is no parameterless form. The driver gives its connections `Application Name=KopiQueue`, and so a pool of their own, unless the string names an application. Swapping `UseNpgsql()` for `UseSqlServer(…)` is the only code change between the databases, as the sample shows.
 
 ### 6.3 Inserting
 
@@ -1543,11 +1545,12 @@ As built in plan task 5.6. Each statement has the semantics of its PostgreSQL co
     - the database's clock;
     - recognising a unique violation.
   - **Reads:** everything else, including counts, goes through the driver's own executor. The SQL Server fixture's database has READ_COMMITTED_SNAPSHOT on, so those reads don't wait on running clients, as on PostgreSQL.
-  - **The suites** are those of tasks 2.3–2.9, 3.1, 3.3–3.7, 4.2–4.4: `ClientIntegrationTests`, `ClientLifecycleTests`, `ExecutionTests`, `ProducerIntegrationTests`, `LeadershipTests`, `SchedulerTests`, `RescuerTests`, `JobCleanerTests`, `QueueCleanerTests`, `QueuePauseTests`, `CancelTests`, `AdminTests`, `PeriodicTests` and `UniqueTests`. That's 62 cases.
+  - **The suites** are those of tasks 2.3–2.9, 3.1, 3.3–3.7, 4.2–4.4: `ClientIntegrationTests`, `ClientLifecycleTests`, `ExecutionTests`, `ProducerIntegrationTests`, `HostingTests`, `LeadershipTests`, `SchedulerTests`, `RescuerTests`, `JobCleanerTests`, `QueueCleanerTests`, `QueuePauseTests`, `CancelTests`, `AdminTests`, `PeriodicTests` and `UniqueTests`. That's 65 cases.
   - **On PostgreSQL**, each keeps the class name its tests had before (`NpgsqlClientIntegrationTests` and so on, as named above). `NpgsqlSchedulerTests`, `NpgsqlRescuerTests` and `NpgsqlUniqueTests` add their PostgreSQL-only cases to the shared ones: insert notifications on commit, and a River-inserted unique duplicate.
   - **On SQL Server**, the classes are `SqlServer*Tests`; the unique suite is `SqlServerClientUniqueTests`, next to the driver's own `SqlServerUniqueTests`.
-  - **Without notifications:** four cases need LISTEN/NOTIFY and skip on SQL Server. They are the notification pick-up of a producer and of a client, the 20 s-interval leader handover and the notified cancel. Each has a poll-only counterpart that runs.
-  - **Still PostgreSQL-only:** the insert notification tests (`KopiClientInsertTests`), the insert-only client's sessions (`pg_stat_activity`), jsonb args formatting, `NpgsqlLeaderKillTests` (its `KopiQueue.TestNode` is built on Npgsql) and the hosting tests, which move with `UseSqlServer` in part 3.
+  - **Without notifications:** five cases need LISTEN/NOTIFY and skip on SQL Server. They are the notification pick-up of a producer, of a client and of a hosted client, the 20 s-interval leader handover and the notified cancel. Each has a poll-only counterpart that runs.
+  - **Hosting:** `HostingTests` registers each schema the way an application does, through `IntegrationSchema.UseIn` (`UseNpgsql` or `UseSqlServer`). `NpgsqlHostingTests` adds `UseKeyedNpgsql`. `SqlServerHostingTests` adds `UseSqlServer` reading its connection string from configuration, and the argument checks.
+  - **Still PostgreSQL-only:** the insert notification tests (`KopiClientInsertTests`), the insert-only client's sessions (`pg_stat_activity`), jsonb args formatting and `NpgsqlLeaderKillTests` (its `KopiQueue.TestNode` is built on Npgsql).
 
 ## 12. Decision log (ADRs)
 

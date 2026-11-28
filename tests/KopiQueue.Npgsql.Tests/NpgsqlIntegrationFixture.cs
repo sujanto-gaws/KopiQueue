@@ -2,6 +2,7 @@ using KopiQueue.Drivers;
 using KopiQueue.TestInfrastructure;
 using KopiQueue.TestInfrastructure.Conformance;
 using KopiQueue.TestInfrastructure.Integration;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
 namespace KopiQueue.Npgsql.Tests;
@@ -67,6 +68,9 @@ public sealed class NpgsqlIntegrationFixture : IntegrationFixture
         public override IKopiDriver Driver { get; } = new NpgsqlDriver(dataSource, new NpgsqlDriverOptions { Schema = name });
 
         public override string Name => name;
+
+        public override KopiQueueBuilder UseIn(KopiQueueBuilder builder) =>
+            builder.UseNpgsql(dataSource, new NpgsqlDriverOptions { Schema = name });
 
         public override async Task<CallerTransaction> BeginTransactionAsync(CancellationToken cancellationToken)
         {

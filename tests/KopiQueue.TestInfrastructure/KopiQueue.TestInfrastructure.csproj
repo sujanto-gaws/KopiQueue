@@ -7,6 +7,7 @@
   <ItemGroup>
     <PackageReference Include="xunit.v3.extensibility.core" />
     <PackageReference Include="xunit.v3.assert" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Npgsql" />
     <PackageReference Include="Microsoft.Data.SqlClient" />
     <PackageReference Include="Testcontainers.PostgreSql" />
@@ -16,6 +17,7 @@
   <ItemGroup>
     <!-- The conformance suite is written against the driver-neutral core only. -->
     <ProjectReference Include="..\..\src\KopiQueue\KopiQueue.csproj" />
+    <ProjectReference Include="..\..\src\KopiQueue.Hosting\KopiQueue.Hosting.csproj" />
   </ItemGroup>
 
 </Project>

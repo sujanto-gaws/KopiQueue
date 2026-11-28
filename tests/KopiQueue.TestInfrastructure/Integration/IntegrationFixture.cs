@@ -76,6 +76,9 @@ public abstract class IntegrationSchema : IAsyncDisposable
     /// <summary>The schema's name.</summary>
     public abstract string Name { get; }
 
+    /// <summary>Registers this schema's database on <paramref name="builder"/>, as an application does (<c>UseNpgsql</c>, <c>UseSqlServer</c>).</summary>
+    public abstract KopiQueueBuilder UseIn(KopiQueueBuilder builder);
+
     /// <summary>Starts a caller's transaction on a connection of its own.</summary>
     public abstract Task<CallerTransaction> BeginTransactionAsync(CancellationToken cancellationToken);
 
