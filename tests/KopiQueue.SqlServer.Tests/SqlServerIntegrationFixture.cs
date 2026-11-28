@@ -3,6 +3,7 @@ using KopiQueue.SqlServer.Tests.Migrations;
 using KopiQueue.TestInfrastructure;
 using KopiQueue.TestInfrastructure.Conformance;
 using KopiQueue.TestInfrastructure.Integration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Data.SqlClient;
 
 namespace KopiQueue.SqlServer.Tests;
@@ -55,6 +56,9 @@ public sealed class SqlServerIntegrationFixture : IntegrationFixture
         public override IKopiDriver Driver { get; } = new SqlServerDriver(connectionString, new SqlServerDriverOptions { Schema = name });
 
         public override string Name => name;
+
+        public override KopiQueueBuilder UseIn(KopiQueueBuilder builder) =>
+            builder.UseSqlServer(connectionString, new SqlServerDriverOptions { Schema = name });
 
         public override async Task<CallerTransaction> BeginTransactionAsync(CancellationToken cancellationToken)
         {

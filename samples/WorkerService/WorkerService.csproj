@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk.Worker">
 
-  <!-- A Worker Service that inserts and works jobs on PostgreSQL. See README.md. -->
+  <!-- A Worker Service that inserts and works jobs on PostgreSQL or SQL Server. See README.md. -->
   <PropertyGroup>
     <RootNamespace>KopiQueue.Samples.WorkerService</RootNamespace>
     <!-- Runs as trimmed and Native AOT apps do: args go through the source-generated SampleJsonContext. -->
@@ -14,6 +14,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\KopiQueue.Hosting\KopiQueue.Hosting.csproj" />
     <ProjectReference Include="..\..\src\KopiQueue.Npgsql\KopiQueue.Npgsql.csproj" />
+    <ProjectReference Include="..\..\src\KopiQueue.SqlServer\KopiQueue.SqlServer.csproj" />
   </ItemGroup>
 
 </Project>

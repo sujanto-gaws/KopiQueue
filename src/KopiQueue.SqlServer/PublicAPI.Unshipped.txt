@@ -10,3 +10,6 @@ KopiQueue.SqlServer.SqlServerDriverOptions.Schema.init -> void
 KopiQueue.SqlServer.SqlServerDriverOptions.SqlServerDriverOptions() -> void
 KopiQueue.SqlServer.SqlServerDriverOptions.TablePrefix.get -> string!
 KopiQueue.SqlServer.SqlServerDriverOptions.TablePrefix.init -> void
+Microsoft.Extensions.DependencyInjection.SqlServerKopiQueueBuilderExtensions
+static Microsoft.Extensions.DependencyInjection.SqlServerKopiQueueBuilderExtensions.UseSqlServer(this KopiQueue.KopiQueueBuilder! builder, string! connectionString, KopiQueue.SqlServer.SqlServerDriverOptions? options = null) -> KopiQueue.KopiQueueBuilder!
+static Microsoft.Extensions.DependencyInjection.SqlServerKopiQueueBuilderExtensions.UseSqlServer(this KopiQueue.KopiQueueBuilder! builder, System.Func<System.IServiceProvider!, string!>! connectionString, KopiQueue.SqlServer.SqlServerDriverOptions? options = null) -> KopiQueue.KopiQueueBuilder!
