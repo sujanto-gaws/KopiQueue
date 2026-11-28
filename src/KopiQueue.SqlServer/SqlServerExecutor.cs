@@ -24,11 +24,20 @@ internal sealed class SqlServerStatements
             return MigrationTemplate.Render(reader.ReadToEnd(), schemaQualifier, tablePrefix);
         }
 
+        JobInsertMany = Load("job_insert_many.sql");
         JobGetById = Load("job_get_by_id.sql");
+        JobGetAvailable = Load("job_get_available.sql");
+        JobSetStateIfRunningMany = Load("job_set_state_if_running_many.sql");
         QueueGet = Load("queue_get.sql");
     }
 
+    public string JobInsertMany { get; }
+
     public string JobGetById { get; }
+
+    public string JobGetAvailable { get; }
+
+    public string JobSetStateIfRunningMany { get; }
 
     public string QueueGet { get; }
 }
@@ -38,9 +47,16 @@ internal sealed class SqlServerStatements
 /// transaction (FR-INS-02). Times are UTC both ways, and the JSON-array columns are read as lists (design §4.4).
 /// </summary>
 /// <remarks>
+/// <para>
+/// Batches travel as one JSON parameter that the statement reads with <c>OPENJSON</c> (design §8.1, DQ-6). A batch
+/// larger than <see cref="MaxRowsPerStatement"/> runs as several statements in one transaction, the caller's or the
+/// executor's own, so it stays all-or-nothing (spike 0.9: no statement touches more than 2,000 rows).
+/// </para>
+/// <para>
 /// Every session is checked before its first statement (<see cref="SqlServerSessionCheck"/>): pooled sessions once per
 /// driver (<see cref="SqlServerSessionGate"/>), a caller's session once per executor, since the caller's code may have
 /// changed its settings. The operations that later M5 tasks add throw <see cref="NotSupportedException"/> until then.
+/// </para>
 /// </remarks>
 [SuppressMessage("Security", "CA2100:Review SQL queries for security vulnerabilities",
     Justification = "Statements are the driver's own embedded SQL, rendered with validated identifiers; values are parameters.")]
@@ -50,13 +66,65 @@ internal sealed class SqlServerExecutor(
     SqlServerSessionGate pooledSessions,
     SqlTransaction? transaction) : IKopiExecutor
 {
+    /// <summary>The most rows one statement touches: the driver's <see cref="DriverCapabilities.MaxRowsPerStatement"/>.</summary>
+    public const int MaxRowsPerStatement = 1000;
+
     private bool _callerSessionChecked;
 
-    public Task<IReadOnlyList<JobInsertResult>> JobInsertManyAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken) =>
-        NotYet<IReadOnlyList<JobInsertResult>>("5.3");
+    public async Task<IReadOnlyList<JobInsertResult>> JobInsertManyAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(jobs);
+        for (var i = 0; i < jobs.Count; i++)
+        {
+            CheckSupported(jobs, i);
+        }
 
-    public Task<long> JobInsertFastAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken) =>
-        NotYet<long>("5.5");
+        if (jobs.Count == 0)
+        {
+            return [];
+        }
+
+        var rows = await ChunkedAsync(
+            jobs.Count,
+            (start, count) => [new SqlParameter("@jobs", SqlDbType.NVarChar, -1) { Value = InsertBatch(jobs, start, count) }],
+            statements.JobInsertMany,
+            ReadJob,
+            cancellationToken).ConfigureAwait(false);
+        if (rows.Count != jobs.Count)
+        {
+            throw new InvalidOperationException($"The insert returned {rows.Count} rows for {jobs.Count} jobs.");
+        }
+
+        // OUTPUT has no order, but ids follow the input (the statement's ORDER BY), chunk after chunk.
+        rows.Sort((a, b) => a.Id.CompareTo(b.Id));
+        return [.. rows.Select(row => new JobInsertResult(row, UniqueSkippedAsDuplicate: false))];
+    }
+
+    /// <summary>
+    /// SQL Server's fast path is the batched insert itself, without returning rows to the caller: <c>SqlBulkCopy</c> is
+    /// not used, because its page locks stall every producer until the caller commits (ADR-014).
+    /// </summary>
+    public async Task<long> JobInsertFastAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(jobs);
+        for (var i = 0; i < jobs.Count; i++)
+        {
+            CheckSupported(jobs, i);
+        }
+
+        if (jobs.Count == 0)
+        {
+            return 0;
+        }
+
+        var rows = await ChunkedAsync(
+            jobs.Count,
+            (start, count) => [new SqlParameter("@jobs", SqlDbType.NVarChar, -1) { Value = InsertBatch(jobs, start, count) }],
+            statements.JobInsertMany,
+            static _ => true,
+            cancellationToken).ConfigureAwait(false);
+        return rows.Count;
+    }
 
     public async Task<JobRow?> JobGetByIdAsync(long id, CancellationToken cancellationToken)
     {
@@ -65,11 +133,57 @@ internal sealed class SqlServerExecutor(
         return rows.Count == 0 ? null : rows[0];
     }
 
-    public Task<IReadOnlyList<JobRow>> JobGetAvailableAsync(JobGetAvailableParams parameters, CancellationToken cancellationToken) =>
-        NotYet<IReadOnlyList<JobRow>>("5.3");
+    public async Task<IReadOnlyList<JobRow>> JobGetAvailableAsync(JobGetAvailableParams parameters, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentException.ThrowIfNullOrEmpty(parameters.Queue, nameof(parameters));
+        ArgumentException.ThrowIfNullOrEmpty(parameters.ClientId, nameof(parameters));
+        ArgumentOutOfRangeException.ThrowIfLessThan(parameters.Max, 1, nameof(parameters));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(parameters.Max, MaxRowsPerStatement, nameof(parameters));
+        ArgumentOutOfRangeException.ThrowIfLessThan(parameters.MaxAttemptedBy, 1, nameof(parameters));
 
-    public Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken) =>
-        NotYet<IReadOnlyList<JobRow>>("5.3");
+        var rows = await RowsAsync(
+            statements.JobGetAvailable,
+            [
+                new SqlParameter("@queue", SqlDbType.NVarChar, 128) { Value = parameters.Queue },
+                new SqlParameter("@client_id", SqlDbType.NVarChar, -1) { Value = parameters.ClientId },
+                new SqlParameter("@max", SqlDbType.Int) { Value = parameters.Max },
+                new SqlParameter("@max_attempted_by", SqlDbType.Int) { Value = parameters.MaxAttemptedBy },
+            ],
+            ReadJob,
+            cancellationToken).ConfigureAwait(false);
+        rows.Sort(FetchOrder);
+        return rows;
+    }
+
+    public async Task<IReadOnlyList<JobRow>> JobSetStateIfRunningManyAsync(IReadOnlyList<JobSetStateParams> jobs, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(jobs);
+        for (var i = 0; i < jobs.Count; i++)
+        {
+            var job = jobs[i] ?? throw new ArgumentException($"Outcome {i} is null.", nameof(jobs));
+            if (job.State is JobState.Running or JobState.Pending)
+            {
+                throw new ArgumentException($"Outcome {i} sets job {job.Id} to {job.State}, which an outcome cannot.", nameof(jobs));
+            }
+        }
+
+        if (jobs.Count == 0)
+        {
+            return [];
+        }
+
+        var rows = await ChunkedAsync(
+            jobs.Count,
+            (start, count) => [new SqlParameter("@batch", SqlDbType.NVarChar, -1) { Value = OutcomeBatch(jobs, start, count) }],
+            statements.JobSetStateIfRunningMany,
+            ReadJob,
+            cancellationToken).ConfigureAwait(false);
+
+        // A job given twice comes back once, as from the PostgreSQL driver's join.
+        rows.Sort((a, b) => a.Id.CompareTo(b.Id));
+        return [.. rows.DistinctBy(row => row.Id)];
+    }
 
     public Task<IReadOnlyList<JobScheduleResult>> JobScheduleAsync(JobScheduleParams parameters, CancellationToken cancellationToken) =>
         NotYet<IReadOnlyList<JobScheduleResult>>("5.6");
@@ -167,32 +281,67 @@ internal sealed class SqlServerExecutor(
         MetadataJson = reader.GetString(4),
     };
 
-    /// <summary>Runs <paramref name="sql"/> and reads every row it returns with <paramref name="read"/>.</summary>
-    private async Task<List<T>> RowsAsync<T>(string sql, SqlParameter[] parameters, Func<SqlDataReader, T> read, CancellationToken cancellationToken)
+    /// <summary>Runs <paramref name="sql"/> and reads every row of every result set it returns with <paramref name="read"/>.</summary>
+    private Task<List<T>> RowsAsync<T>(string sql, SqlParameter[] parameters, Func<SqlDataReader, T> read, CancellationToken cancellationToken) =>
+        ChunkedAsync(1, (_, _) => parameters, sql, read, cancellationToken);
+
+    /// <summary>
+    /// Runs <paramref name="sql"/> once per chunk of at most <see cref="MaxRowsPerStatement"/> of <paramref name="count"/>
+    /// items, with the parameters <paramref name="parameters"/> builds for each chunk's start and length, and reads every
+    /// row of every result set. Several chunks on a pooled connection run in a transaction of the executor's own, so they
+    /// commit or roll back together; in a caller's transaction they simply run in it.
+    /// </summary>
+    private async Task<List<T>> ChunkedAsync<T>(
+        int count,
+        Func<int, int, SqlParameter[]> parameters,
+        string sql,
+        Func<SqlDataReader, T> read,
+        CancellationToken cancellationToken)
     {
         var (connection, owned) = await OpenAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var command = new SqlCommand(sql, connection, transaction);
-            await using (command.ConfigureAwait(false))
+            var ownTransaction = owned && count > MaxRowsPerStatement
+                ? (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false)
+                : null;
+            try
             {
-                command.Parameters.AddRange(parameters);
                 var rows = new List<T>();
-                var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-                await using (reader.ConfigureAwait(false))
+                for (var start = 0; start < count; start += MaxRowsPerStatement)
                 {
-                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    var command = new SqlCommand(sql, connection, ownTransaction ?? transaction);
+                    await using (command.ConfigureAwait(false))
                     {
-                        rows.Add(read(reader));
-                    }
-
-                    // Drain later result sets so that their errors surface here.
-                    while (await reader.NextResultAsync(cancellationToken).ConfigureAwait(false))
-                    {
+                        command.Parameters.AddRange(parameters(start, Math.Min(MaxRowsPerStatement, count - start)));
+                        var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                        await using (reader.ConfigureAwait(false))
+                        {
+                            do
+                            {
+                                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                                {
+                                    rows.Add(read(reader));
+                                }
+                            }
+                            while (await reader.NextResultAsync(cancellationToken).ConfigureAwait(false));
+                        }
                     }
                 }
 
+                if (ownTransaction is not null)
+                {
+                    await ownTransaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                }
+
                 return rows;
+            }
+            finally
+            {
+                // Disposing a transaction that did not commit rolls it back.
+                if (ownTransaction is not null)
+                {
+                    await ownTransaction.DisposeAsync().ConfigureAwait(false);
+                }
             }
         }
         finally
@@ -202,6 +351,97 @@ internal sealed class SqlServerExecutor(
                 await connection.DisposeAsync().ConfigureAwait(false);
             }
         }
+    }
+
+    /// <summary>Rejects what the insert cannot store yet, before any SQL runs.</summary>
+    private static void CheckSupported(IReadOnlyList<JobInsertParams> jobs, int index)
+    {
+        var job = jobs[index] ?? throw new ArgumentException($"Job {index} is null.", nameof(jobs));
+        if (job.UniqueKey is not null || job.UniqueStates is not null)
+        {
+            throw new NotSupportedException($"Job {index} is unique: the SQL Server driver inserts unique jobs from plan task 5.4.");
+        }
+
+        if (job.Tags is null || job.Tags.Any(tag => tag is null))
+        {
+            throw new ArgumentException($"Job {index} has null tags.", nameof(jobs));
+        }
+    }
+
+    /// <summary>The <c>@jobs</c> parameter of <c>job_insert_many.sql</c> for one chunk.</summary>
+    internal static string InsertBatch(IReadOnlyList<JobInsertParams> jobs, int start, int count) => SqlServerValues.JsonArray(writer =>
+    {
+        for (var i = start; i < start + count; i++)
+        {
+            var job = jobs[i];
+            writer.WriteStartObject();
+            writer.WriteNumber("o", i);
+            writer.WriteString("a", job.ArgsJson);
+            writer.WriteString("k", job.Kind);
+            writer.WriteNumber("m", checked((short)job.MaxAttempts));
+            writer.WriteString("d", job.MetadataJson);
+            writer.WriteNumber("p", checked((short)job.Priority));
+            writer.WriteString("q", job.Queue);
+            if (job.ScheduledAt is { } scheduledAt)
+            {
+                writer.WriteString("s", SqlServerValues.ToJson(scheduledAt));
+            }
+
+            writer.WriteString("st", ToDatabase(job.State));
+            writer.WriteString("t", SqlServerValues.WriteStrings(job.Tags));
+            writer.WriteEndObject();
+        }
+    });
+
+    /// <summary>The <c>@batch</c> parameter of <c>job_set_state_if_running_many.sql</c> for one chunk.</summary>
+    internal static string OutcomeBatch(IReadOnlyList<JobSetStateParams> jobs, int start, int count) => SqlServerValues.JsonArray(writer =>
+    {
+        for (var i = start; i < start + count; i++)
+        {
+            var job = jobs[i];
+            writer.WriteStartObject();
+            writer.WriteNumber("i", job.Id);
+            if (job.Attempt is { } attempt)
+            {
+                writer.WriteNumber("at", checked((short)attempt));
+            }
+
+            if (job.Error is { } error)
+            {
+                writer.WriteString("e", FormatError(error));
+            }
+
+            if (job.FinalizedAt is { } finalizedAt)
+            {
+                writer.WriteString("f", SqlServerValues.ToJson(finalizedAt));
+            }
+
+            if (job.MetadataUpdates is { } metadata)
+            {
+                writer.WriteString("d", metadata);
+            }
+
+            if (job.ScheduledAt is { } scheduledAt)
+            {
+                writer.WriteString("s", SqlServerValues.ToJson(scheduledAt));
+            }
+
+            writer.WriteString("st", ToDatabase(job.State));
+            writer.WriteEndObject();
+        }
+    });
+
+    /// <summary>The fetch order (FR-EXE-02): <c>priority, scheduled_at, id</c>.</summary>
+    private static int FetchOrder(JobRow a, JobRow b)
+    {
+        var byPriority = a.Priority.CompareTo(b.Priority);
+        if (byPriority != 0)
+        {
+            return byPriority;
+        }
+
+        var byScheduled = a.ScheduledAt.CompareTo(b.ScheduledAt);
+        return byScheduled != 0 ? byScheduled : a.Id.CompareTo(b.Id);
     }
 
     /// <summary>

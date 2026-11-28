@@ -1,4 +1,7 @@
+using System.Buffers;
 using System.Data;
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using KopiQueue.Drivers;
 using Microsoft.Data.SqlClient;
@@ -23,6 +26,36 @@ internal static class SqlServerValues
     /// it to whole microseconds when it stores it in a <c>datetime2(6)</c> column.
     /// </summary>
     public static DateTime ToDatabase(DateTimeOffset value) => value.UtcDateTime;
+
+    /// <summary>
+    /// <paramref name="value"/> in UTC as text that <c>OPENJSON ... WITH (x datetime2(7))</c> reads exactly: ISO 8601
+    /// without an offset, which SQL Server reads the same whatever the session's language and date format.
+    /// </summary>
+    public static string ToJson(DateTimeOffset value) =>
+        value.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff", CultureInfo.InvariantCulture);
+
+    /// <summary>A JSON array of <paramref name="values"/>, as the array columns store it.</summary>
+    public static string WriteStrings(IEnumerable<string> values) => JsonArray(writer =>
+    {
+        foreach (var value in values)
+        {
+            writer.WriteStringValue(value);
+        }
+    });
+
+    /// <summary>A JSON array whose elements <paramref name="writeElements"/> writes.</summary>
+    public static string JsonArray(Action<Utf8JsonWriter> writeElements)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartArray();
+            writeElements(writer);
+            writer.WriteEndArray();
+        }
+
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
 
     /// <summary>A <c>datetime2</c> parameter holding <paramref name="value"/> in UTC, or <c>NULL</c>.</summary>
     public static SqlParameter Time(string name, DateTimeOffset? value) => new(name, SqlDbType.DateTime2)

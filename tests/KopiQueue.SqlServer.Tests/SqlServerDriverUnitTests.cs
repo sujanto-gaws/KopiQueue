@@ -1,5 +1,6 @@
 using System.Data;
 using System.Data.Common;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using KopiQueue.Drivers;
 using KopiQueue.Migrations;
@@ -143,10 +144,83 @@ public sealed partial class SqlServerDriverUnitTests
         // Nothing is opened, so no server is needed.
         var executor = ((IKopiDriver)new SqlServerDriver("Server=unused")).GetExecutor();
 
-        var ex = await Assert.ThrowsAsync<NotSupportedException>(() => executor.JobInsertManyAsync([], TestContext.Current.CancellationToken));
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(
+            () => executor.JobScheduleAsync(new JobScheduleParams { Max = 1 }, TestContext.Current.CancellationToken));
 
-        Assert.Contains("JobInsertManyAsync", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("plan task 5.3", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("JobScheduleAsync", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("plan task 5.6", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Arguments_are_checked_before_anything_is_opened()
+    {
+        var executor = ((IKopiDriver)new SqlServerDriver("Server=unused")).GetExecutor();
+        var ct = TestContext.Current.CancellationToken;
+        JobInsertParams[] unique =
+        [
+            new() { Kind = "k", ArgsJson = "{}", Queue = "q", State = JobState.Available, Priority = 1, MaxAttempts = 1, UniqueKey = new byte[32], UniqueStates = 1 },
+        ];
+
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(() => executor.JobInsertManyAsync(unique, ct));
+        Assert.Contains("plan task 5.4", ex.Message, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<NotSupportedException>(() => executor.JobInsertFastAsync(unique, ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => executor.JobInsertManyAsync([null!], ct));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => executor.JobGetAvailableAsync(new JobGetAvailableParams { Queue = "q", Max = 1001, ClientId = "c" }, ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => executor.JobSetStateIfRunningManyAsync([new JobSetStateParams { Id = 1, State = JobState.Running }], ct));
+        Assert.Empty(await executor.JobInsertManyAsync([], ct));
+        Assert.Equal(0, await executor.JobInsertFastAsync([], ct));
+        Assert.Empty(await executor.JobSetStateIfRunningManyAsync([], ct));
+    }
+
+    [Fact]
+    public void Insert_batches_carry_json_as_strings_and_times_in_UTC()
+    {
+        JobInsertParams[] jobs =
+        [
+            new() { Kind = "skip", ArgsJson = "{}", Queue = "q", State = JobState.Available, Priority = 1, MaxAttempts = 1 },
+            new()
+            {
+                Kind = "k", ArgsJson = """{"n": 1}""", Queue = "q", State = JobState.Scheduled, Priority = 2, MaxAttempts = 3,
+                ScheduledAt = new DateTimeOffset(2026, 6, 1, 9, 30, 0, TimeSpan.FromHours(7)).AddTicks(1234567), MetadataJson = """{"m": true}""", Tags = ["a", "b"],
+            },
+            new() { Kind = "now", ArgsJson = "[]", Queue = "q", State = JobState.Available, Priority = 1, MaxAttempts = 1 },
+        ];
+
+        var json = SqlServerExecutor.InsertBatch(jobs, 1, 2);
+
+        var rows = JsonElement.Parse(json).EnumerateArray().ToList();
+        Assert.Equal(2, rows.Count);
+        Assert.Equal(
+            (1, """{"n": 1}""", "k", 3, """{"m": true}""", 2, "q", "2026-06-01T02:30:00.1234567", "scheduled", """["a","b"]"""),
+            (rows[0].GetProperty("o").GetInt32(), rows[0].GetProperty("a").GetString(), rows[0].GetProperty("k").GetString(),
+             rows[0].GetProperty("m").GetInt32(), rows[0].GetProperty("d").GetString(), rows[0].GetProperty("p").GetInt32(),
+             rows[0].GetProperty("q").GetString(), rows[0].GetProperty("s").GetString(), rows[0].GetProperty("st").GetString(),
+             rows[0].GetProperty("t").GetString()));
+        Assert.Equal((2, "[]", "[]"), (rows[1].GetProperty("o").GetInt32(), rows[1].GetProperty("a").GetString(), rows[1].GetProperty("t").GetString()));
+        Assert.False(rows[1].TryGetProperty("s", out _)); // the database's now
+    }
+
+    [Fact]
+    public void Outcome_batches_leave_out_what_does_not_change()
+    {
+        var at = new DateTimeOffset(2026, 6, 1, 9, 30, 0, TimeSpan.FromHours(7));
+
+        var json = SqlServerExecutor.OutcomeBatch(
+            [
+                new JobSetStateParams { Id = 7, State = JobState.Completed, FinalizedAt = at },
+                new JobSetStateParams { Id = 8, State = JobState.Retryable, Attempt = 2, Error = new AttemptError(at, 2, "x", null), ScheduledAt = at, MetadataUpdates = "{}" },
+            ],
+            0,
+            2);
+
+        var rows = JsonElement.Parse(json).EnumerateArray().ToList();
+        Assert.Equal(["i", "f", "st"], rows[0].EnumerateObject().Select(p => p.Name));
+        Assert.Equal((7, "2026-06-01T02:30:00.0000000", "completed"), (rows[0].GetProperty("i").GetInt32(), rows[0].GetProperty("f").GetString(), rows[0].GetProperty("st").GetString()));
+        Assert.Equal(["i", "at", "e", "d", "s", "st"], rows[1].EnumerateObject().Select(p => p.Name));
+        Assert.Equal(
+            (2, """{"at":"2026-06-01T02:30:00Z","attempt":2,"error":"x","trace":""}""", "{}", "2026-06-01T02:30:00.0000000"),
+            (rows[1].GetProperty("at").GetInt32(), rows[1].GetProperty("e").GetString(), rows[1].GetProperty("d").GetString(), rows[1].GetProperty("s").GetString()));
     }
 
     [Fact]
@@ -155,6 +229,10 @@ public sealed partial class SqlServerDriverUnitTests
         var statements = new SqlServerStatements("[queue].", "jobs_");
 
         Assert.Contains("FROM [queue].jobs_job", statements.JobGetById, StringComparison.Ordinal);
+        Assert.Contains("INSERT INTO [queue].jobs_job", statements.JobInsertMany, StringComparison.Ordinal);
+        Assert.Contains("FORCESEEK (jobs_job_fetch_idx (queue))", statements.JobGetAvailable, StringComparison.Ordinal);
+        Assert.Contains("FROM [queue].jobs_job AS j", statements.JobSetStateIfRunningMany, StringComparison.Ordinal);
+        Assert.DoesNotContain("{{", statements.JobSetStateIfRunningMany, StringComparison.Ordinal);
         Assert.Contains("FROM [queue].jobs_queue", statements.QueueGet, StringComparison.Ordinal);
     }
 

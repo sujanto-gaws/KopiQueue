@@ -22,6 +22,11 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
   - **Rows:** jobs and queues are read with UTC times, and with tags, attempted-by and errors as lists.
   - Only reading a job by ID and a queue by name works so far. The other operations follow in later M5 tasks and throw `NotSupportedException` until then.
   - ([#48](https://github.com/sujanto-gaws/KopiQueue/issues/48))
+- SQL Server insert, fetch and complete (FR-INS-04, FR-EXE-01, FR-EXE-02, FR-EXE-06):
+  - **Insert:** `JobInsertManyAsync` and `JobInsertFastAsync` insert OPENJSON batches of up to 1,000 rows per statement. Ids follow the input order. A larger batch is split into several statements but stays all-or-nothing. Unique jobs follow in plan task 5.4.
+  - **Fetch:** `JobGetAvailableAsync` locks and starts due jobs with `UPDLOCK, READPAST, ROWLOCK, FORCESEEK` (design §8.1), skipping jobs that another transaction holds and uncommitted inserts without waiting. It keeps the newest `MaxAttemptedBy` client IDs.
+  - **Complete:** `JobSetStateIfRunningManyAsync` behaves as on PostgreSQL. Only running jobs change, a job asked to cancel is cancelled instead of retried, errors are appended, and metadata is merged at the top level as `jsonb ||` does.
+  - ([#49](https://github.com/sujanto-gaws/KopiQueue/issues/49))
 
 ## [0.4.0-beta.1] - 2026-11-27
 

@@ -67,7 +67,8 @@ public sealed class SqlServerExecutorTests(SqlServerFixture db) : IClassFixture<
         Assert.Null(job.AttemptedAt);
         // SYSUTCDATETIME read as UTC is close to now; read as local time it would be off by the machine's offset.
         Assert.InRange(job.CreatedAt, DateTimeOffset.UtcNow.AddMinutes(-2), DateTimeOffset.UtcNow.AddMinutes(2));
-        Assert.Equal(job.CreatedAt, job.ScheduledAt);
+        // Each SYSUTCDATETIME() default reads the clock on its own; the driver's insert reads it once for both.
+        Assert.InRange(job.ScheduledAt - job.CreatedAt, TimeSpan.FromSeconds(-1), TimeSpan.FromSeconds(1));
     }
 
     [Fact]
