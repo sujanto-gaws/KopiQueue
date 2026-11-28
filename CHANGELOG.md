@@ -34,6 +34,11 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
   - **SNAPSHOT callers** see the latest committed holder.
   - ([#50](https://github.com/sujanto-gaws/KopiQueue/issues/50))
 - SQL Server `InsertManyFastAsync` no longer returns the inserted rows from the database, only their count, which makes it about 15% faster than `InsertManyAsync`. A large insert in an open transaction holds row locks only, so workers fetching from any queue are not blocked (FR-INS-04, ADR-014, [#51](https://github.com/sujanto-gaws/KopiQueue/issues/51)).
+- The SQL Server driver now runs leader election, the scheduler, rescuer and cleaners, queue management, and the job admin API: list, cancel, delete, delete many and retry (FR-MNT-*, FR-ADM-*, [#52](https://github.com/sujanto-gaws/KopiQueue/issues/52)).
+  - **Metadata filters:** `MetadataContains` matches as PostgreSQL's `@>` does: nested objects, arrays as sets, numbers by value, exact strings and keys.
+  - **Statement size:** no maintenance statement touches more than 1,000 rows, so none escalates to a table lock. Larger batches run as several statements in one transaction.
+  - **Scheduler batches:** on drivers that limit rows per statement, the scheduler's batches are capped at that limit. A full batch still runs again at once.
+  - **Without LISTEN/NOTIFY:** pause, resume, leader resignation and retried jobs reach other SQL Server clients at their next poll.
 
 ## [0.4.0-beta.1] - 2026-11-27
 

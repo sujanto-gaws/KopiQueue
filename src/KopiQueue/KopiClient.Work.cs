@@ -387,7 +387,8 @@ public sealed partial class KopiClient
     {
         var services = new List<IMaintenanceService>
         {
-            new Scheduler(driver, options.SchedulerInterval),
+            // A driver that limits the rows one statement touches gets batches it can run in one statement (design §8.1).
+            new Scheduler(driver, options.SchedulerInterval, Math.Min(Scheduler.DefaultBatchSize, driver.Capabilities.MaxRowsPerStatement ?? int.MaxValue)),
             new Rescuer(
                 driver,
                 new RescuerOptions

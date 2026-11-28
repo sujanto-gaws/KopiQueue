@@ -165,7 +165,7 @@ public sealed class KopiClientLifecycleTests
 
         public IEnumerable<string> Queues => QueueSet.Keys;
 
-        public DriverCapabilities Capabilities { get; } = new() { ListenNotify = false, BulkCopy = false };
+        public DriverCapabilities Capabilities { get; init; } = new() { ListenNotify = false, BulkCopy = false };
 
         public IKopiExecutor GetExecutor() => this;
 

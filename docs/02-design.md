@@ -1383,6 +1383,8 @@ IF @@ROWCOUNT = 0
 SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'default';
 ```
 
+As built in plan task 5.6 (`leader_attempt_elect.sql`): the sketch above, except that the result is whether the `UPDATE` or the `INSERT` changed a row, not a third read. The lease length travels as whole seconds plus microseconds, because `DATEADD` takes an `int` and milliseconds would cap it at about 24 days.
+
 **Bulk insert:** batched `INSERT ... SELECT ... FROM OPENJSON(@jobs) WITH (...) ORDER BY ordinal`, ≤ 1,000 rows per statement, inside the caller's transaction when one is given, or in one of the driver's own when the batch spans several statements.
 
 As built in plan tasks 5.3 and 5.5:
@@ -1402,9 +1404,28 @@ As built in plan tasks 5.3 and 5.5:
 
 - As built in plan task 5.3 (`job_insert_many.sql`): `args`, `metadata` and `tags` travel as JSON strings, so they are stored exactly as given. Ids follow `ORDER BY ordinal`, which SQL Server guarantees for `INSERT ... SELECT`, so they ascend with the input. `created_at` and a missing `scheduled_at` share one `SYSUTCDATETIME()` reading.
 - A batch larger than 1,000 rows runs as several statements. On a pooled connection they run in a READ COMMITTED transaction of the driver's own, so the batch stays all-or-nothing. In a caller's transaction they simply run in it.
-- Raw inserts that leave both times to their column defaults can get slightly different values, because each default reads the clock on its own. PostgreSQL's `now()` is the transaction's time. Spike 0.10 measured about 42,000 rows/s with row locks only. **SqlBulkCopy is not used** (ADR-014): it takes page and extent X locks, and READPAST does not skip page locks, so producers on *every* queue stalled until the caller committed. Unique jobs in a batch go through the applock path one by one.
+- Raw inserts that leave both times to their column defaults can get slightly different values, because each default reads the clock on its own. PostgreSQL's `now()` is the transaction's time. Spike 0.10 measured about 42,000 rows/s with row locks only. **SqlBulkCopy is not used** (ADR-014): it takes page and extent X locks, and READPAST does not skip page locks, so producers on *every* queue stalled until the caller committed. Unique jobs take the applock path described above, one round trip per statement.
 
 **Maintenance:** `DELETE TOP (@n) FROM kopi_job WITH (READPAST, FORCESEEK(...)) WHERE ...` (cleaner), and `UPDATE TOP (@n) ... WITH (READPAST, FORCESEEK(...))` with `OUTPUT inserted.queue` (scheduler), following the rules above.
+
+As built in plan task 5.6. Each statement has the semantics of its PostgreSQL counterpart, without the notifications: SQL Server clients poll.
+
+- **The clock.** Each statement reads `SYSUTCDATETIME()` once into a `datetime2(6)` variable and compares and stores that, so a comparison never sees a stored time later than the clock it came from (the rounding found in task 5.5). Durations travel as whole seconds plus microseconds.
+- **Batches over 1,000 rows.** The core caps the scheduler's batch at `MaxRowsPerStatement`, as it already did for fetch and completion. The executor still accepts any `Max`: it runs statements of at most 1,000 rows in one transaction.
+  - The scheduler continues each statement after the last due position (`scheduled_at`, `id`), so a job it leaves alone is not read again.
+  - The cleaners and delete-many repeat until a statement handles fewer rows than it was asked to.
+- **Scheduler** (`job_schedule.sql`). It locks the due rows (`UPDLOCK, READPAST, ROWLOCK, FORCESEEK` on the schedule index) into a table variable, then updates them, so it always runs in a transaction. A job that would claim its unique key on promotion first takes that key's applock, in key order like an insert, so an insert of the same key cannot slip in between the holder check and the update.
+- **Find first, then delete** (`job_delete_finalized.sql`, `job_delete_many.sql`). A locking read of a sorted range locks every row the sort reads, not just the first N, so these find their rows without locks (`READPAST`) and delete them with the conditions checked again. The job cleaner takes each state's oldest rows from the `(state, finalized_at)` index, so it reads no more rows than it could delete.
+- **Rescuer** (`job_list_stuck.sql`, `job_rescue_many.sql`). Listing reads the running index with `READPAST`. A rescue changes a job only while it is still running with the `attempted_at` the rescuer saw, as on PostgreSQL.
+- **Queues.** `queue_create_or_set_updated_at_many.sql` updates existing rows with a nested loop over the sorted names, so clients lock shared queues in the same order. It then inserts missing names under `UPDLOCK, HOLDLOCK`, so two clients creating the same queue take turns. Pause, resume and metadata updates change the row only; clients see them at their next poll of their queues (FR-QUE-04).
+- **Admin lists and deletes** filter with JSON arrays read by `OPENJSON`, and use `OPTION (RECOMPILE)` so each plan drops the filters it doesn't use. Under locking READ COMMITTED a list waits for rows a writer holds, as any read on SQL Server does; with RCSI it doesn't.
+- **`MetadataContains`.** SQL Server has no `jsonb @>`, but the filter is known before the query runs. `SqlServerJsonContainment` compiles it into nested `EXISTS (SELECT 1 FROM OPENJSON(...))` predicates, one per key and array element, with every key and value a parameter.
+  - Keys and strings compare as binary, so they're exact, case-sensitive and blind to SQL Server's trailing-space padding.
+  - Numbers compare by value: as `float`, and as `decimal(38, 10)` where both sides fit.
+  - Arrays match as sets.
+  - A shared conformance case checks 19 edge cases on both drivers.
+  - A filter may use at most 2,000 parameters.
+
 
 **Migrations lock** (plan task 5.1): `sp_getapplock @Resource = 'kopi_migrate:<schema>.<prefix>', @LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = 0`.
 
