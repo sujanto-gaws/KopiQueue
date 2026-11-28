@@ -23,7 +23,7 @@ Task 5.9 covers four things:
 |--------|--------|---|
 | Empty poll ≤ 10 logical reads | 4 reads, about 0.1 ms of CPU; p50 round trip 0.4 ms | Met |
 | End-to-end no-op throughput ≥ 5,000 jobs/s per client | 7,900 jobs/s with 1,000 workers; 1,800 with 200 | Met with enough workers |
-| Batched insert ≥ 20,000 jobs/s, in 1,000-job statements with about 60-byte args (revised in this task; it was ≥ 30,000 with tiny args) | 18,100 to 21,900 jobs/s with 60-byte args, varying between runs; 25,000 to 30,500 with `{"n":1}` args | Around the line here; met on CI (below) |
+| Batched insert ≥ 20,000 jobs/s on the fast path (`InsertManyFastAsync`), in 1,000-job statements with about 60-byte args (revised in this task; it was ≥ 30,000 with tiny args) | 18,100 to 21,900 jobs/s with 60-byte args, varying between runs; 25,000 to 30,500 with `{"n":1}` args | Around the line here; met on CI (below) |
 | Cross-process pickup p50 ≤ interval / 2 + 30 ms | 100 ms poll: p50 61 ms (target 80). 1 s poll: p50 497 ms, mean 505 ms (target 530) | Met |
 
 - **Workers bound end-to-end throughput.** A producer waits `FetchCooldown` (100 ms) between fetches, so one queue fetches at most ten times a second. With 200 workers the ceiling is 2,000 jobs/s, and 1,800 was measured. 5,000 jobs/s needs at least 500 workers on the queue, or a shorter cooldown.
@@ -36,6 +36,8 @@ These numbers come from `bench.yml` on this task's pull request ([#157](https://
 | | 2019 (15.0.4510) | 2022 (16.0.4325) | 2025 (17.0.5065) |
 |---|---|---|---|
 | Fast insert, `{"n":1}` args, jobs/s | 52,200 | 29,900 | 27,100 |
+| Fast insert, 60-byte args (the NFR-PERF-07 target), jobs/s | 40,700 | 28,300 | 22,200 |
+| `InsertManyAsync`, 60-byte args (returns rows; no target), jobs/s | 21,600 | 17,700 | 14,100 |
 | End to end, 1,000 workers, jobs/s | 9,000 | 7,300 | 7,000 |
 | Pickup, 100 ms poll: p50 / mean | 56 / 54 ms | 53 / 54 ms | 57 / 58 ms |
 | Pickup, 1 s poll: p50 / mean | 502 / 510 ms | 431 / 473 ms | 449 / 477 ms |
