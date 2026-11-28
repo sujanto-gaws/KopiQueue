@@ -80,7 +80,7 @@ internal sealed partial class SqlServerMigrationDriver : IMigrationDriver
         var connection = await _connections.OpenAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await SqlServerSessionCheck.EnsureAsync(connection, cancellationToken).ConfigureAwait(false);
+            await SqlServerSessionCheck.EnsureAsync(connection, transaction: null, cancellationToken).ConfigureAwait(false);
             return new Session(connection, MigrationTable, LockResource);
         }
         catch

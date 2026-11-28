@@ -1,4 +1,7 @@
+using System.Data;
+using System.Data.Common;
 using System.Text.RegularExpressions;
+using KopiQueue.Drivers;
 using KopiQueue.Migrations;
 using KopiQueue.SqlServer.Migrations;
 using Microsoft.Data.SqlClient;
@@ -115,7 +118,77 @@ public sealed partial class SqlServerDriverUnitTests
         Assert.Equal(("main", 1), (migrator.Line, migrator.LatestVersion));
     }
 
+    [Fact]
+    public void The_driver_is_poll_only_and_caps_rows_per_statement()
+    {
+        IKopiDriver driver = new SqlServerDriver("Server=unused");
+
+        Assert.Equal((false, false, 1000), (driver.Capabilities.ListenNotify, driver.Capabilities.BulkCopy, driver.Capabilities.MaxRowsPerStatement));
+        Assert.Null(driver.CreateListener());
+    }
+
+    [Fact]
+    public void A_transaction_of_another_database_client_is_rejected()
+    {
+        IKopiDriver driver = new SqlServerDriver("Server=unused");
+
+        var ex = Assert.Throws<ArgumentException>(() => driver.GetExecutor(new ForeignTransaction()));
+        Assert.Contains(nameof(ForeignTransaction), ex.Message, StringComparison.Ordinal);
+        Assert.Throws<ArgumentNullException>(() => driver.GetExecutor(null!));
+    }
+
+    [Fact]
+    public async Task Operations_of_later_tasks_say_which_task_adds_them()
+    {
+        // Nothing is opened, so no server is needed.
+        var executor = ((IKopiDriver)new SqlServerDriver("Server=unused")).GetExecutor();
+
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(() => executor.JobInsertManyAsync([], TestContext.Current.CancellationToken));
+
+        Assert.Contains("JobInsertManyAsync", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("plan task 5.3", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Statements_render_for_the_schema_and_prefix()
+    {
+        var statements = new SqlServerStatements("[queue].", "jobs_");
+
+        Assert.Contains("FROM [queue].jobs_job", statements.JobGetById, StringComparison.Ordinal);
+        Assert.Contains("FROM [queue].jobs_queue", statements.QueueGet, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Times_convert_to_UTC_both_ways()
+    {
+        var stored = new DateTime(2026, 6, 1, 2, 30, 0, DateTimeKind.Unspecified);
+
+        var read = SqlServerValues.FromDatabase(stored);
+
+        Assert.Equal((TimeSpan.Zero, stored.Ticks), (read.Offset, read.UtcTicks));
+        var written = SqlServerValues.ToDatabase(new DateTimeOffset(2026, 6, 1, 9, 30, 0, TimeSpan.FromHours(7)));
+        Assert.Equal((DateTimeKind.Utc, stored.Ticks), (written.Kind, written.Ticks));
+        Assert.Equal(DBNull.Value, SqlServerValues.Time("@t", null).Value);
+        Assert.Equal(SqlDbType.DateTime2, SqlServerValues.Time("@t", null).SqlDbType);
+    }
+
     // CONSTRAINT <name> and CREATE [UNIQUE] INDEX <name>: every name the script gives an object of its own.
     [GeneratedRegex(@"(?:CONSTRAINT|INDEX)\s+(?<name>[^\s(]+)", RegexOptions.CultureInvariant)]
     private static partial Regex ObjectName();
+}
+
+/// <summary>A transaction of some other database client.</summary>
+internal sealed class ForeignTransaction : DbTransaction
+{
+    public override IsolationLevel IsolationLevel => IsolationLevel.ReadCommitted;
+
+    protected override DbConnection? DbConnection => null;
+
+    public override void Commit()
+    {
+    }
+
+    public override void Rollback()
+    {
+    }
 }
