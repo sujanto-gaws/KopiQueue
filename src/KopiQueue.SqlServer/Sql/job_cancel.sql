@@ -6,6 +6,8 @@
 -- database's now (§4.1), and the completer's guard and the worker settle how it ends; SQL Server has no LISTEN/NOTIFY,
 -- so the worker's client finds the request by polling (job_list_cancel_attempted.sql). A finalised job is left as it is.
 -- Returns the job as it is after the call, or no row for an unknown id.
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
 DECLARE @now datetime2(6) = SYSUTCDATETIME();
 
 UPDATE {{schema}}{{prefix}}job

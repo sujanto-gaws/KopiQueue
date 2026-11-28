@@ -8,6 +8,8 @@
 --
 -- Returns the job as it is after the call, or no row for an unknown id. A unique job whose key another job holds fails
 -- with a duplicate key error on the unique index (2601), which the driver reports.
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
 DECLARE @now datetime2(6) = SYSUTCDATETIME();
 
 UPDATE {{schema}}{{prefix}}job
