@@ -14,8 +14,13 @@ internal sealed class SqlServerStatements
 {
     private const string ResourceRoot = "kopi-sql/";
 
-    public SqlServerStatements(string schemaQualifier, string tablePrefix)
+    /// <param name="schema">The schema, validated and unquoted.</param>
+    /// <param name="tablePrefix">The table prefix, validated.</param>
+    public SqlServerStatements(string schema, string tablePrefix)
     {
+        var schemaQualifier = SqlServerIdentifiers.Quote(schema) + ".";
+        UniqueLockScope = schema + "." + tablePrefix;
+
         string Load(string name)
         {
             using var stream = typeof(SqlServerStatements).Assembly.GetManifestResourceStream(ResourceRoot + name)
@@ -25,13 +30,27 @@ internal sealed class SqlServerStatements
         }
 
         JobInsertMany = Load("job_insert_many.sql");
+        JobUniqueLock = Load("job_unique_lock.sql");
+        JobInsertUnique = JobUniqueLock + "\n" + Load("job_insert_unique.sql");
         JobGetById = Load("job_get_by_id.sql");
         JobGetAvailable = Load("job_get_available.sql");
         JobSetStateIfRunningMany = Load("job_set_state_if_running_many.sql");
         QueueGet = Load("queue_get.sql");
     }
 
+    /// <summary>
+    /// What the unique-key locks are named after: <c>&lt;schema&gt;.&lt;prefix&gt;</c>, so separate schemas and prefixes
+    /// never share a lock. At most 96 characters, so a lock name stays within <c>sp_getapplock</c>'s 255.
+    /// </summary>
+    public string UniqueLockScope { get; }
+
     public string JobInsertMany { get; }
+
+    /// <summary>Takes the unique-key locks of a batch, in key order (<c>job_unique_lock.sql</c>).</summary>
+    public string JobUniqueLock { get; }
+
+    /// <summary>The unique-key locks, then the unique-aware insert (<c>job_insert_unique.sql</c>), as one batch.</summary>
+    public string JobInsertUnique { get; }
 
     public string JobGetById { get; }
 
@@ -74,30 +93,93 @@ internal sealed class SqlServerExecutor(
     public async Task<IReadOnlyList<JobInsertResult>> JobInsertManyAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(jobs);
-        for (var i = 0; i < jobs.Count; i++)
-        {
-            CheckSupported(jobs, i);
-        }
-
         if (jobs.Count == 0)
         {
             return [];
         }
 
-        var rows = await ChunkedAsync(
-            jobs.Count,
-            (start, count) => [new SqlParameter("@jobs", SqlDbType.NVarChar, -1) { Value = InsertBatch(jobs, start, count) }],
-            statements.JobInsertMany,
-            ReadJob,
-            cancellationToken).ConfigureAwait(false);
-        if (rows.Count != jobs.Count)
+        // A unique key the batch repeats is inserted once: later jobs with it are duplicates of the first (FR-UNQ-05).
+        // Insert states (available, scheduled) are in every valid unique-states set, so the first always holds the slot.
+        var firstWithKey = new Dictionary<byte[], int>(UniqueKeyComparer.Instance);
+        var sent = new List<JobInsertParams>(jobs.Count);
+        var duplicateOf = new int[jobs.Count];
+        for (var i = 0; i < jobs.Count; i++)
         {
-            throw new InvalidOperationException($"The insert returned {rows.Count} rows for {jobs.Count} jobs.");
+            var job = CheckSupported(jobs, i, allowUnique: true);
+            duplicateOf[i] = -1;
+            if (job.UniqueKey is { } key)
+            {
+                if (firstWithKey.TryGetValue(key, out var first))
+                {
+                    duplicateOf[i] = first;
+                    continue;
+                }
+
+                firstWithKey.Add(key, i);
+            }
+
+            sent.Add(job);
         }
 
-        // OUTPUT has no order, but ids follow the input (the statement's ORDER BY), chunk after chunk.
-        rows.Sort((a, b) => a.Id.CompareTo(b.Id));
-        return [.. rows.Select(row => new JobInsertResult(row, UniqueSkippedAsDuplicate: false))];
+        List<(JobRow Job, bool Skipped, byte[]? Key)> rows;
+        if (firstWithKey.Count == 0)
+        {
+            rows = await ChunkedAsync(
+                sent.Count,
+                (start, count) => [Jobs(InsertBatch(sent, start, count))],
+                statements.JobInsertMany,
+                reader => (ReadJob(reader), false, (byte[]?)null),
+                cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            // The locks belong to a transaction: the caller's, or one of the executor's own. A batch of several statements
+            // first takes every key's lock in one sorted pass, so its chunks never take keys out of order.
+            rows = await ChunkedAsync(
+                sent.Count,
+                (start, count) => [Jobs(InsertBatch(sent, start, count)), Scope()],
+                statements.JobInsertUnique,
+                reader => (ReadJob(reader), reader.GetBoolean(16), reader.IsDBNull(17) ? null : reader.GetSqlBinary(17).Value),
+                cancellationToken,
+                needsTransaction: true,
+                prelude: sent.Count > MaxRowsPerStatement
+                    ? (statements.JobUniqueLock, [Jobs(InsertBatch(sent, 0, sent.Count)), Scope()])
+                    : null).ConfigureAwait(false);
+        }
+
+        if (rows.Count != sent.Count)
+        {
+            throw new InvalidOperationException($"The insert returned {rows.Count} rows for {sent.Count} jobs.");
+        }
+
+        // OUTPUT has no order. A unique job's row is found by its key, which the batch sends once. The other jobs were
+        // all inserted, and their ids follow the input (the statements' ORDER BY), chunk after chunk.
+        var byKey = new Dictionary<byte[], JobInsertResult>(UniqueKeyComparer.Instance);
+        foreach (var row in rows.Where(r => r.Key is not null && firstWithKey.ContainsKey(r.Key)))
+        {
+            byKey.Add(row.Key!, new JobInsertResult(row.Job, row.Skipped));
+        }
+
+        using var plain = rows.Where(r => r.Key is null).Select(r => r.Job).OrderBy(j => j.Id).GetEnumerator();
+        var results = new JobInsertResult[jobs.Count];
+        for (var i = 0; i < jobs.Count; i++)
+        {
+            if (duplicateOf[i] >= 0)
+            {
+                results[i] = new JobInsertResult(results[duplicateOf[i]].Job, UniqueSkippedAsDuplicate: true);
+            }
+            else if (jobs[i].UniqueKey is { } key)
+            {
+                results[i] = byKey[key];
+            }
+            else
+            {
+                plain.MoveNext();
+                results[i] = new JobInsertResult(plain.Current, UniqueSkippedAsDuplicate: false);
+            }
+        }
+
+        return results;
     }
 
     /// <summary>
@@ -109,7 +191,7 @@ internal sealed class SqlServerExecutor(
         ArgumentNullException.ThrowIfNull(jobs);
         for (var i = 0; i < jobs.Count; i++)
         {
-            CheckSupported(jobs, i);
+            CheckSupported(jobs, i, allowUnique: false);
         }
 
         if (jobs.Count == 0)
@@ -119,7 +201,7 @@ internal sealed class SqlServerExecutor(
 
         var rows = await ChunkedAsync(
             jobs.Count,
-            (start, count) => [new SqlParameter("@jobs", SqlDbType.NVarChar, -1) { Value = InsertBatch(jobs, start, count) }],
+            (start, count) => [Jobs(InsertBatch(jobs, start, count))],
             statements.JobInsertMany,
             static _ => true,
             cancellationToken).ConfigureAwait(false);
@@ -291,21 +373,40 @@ internal sealed class SqlServerExecutor(
     /// row of every result set. Several chunks on a pooled connection run in a transaction of the executor's own, so they
     /// commit or roll back together; in a caller's transaction they simply run in it.
     /// </summary>
+    /// <param name="count">How many items the statements cover.</param>
+    /// <param name="parameters">Builds the parameters of the chunk that starts at an item and has a length.</param>
+    /// <param name="sql">The statement.</param>
+    /// <param name="read">Reads one row.</param>
+    /// <param name="cancellationToken">Cancels the statements.</param>
+    /// <param name="needsTransaction">Whether even one chunk must run in a transaction, for example to own its locks.</param>
+    /// <param name="prelude">A statement to run first, in the same transaction, whose results are not read.</param>
     private async Task<List<T>> ChunkedAsync<T>(
         int count,
         Func<int, int, SqlParameter[]> parameters,
         string sql,
         Func<SqlDataReader, T> read,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool needsTransaction = false,
+        (string Sql, SqlParameter[] Parameters)? prelude = null)
     {
         var (connection, owned) = await OpenAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var ownTransaction = owned && count > MaxRowsPerStatement
+            var ownTransaction = owned && (needsTransaction || prelude is not null || count > MaxRowsPerStatement)
                 ? (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false)
                 : null;
             try
             {
+                if (prelude is { } first)
+                {
+                    var command = new SqlCommand(first.Sql, connection, ownTransaction ?? transaction);
+                    await using (command.ConfigureAwait(false))
+                    {
+                        command.Parameters.AddRange(first.Parameters);
+                        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                }
+
                 var rows = new List<T>();
                 for (var start = 0; start < count; start += MaxRowsPerStatement)
                 {
@@ -353,22 +454,41 @@ internal sealed class SqlServerExecutor(
         }
     }
 
-    /// <summary>Rejects what the insert cannot store yet, before any SQL runs.</summary>
-    private static void CheckSupported(IReadOnlyList<JobInsertParams> jobs, int index)
+    /// <summary>Rejects what the insert cannot store, before any SQL runs.</summary>
+    /// <param name="jobs">The batch.</param>
+    /// <param name="index">The job to check.</param>
+    /// <param name="allowUnique">Whether the insert handles unique jobs; the fast path does not, as on PostgreSQL.</param>
+    private static JobInsertParams CheckSupported(IReadOnlyList<JobInsertParams> jobs, int index, bool allowUnique)
     {
         var job = jobs[index] ?? throw new ArgumentException($"Job {index} is null.", nameof(jobs));
-        if (job.UniqueKey is not null || job.UniqueStates is not null)
+        if (job.UniqueKey is not null && !allowUnique)
         {
-            throw new NotSupportedException($"Job {index} is unique: the SQL Server driver inserts unique jobs from plan task 5.4.");
+            throw new NotSupportedException($"Job {index} is unique, which the fast insert does not support: it cannot skip duplicates.");
+        }
+
+        if (job.UniqueKey is { Length: not 32 } || (job.UniqueKey is null) != (job.UniqueStates is null))
+        {
+            throw new ArgumentException($"Job {index} needs both a 32-byte unique key and unique states, or neither.", nameof(jobs));
         }
 
         if (job.Tags is null || job.Tags.Any(tag => tag is null))
         {
             throw new ArgumentException($"Job {index} has null tags.", nameof(jobs));
         }
+
+        return job;
     }
 
-    /// <summary>The <c>@jobs</c> parameter of <c>job_insert_many.sql</c> for one chunk.</summary>
+    /// <summary>The <c>@jobs</c> parameter of the insert statements.</summary>
+    private static SqlParameter Jobs(string json) => new("@jobs", SqlDbType.NVarChar, -1) { Value = json };
+
+    /// <summary>The <c>@scope</c> parameter of the unique-key locks.</summary>
+    private SqlParameter Scope() => new("@scope", SqlDbType.NVarChar, 128) { Value = statements.UniqueLockScope };
+
+    /// <summary>
+    /// The <c>@jobs</c> parameter of the insert statements for one chunk. A unique job adds its key as 64 hex digits
+    /// (<c>uk</c>) and its unique states (<c>us</c>).
+    /// </summary>
     internal static string InsertBatch(IReadOnlyList<JobInsertParams> jobs, int start, int count) => SqlServerValues.JsonArray(writer =>
     {
         for (var i = start; i < start + count; i++)
@@ -389,6 +509,12 @@ internal sealed class SqlServerExecutor(
 
             writer.WriteString("st", ToDatabase(job.State));
             writer.WriteString("t", SqlServerValues.WriteStrings(job.Tags));
+            if (job.UniqueKey is { } uniqueKey)
+            {
+                writer.WriteString("uk", Convert.ToHexString(uniqueKey));
+                writer.WriteNumber("us", job.UniqueStates!.Value);
+            }
+
             writer.WriteEndObject();
         }
     });

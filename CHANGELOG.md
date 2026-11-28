@@ -27,6 +27,12 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
   - **Fetch:** `JobGetAvailableAsync` locks and starts due jobs with `UPDLOCK, READPAST, ROWLOCK, FORCESEEK` (design §8.1), skipping jobs that another transaction holds and uncommitted inserts without waiting. It keeps the newest `MaxAttemptedBy` client IDs.
   - **Complete:** `JobSetStateIfRunningManyAsync` behaves as on PostgreSQL. Only running jobs change, a job asked to cancel is cancelled instead of retried, errors are appended, and metadata is merged at the top level as `jsonb ||` does.
   - ([#49](https://github.com/sujanto-gaws/KopiQueue/issues/49))
+- SQL Server unique jobs (FR-UNQ-02, FR-UNQ-03, FR-UNQ-05, ADR-011):
+  - **Duplicates:** a unique job whose key another job holds in its unique states returns that job, unchanged and flagged as skipped. Nothing fails, so a caller's transaction stays usable.
+  - **Waiting:** a second transaction inserting the same key waits for the first. It gets the job if the first commits, and inserts its own if the first rolls back. Different keys never wait for each other.
+  - **Batches:** a batch inserts each key once, keeps the input order for the jobs it inserts, and takes its key locks in key order, so concurrent batches don't deadlock.
+  - **SNAPSHOT callers** see the latest committed holder.
+  - ([#50](https://github.com/sujanto-gaws/KopiQueue/issues/50))
 
 ## [0.4.0-beta.1] - 2026-11-27
 
