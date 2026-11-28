@@ -1383,7 +1383,22 @@ IF @@ROWCOUNT = 0
 SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'default';
 ```
 
-**Bulk insert:** batched `INSERT ... OUTPUT inserted.* SELECT ... FROM OPENJSON(@rows) WITH (...)`, ≤ 1,000 rows per statement, inside the caller's transaction when one is given. Both `InsertManyAsync` and `InsertManyFastAsync` use it; the fast variant simply skips reading the returned rows.
+**Bulk insert:** batched `INSERT ... SELECT ... FROM OPENJSON(@jobs) WITH (...) ORDER BY ordinal`, ≤ 1,000 rows per statement, inside the caller's transaction when one is given, or in one of the driver's own when the batch spans several statements.
+
+As built in plan tasks 5.3 and 5.5:
+
+- **Two statements.** `InsertManyAsync` uses `job_insert_many.sql`, which returns the stored rows with `OUTPUT`. `InsertManyFastAsync` uses `job_insert_fast.sql`: the same insert without `OUTPUT`, returning only `@@ROWCOUNT`.
+- **Locks.** A large insert in a caller's open transaction holds row (KEY) locks only, never page, extent or object X locks. Fetchers skip its uncommitted rows with `READPAST` and are not blocked on any queue (`SqlServerBulkInsertTests`).
+- **Throughput** (task 5.5, local SQL Server 2019 on a laptop, 50,000 jobs in 1,000-row statements in one transaction, best of several warm rounds; CI hardware is measured in M7):
+
+  | Statement | Jobs/s |
+  |---|---|
+  | `InsertManyFastAsync` (no `OUTPUT`) | about 30,000–31,800 |
+  | `InsertManyAsync` (`OUTPUT` of the 16 job columns) | about 26,500 |
+  | Spike 0.10's statement (3 columns, ids returned), same schema | about 36,900 |
+
+  The fast path meets NFR-PERF-07's ≥ 30,000 jobs/s on this machine. Spike 0.10's 41,825 rows/s was measured on a table without the `ISJSON` checks, the kind index and the unique index. Dropping the checks brings its statement back to 42,500 here, and dropping the two indexes as well reaches 60,600. The schema's checks and indexes, not the statement, set the rate. Typed `OPENJSON` columns for `kind` and `queue` and dropping the `ORDER BY` made no measurable difference.
+- **A measured option, not taken:** returning only `id`, `created_at` and `scheduled_at` and rebuilding the rows from the input would bring `InsertManyAsync` to about 29,600 jobs/s. The driver keeps returning the stored rows, as `RETURNING` does on PostgreSQL.
 
 - As built in plan task 5.3 (`job_insert_many.sql`): `args`, `metadata` and `tags` travel as JSON strings, so they are stored exactly as given. Ids follow `ORDER BY ordinal`, which SQL Server guarantees for `INSERT ... SELECT`, so they ascend with the input. `created_at` and a missing `scheduled_at` share one `SYSUTCDATETIME()` reading.
 - A batch larger than 1,000 rows runs as several statements. On a pooled connection they run in a READ COMMITTED transaction of the driver's own, so the batch stays all-or-nothing. In a caller's transaction they simply run in it.

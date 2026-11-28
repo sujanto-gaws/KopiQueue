@@ -33,6 +33,7 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
   - **Batches:** a batch inserts each key once, keeps the input order for the jobs it inserts, and takes its key locks in key order, so concurrent batches don't deadlock.
   - **SNAPSHOT callers** see the latest committed holder.
   - ([#50](https://github.com/sujanto-gaws/KopiQueue/issues/50))
+- SQL Server `InsertManyFastAsync` no longer returns the inserted rows from the database, only their count, which makes it about 15% faster than `InsertManyAsync`. A large insert in an open transaction holds row locks only, so workers fetching from any queue are not blocked (FR-INS-04, ADR-014, [#51](https://github.com/sujanto-gaws/KopiQueue/issues/51)).
 
 ## [0.4.0-beta.1] - 2026-11-27
 

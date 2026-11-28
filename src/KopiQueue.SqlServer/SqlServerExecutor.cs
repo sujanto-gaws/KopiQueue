@@ -30,6 +30,7 @@ internal sealed class SqlServerStatements
         }
 
         JobInsertMany = Load("job_insert_many.sql");
+        JobInsertFast = Load("job_insert_fast.sql");
         JobUniqueLock = Load("job_unique_lock.sql");
         JobInsertUnique = JobUniqueLock + "\n" + Load("job_insert_unique.sql");
         JobGetById = Load("job_get_by_id.sql");
@@ -45,6 +46,9 @@ internal sealed class SqlServerStatements
     public string UniqueLockScope { get; }
 
     public string JobInsertMany { get; }
+
+    /// <summary>The batched insert without <c>OUTPUT</c>, returning only its row count (<c>job_insert_fast.sql</c>).</summary>
+    public string JobInsertFast { get; }
 
     /// <summary>Takes the unique-key locks of a batch, in key order (<c>job_unique_lock.sql</c>).</summary>
     public string JobUniqueLock { get; }
@@ -183,8 +187,8 @@ internal sealed class SqlServerExecutor(
     }
 
     /// <summary>
-    /// SQL Server's fast path is the batched insert itself, without returning rows to the caller: <c>SqlBulkCopy</c> is
-    /// not used, because its page locks stall every producer until the caller commits (ADR-014).
+    /// SQL Server's fast path is the batched insert itself, without returning rows (<c>job_insert_fast.sql</c>):
+    /// <c>SqlBulkCopy</c> is not used, because its page locks stall every producer until the caller commits (ADR-014).
     /// </summary>
     public async Task<long> JobInsertFastAsync(IReadOnlyList<JobInsertParams> jobs, CancellationToken cancellationToken)
     {
@@ -199,13 +203,13 @@ internal sealed class SqlServerExecutor(
             return 0;
         }
 
-        var rows = await ChunkedAsync(
+        var counts = await ChunkedAsync(
             jobs.Count,
             (start, count) => [Jobs(InsertBatch(jobs, start, count))],
-            statements.JobInsertMany,
-            static _ => true,
+            statements.JobInsertFast,
+            static reader => reader.GetInt64(0),
             cancellationToken).ConfigureAwait(false);
-        return rows.Count;
+        return counts.Sum();
     }
 
     public async Task<JobRow?> JobGetByIdAsync(long id, CancellationToken cancellationToken)
