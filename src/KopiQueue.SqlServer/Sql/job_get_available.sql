@@ -6,6 +6,9 @@
 -- attempted_by keeps the newest @max_attempted_by entries. A first attempt starts the array; a later one rebuilds it
 -- from its elements, newest last.
 -- OUTPUT has no order; the driver sorts the rows into fetch order.
+-- "Now" is compared at the columns' precision. Storing SYSUTCDATETIME() in a datetime2(6) column rounds it, up to half
+-- a microsecond into the future; while the server clock has not moved on, the unrounded clock is then earlier than the
+-- stored time, and a job inserted for "now" would not be due yet. Rounding both sides keeps a later read at or after it.
 SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
 
 WITH locked AS (
@@ -13,7 +16,7 @@ WITH locked AS (
     FROM {{schema}}{{prefix}}job WITH (UPDLOCK, READPAST, ROWLOCK, FORCESEEK ({{prefix}}job_fetch_idx (queue)))
     WHERE state = 'available'
       AND queue = @queue
-      AND scheduled_at <= SYSUTCDATETIME()
+      AND scheduled_at <= CAST(SYSUTCDATETIME() AS datetime2(6))
     ORDER BY priority, scheduled_at, id
 )
 UPDATE locked
