@@ -26,11 +26,11 @@ public abstract partial class DriverConformanceTests<TFixture>
             Assert.Equal(q.CreatedAt, q.UpdatedAt);
         });
 
-        await Task.Delay(TimeSpan.FromMilliseconds(50), Ct);
-        var refreshed = (await executor.QueueCreateOrSetUpdatedAtManyAsync([a], Ct)).Single();
         var first = created.Single(q => q.Name == a);
+        await WaitForDatabaseClockPastAsync(executor, first.UpdatedAt);
+        var refreshed = (await executor.QueueCreateOrSetUpdatedAtManyAsync([a], Ct)).Single();
         Assert.Equal(first.CreatedAt, refreshed.CreatedAt);
-        Assert.True(refreshed.UpdatedAt > first.UpdatedAt);
+        Assert.True(refreshed.UpdatedAt > first.UpdatedAt, $"updated_at went from {first.UpdatedAt:O} to {refreshed.UpdatedAt:O}.");
         Assert.Equal(refreshed.UpdatedAt, (await executor.QueueGetAsync(a, Ct))!.UpdatedAt);
     }
 
@@ -68,7 +68,7 @@ public abstract partial class DriverConformanceTests<TFixture>
             Assert.Equal(paused.PausedAt, paused.UpdatedAt);
             Assert.Null((await executor.QueueGetAsync(b, Ct))!.PausedAt);
 
-            await Task.Delay(TimeSpan.FromMilliseconds(50), Ct);
+            await WaitForDatabaseClockPastAsync(executor, paused.UpdatedAt); // so a change would show
             Assert.True(await executor.QueuePauseAsync(a, Ct)); // already paused: nothing changes
             var again = (await executor.QueueGetAsync(a, Ct))!;
             Assert.Equal(paused.PausedAt, again.PausedAt);
@@ -84,7 +84,7 @@ public abstract partial class DriverConformanceTests<TFixture>
             Assert.True(await executor.QueueResumeAsync(a, Ct));
             var resumed = (await executor.QueueGetAsync(a, Ct))!;
             Assert.Null(resumed.PausedAt);
-            Assert.True(resumed.UpdatedAt > paused.UpdatedAt);
+            Assert.True(resumed.UpdatedAt > paused.UpdatedAt, $"updated_at went from {paused.UpdatedAt:O} to {resumed.UpdatedAt:O}.");
             Assert.NotNull((await executor.QueueGetAsync(b, Ct))!.PausedAt);
 
             Assert.True(await executor.QueueResumeAsync("*", Ct));
@@ -102,12 +102,12 @@ public abstract partial class DriverConformanceTests<TFixture>
         var executor = (await MigratedAsync()).Driver.GetExecutor();
         var a = UniqueQueue();
         var created = (await executor.QueueCreateOrSetUpdatedAtManyAsync([a], Ct)).Single();
-        await Task.Delay(TimeSpan.FromMilliseconds(50), Ct);
+        await WaitForDatabaseClockPastAsync(executor, created.UpdatedAt);
 
         var updated = await executor.QueueUpdateAsync(new QueueUpdateParams { Name = a, MetadataJson = """{"team":"billing","n":1}""" }, Ct);
         Assert.NotNull(updated);
         Assert.Equal(created.CreatedAt, updated.CreatedAt);
-        Assert.True(updated.UpdatedAt > created.UpdatedAt);
+        Assert.True(updated.UpdatedAt > created.UpdatedAt, $"updated_at went from {created.UpdatedAt:O} to {updated.UpdatedAt:O}.");
         using (var json = System.Text.Json.JsonDocument.Parse(updated.MetadataJson))
         {
             Assert.Equal("billing", json.RootElement.GetProperty("team").GetString());
