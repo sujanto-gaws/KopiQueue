@@ -105,7 +105,7 @@ public sealed class SqlServerMainLineTests(SqlServerFixture db) : IClassFixture<
             "kopi_job_pk UNIQUE (id)",
             "kopi_job_running_idx (attempted_at) FILTERED",
             "kopi_job_schedule_idx (scheduled_at) INCLUDE (queue) FILTERED",
-            "kopi_job_unique_idx UNIQUE (unique_key, unique_slot)",
+            "kopi_job_unique_idx UNIQUE (unique_key, unique_slot) FILTERED",
         ], indexes);
     }
 

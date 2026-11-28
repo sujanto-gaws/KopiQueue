@@ -209,6 +209,7 @@ Each task lists the requirement IDs it satisfies. Estimates are in engineer-days
 
 - SQL Server Service Broker notifier (FR-DB-07, OQ-8).
 - Native `json` column type on SQL Server 2025 / Azure SQL (OQ-7).
+- SQL Server bulk insert through a table-valued parameter, as an opt-in: about 1.4 times faster for 1,000-job statements, but needs a table type and `EXECUTE` on it (DQ-6, [benchmarks](benchmarks/sqlserver-m5.md)).
 - SQLite driver (OQ-4). Dashboard (OQ-5).
 - FR-QUE-05, FR-HST-05, FR-DEF-07, FR-EXE-10, FR-MNT-06, FR-TST-04.
 - Workflows, sequences, concurrency limits (NG3; reconsider after adoption).
@@ -353,3 +354,7 @@ nuget.org's documentation does not say whether a trusted publishing policy cover
      - Done 2026-11-28, part 1: the conformance suite runs on SQL Server with READ_COMMITTED_SNAPSHOT off, with it on, and with SNAPSHOT callers and pooled sessions, and passes all three. Pooled-SNAPSHOT-session tests and plan-shape tests were added. Every statement now sets READ COMMITTED for its batch, and the two deletes force their seek. The schedule case reads the held row through its holder.
      - Done 2026-11-28, part 2: the client-level integration tests moved into 14 suites shared by both drivers (design §11), 62 cases, and SQL Server passes them. The four that need LISTEN/NOTIFY skip there. The insert-notification, `pg_stat_activity`, jsonb, leader-kill and hosting tests stay PostgreSQL-only; hosting moves with part 3.
      - Done 2026-11-28, part 3: `UseSqlServer` for `KopiQueueBuilder` (a connection string, or a function of the services), the hosting tests shared by both drivers, and the WorkerService sample on SQL Server by configuration alone (`Sample:Database=SqlServer`). The `MinimalApi.EfCore` sample named in the exit criteria doesn't exist yet; it waits for the owner's decision.
+   - Done 2026-11-28: 5.9 SQL Server benchmarks ([#55](https://github.com/sujanto-gaws/KopiQueue/issues/55), [report](benchmarks/sqlserver-m5.md)). `bench/KopiQueue.Benchmarks` measures through the driver: per-statement server cost from the plan cache, bulk insert, end-to-end throughput and pickup latency, plus DQ-6 and DQ-7. `bench.yml` runs it weekly on SQL Server 2019, 2022 and 2025.
+     - Busy-fetch cost: 750 logical reads per 25 jobs through the driver (spike 0.10's 950 was on its own table), now 545. Completing 25 went from 909 to 554. The unique index is filtered to jobs with a key, and the complete statement skips its second query when every job changed.
+     - DQ-7 closed (`varchar(16)`). DQ-6 closed by the owner (OPENJSON). A table-valued parameter is about 1.4 times faster for 1,000-job inserts, but adds a table type and a permission. It is in the post-1.0 backlog as an opt-in.
+     - NFR-PERF-07: its insert target was revised to ≥ 20,000 jobs/s with 60-byte args, and all four targets are met on CI for SQL Server 2019, 2022 and 2025. On the development machine, batched insert is at 18,000 to 22,000 jobs/s, varying between runs. CI numbers come from `bench.yml`.

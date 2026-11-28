@@ -280,7 +280,7 @@ They are **initial targets to be validated in milestone M6**.
 | NFR-PERF-04 | Pickup latency (insert committed → `WorkAsync` called) with LISTEN/NOTIFY on an idle queue: p50 < 20 ms, p99 < 100 ms. Poll-only, which covers all SQL Server cross-process traffic: bounded by the poll interval |
 | NFR-PERF-05 | Steady-state allocation per job executed: target < 2 KB, excluding user args. Tracked with BenchmarkDotNet |
 | NFR-PERF-06 | An idle client issues no more than about 1 query per second per queue, plus maintenance |
-| NFR-PERF-07 | SQL Server initial targets (spike 0.10, to be re-validated on CI hardware in M5/M7): end-to-end no-op throughput ≥ 5,000 jobs/s per client; batched insert ≥ 30,000 jobs/s; cross-process pickup p50 ≤ poll interval / 2 + 30 ms; an empty poll ≤ 10 logical reads |
+| NFR-PERF-07 | SQL Server targets (spike 0.10, revised after the M5 baseline in plan task 5.9; validated again on CI hardware in M7): end-to-end no-op throughput ≥ 5,000 jobs/s per client; batched insert ≥ 20,000 jobs/s, in statements of 1,000 jobs with args of about 60 bytes; cross-process pickup p50 ≤ poll interval / 2 + 30 ms; an empty poll ≤ 10 logical reads. The insert target was 30,000 jobs/s with tiny args; it was lowered when DQ-6 kept OPENJSON, because one client works far fewer jobs per second than it can insert |
 
 ### 7.2 Reliability and correctness — `NFR-REL`
 

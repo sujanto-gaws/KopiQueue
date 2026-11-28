@@ -73,6 +73,7 @@ WHERE e.place > 1
        SELECT 1
        FROM {{schema}}{{prefix}}job AS holder WITH (READCOMMITTEDLOCK, FORCESEEK ({{prefix}}job_unique_idx (unique_key, unique_slot)))
        WHERE holder.unique_key = e.unique_key AND holder.unique_slot = 0
+         AND holder.unique_key IS NOT NULL -- the unique index's filter, which FORCESEEK needs stated
    );
 
 UPDATE j

@@ -8,9 +8,11 @@
 -- Metadata is merged at the top level, as jsonb || does: the new keys, then the old keys the update does not replace.
 -- OPENJSON's key column has a binary collation, so keys compare case-sensitively, as in PostgreSQL.
 -- Returns the changed rows (OUTPUT), then the given jobs that exist but did not change; the driver sorts them by id.
+-- Usually every job changes, and then the second query does not run: it would read each job again (plan task 5.9).
 SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
 
-DECLARE @changed TABLE (id bigint PRIMARY KEY);
+-- A heap: a key would cost two reads for each changed job, and the table is read only when some job did not change.
+DECLARE @changed TABLE (id bigint NOT NULL);
 
 UPDATE j
 SET attempt = CASE WHEN j.state = 'running' AND c.cancel = 0 AND u.attempt IS NOT NULL THEN u.attempt ELSE j.attempt END,
@@ -68,6 +70,7 @@ CROSS APPLY (
 ) AS c
 WHERE j.state = 'running' OR u.metadata IS NOT NULL;
 
+IF @@ROWCOUNT < (SELECT COUNT(*) FROM OPENJSON(@batch))
 SELECT
     j.id, j.kind, j.queue, j.state, j.priority, j.args, j.metadata, j.tags, j.attempt, j.max_attempts,
     j.attempted_at, j.attempted_by, j.errors, j.created_at, j.scheduled_at, j.finalized_at

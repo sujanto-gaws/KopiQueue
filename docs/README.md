@@ -11,6 +11,8 @@ KopiQueue is a background job queue for .NET, backed by PostgreSQL or SQL Server
 
 Spike reports (M0): [0.7 Npgsql LISTEN/NOTIFY](spikes/0.7-npgsql-listen-notify.md) · [0.8 River schema and unique keys](spikes/0.8-river-schema-and-unique-keys.md) · [0.9 SQL Server fetch and locking](spikes/0.9-sqlserver-fetch-and-locking.md) · [0.10 SQL Server unique, bulk, polling](spikes/0.10-sqlserver-unique-bulk-poll.md) · raw results: [PostgreSQL](spikes/postgres-raw-results.md), [SQL Server](spikes/sqlserver-raw-results.md)
 
+Benchmark reports: [SQL Server, M5](benchmarks/sqlserver-m5.md) (task 5.9; the tool is `bench/KopiQueue.Benchmarks`)
+
 ## Reading order
 
 New contributors should read them in order. Requirements carry stable IDs (`FR-INS-01`, `NFR-PERF-02`, ...).
