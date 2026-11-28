@@ -88,11 +88,13 @@ public abstract class SchedulerTests<TFixture>(TFixture db)
 
             var ranAt = await worker.Ran.Task.WaitAsync(Timeout, Ct);
 
-            // The scheduler runs every interval ±10%; the notification then wakes the producer. Allow a little for the
-            // fetch and for a loaded machine, but far less than the 1 s poll interval would add on its own twice over.
+            // The scheduler runs every interval ±10%. With notifications, the commit then wakes the producer; a poll-only
+            // driver's producer finds the job at its next poll, up to a poll interval later (#158). Allow a little more
+            // for the fetch and for a loaded machine, but less than a second scheduler run would add.
+            var pickup = db.HasNotifications ? TimeSpan.Zero : new KopiClientOptions().FetchPollInterval;
             var late = ranAt - dueAt;
             Assert.True(late >= TimeSpan.FromMilliseconds(-100), $"Ran {-late} before it was due.");
-            Assert.True(late <= (interval * 1.1) + TimeSpan.FromMilliseconds(750), $"Ran {late} after it was due.");
+            Assert.True(late <= (interval * 1.1) + pickup + TimeSpan.FromMilliseconds(750), $"Ran {late} after it was due.");
         }
         finally
         {

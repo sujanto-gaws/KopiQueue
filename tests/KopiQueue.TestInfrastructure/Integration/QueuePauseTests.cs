@@ -125,19 +125,26 @@ public abstract class QueuePauseTests<TFixture>(TFixture db)
         var driver = schema.Driver;
         var worker = new PauseWorker();
         var one = await StartedAsync(driver, worker, "one", NotificationMode.Auto);
-        var two = await StartedAsync(driver, worker, "two", NotificationMode.Auto);
+        KopiClient? two = null;
         try
         {
+            // A pause stops new fetches only, and a fetch already called still completes. The startup fetch can wait seconds
+            // for its first connection while other tests open theirs, then take jobs inserted after the pause (#158). So
+            // client one works a job of its own first: its startup fetch has returned and its pool is warm.
+            var warmUp = await one.InsertAsync(new PauseArgs("ok"), new InsertOptions { Queue = Queue }, Ct);
+            await schema.WaitForCountAsync(j => j.State == JobState.Completed, 1, TimeSpan.FromSeconds(15), Ct);
+            two = await StartedAsync(driver, worker, "two", NotificationMode.Auto);
+
             var local = new QueuePauseOptions { LocalOnly = true };
             await one.QueuePauseAsync(Queue, local, Ct);
-            await Task.Delay(200, Ct); // a fetch already sent may still complete
+            await Task.Delay(200, Ct); // a poll that fired just now may still complete
             for (var i = 0; i < 6; i++)
             {
                 await one.InsertAsync(new PauseArgs("ok"), new InsertOptions { Queue = Queue }, Ct);
             }
 
-            await schema.WaitForCountAsync(j => j.State == JobState.Completed, 6, TimeSpan.FromSeconds(15), Ct);
-            Assert.Equal(["two"], await AttemptedByAsync(schema));
+            await schema.WaitForCountAsync(j => j.State == JobState.Completed, 7, TimeSpan.FromSeconds(15), Ct);
+            Assert.Equal(["two"], await AttemptedByAsync(schema, except: warmUp.Job.Id));
             Assert.Null((await one.QueueGetAsync(Queue, Ct))!.PausedAt); // nothing stored
 
             await two.QueuePauseAsync(Queue, local, Ct);
@@ -147,14 +154,17 @@ public abstract class QueuePauseTests<TFixture>(TFixture db)
             Assert.Equal(1, await schema.CountAsync(j => j.State == JobState.Available, Ct));
 
             await one.QueueResumeAsync(Queue, local, Ct);
-            await schema.WaitForCountAsync(j => j.State == JobState.Completed, 7, TimeSpan.FromSeconds(15), Ct);
+            await schema.WaitForCountAsync(j => j.State == JobState.Completed, 8, TimeSpan.FromSeconds(15), Ct);
             Assert.Equal(["one", "two"], await AttemptedByAsync(schema));
             await Assert.ThrowsAsync<KopiQueueNotFoundException>(() => one.QueuePauseAsync("elsewhere", local, Ct));
         }
         finally
         {
             await one.StopAsync(Ct);
-            await two.StopAsync(Ct);
+            if (two is not null)
+            {
+                await two.StopAsync(Ct);
+            }
         }
     }
 
@@ -172,8 +182,8 @@ public abstract class QueuePauseTests<TFixture>(TFixture db)
         return client;
     }
 
-    private static async Task<List<string>> AttemptedByAsync(IntegrationSchema schema) =>
-        [.. (await schema.JobsAsync(Ct)).SelectMany(j => j.AttemptedBy).Distinct().Order(StringComparer.Ordinal)];
+    private static async Task<List<string>> AttemptedByAsync(IntegrationSchema schema, long? except = null) =>
+        [.. (await schema.JobsAsync(Ct)).Where(j => j.Id != except).SelectMany(j => j.AttemptedBy).Distinct().Order(StringComparer.Ordinal)];
 
     [JobKind("pause_job")]
     public sealed record PauseArgs(string What) : IJobArgs;
