@@ -15,7 +15,7 @@ public abstract class QueueCleanerTests<TFixture>(TFixture db)
     [Fact]
     public async Task Queues_not_updated_within_the_retention_are_deleted_in_batches()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         await schema.InsertQueueAsync("stale_a", TimeSpan.FromDays(2), paused: false, Ct);
         await schema.InsertQueueAsync("stale_b", TimeSpan.FromDays(2), paused: false, Ct);
@@ -34,7 +34,7 @@ public abstract class QueueCleanerTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_queue_row_another_transaction_holds_is_skipped_and_deleted_later()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         await schema.InsertQueueAsync("held", TimeSpan.FromDays(2), paused: false, Ct);
         await schema.InsertQueueAsync("free", TimeSpan.FromDays(2), paused: false, Ct);
@@ -51,7 +51,7 @@ public abstract class QueueCleanerTests<TFixture>(TFixture db)
     [Fact]
     public async Task Deleting_a_queue_leaves_its_jobs_alone()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         await schema.InsertQueueAsync("gone", TimeSpan.FromDays(2), paused: false, Ct);
         var job = await new KopiClient(driver).InsertAsync(new CleanerArgs(), new InsertOptions { Queue = "gone" }, Ct);
@@ -65,7 +65,7 @@ public abstract class QueueCleanerTests<TFixture>(TFixture db)
     [Fact]
     public async Task The_leader_deletes_stale_queues_as_soon_as_it_wins()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         await schema.InsertQueueAsync("abandoned", TimeSpan.FromDays(2), paused: false, Ct);
         await schema.InsertQueueAsync("recent", TimeSpan.FromHours(1), paused: false, Ct);
@@ -91,7 +91,7 @@ public abstract class QueueCleanerTests<TFixture>(TFixture db)
     [Fact]
     public async Task No_queue_retention_keeps_every_queue()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         await schema.InsertQueueAsync("ancient", TimeSpan.FromDays(400), paused: false, Ct);
 

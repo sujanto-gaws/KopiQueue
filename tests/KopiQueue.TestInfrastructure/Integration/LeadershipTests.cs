@@ -16,7 +16,7 @@ public abstract class LeadershipTests<TFixture>(TFixture db)
     [Fact]
     public async Task Of_several_working_clients_one_leads_and_a_stopping_leader_hands_over_through_its_resignation()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         Assert.SkipUnless(db.HasNotifications, "The driver has no notifications: the poll-only test covers its handover.");
         var driver = schema.Driver;
 
@@ -59,7 +59,7 @@ public abstract class LeadershipTests<TFixture>(TFixture db)
     [Fact]
     public async Task In_poll_only_mode_a_follower_takes_over_at_its_next_attempt_after_the_leader_resigns()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var leader = await StartedAsync(driver, "poll-a", NotificationMode.PollOnly, TimeSpan.FromSeconds(1));
         await schema.WaitForLeaderAsync(l => l == "poll-a", TimeSpan.FromSeconds(5), Ct);
@@ -86,7 +86,7 @@ public abstract class LeadershipTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_crashed_leaders_lease_is_taken_over_only_once_it_expires()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
 
         // A leader that crashed: its lease runs for 3 more seconds and nobody will resign it.
@@ -111,7 +111,7 @@ public abstract class LeadershipTests<TFixture>(TFixture db)
     [Fact]
     public async Task An_insert_only_client_never_competes_for_the_lease()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var client = new KopiClient(driver, new KopiClientOptions { ClientId = "insert-only", ElectInterval = TimeSpan.FromMilliseconds(100), LeaderTtl = TimeSpan.FromSeconds(1) });
 

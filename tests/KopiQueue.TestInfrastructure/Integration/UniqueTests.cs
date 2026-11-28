@@ -28,7 +28,7 @@ public abstract class UniqueTests<TFixture>(TFixture db)
     [Fact]
     public async Task The_client_stores_Rivers_key_for_marked_members()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var client = new KopiClient(driver);
 
@@ -41,7 +41,7 @@ public abstract class UniqueTests<TFixture>(TFixture db)
     [Fact]
     public async Task The_client_stores_Rivers_key_by_args_period_and_queue()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var time = new FixedTime(DateTimeOffset.Parse("2026-11-26T01:06:14.88365Z", System.Globalization.CultureInfo.InvariantCulture));
         var client = new KopiClient(driver, new KopiClientOptions { TimeProvider = time });
@@ -56,7 +56,7 @@ public abstract class UniqueTests<TFixture>(TFixture db)
     public async Task At_most_one_job_per_customer_waits_however_many_clients_insert_at_once()
     {
         // UC-4: concurrent inserts from separate clients, each on its own connection, store one job.
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var unique = new InsertOptions { Unique = new() { ByArgs = true } };
 
@@ -73,7 +73,7 @@ public abstract class UniqueTests<TFixture>(TFixture db)
     public async Task Concurrent_bulk_inserts_of_the_same_unique_jobs_in_different_orders_store_each_once_without_deadlocking()
     {
         // Plan task 4.6: eight clients insert the same 40 unique jobs at once, each batch in its own order, five times.
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
 
         for (var round = 0; round < 5; round++)
@@ -108,7 +108,7 @@ public abstract class UniqueTests<TFixture>(TFixture db)
     public async Task Uniqueness_from_the_args_type_keeps_one_pending_job_per_customer_without_options_at_the_call_site()
     {
         // UC-4 with args-level defaults (plan task 4.5, FR-DEF-05): the args type declares its queue and uniqueness.
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var client = new KopiClient(driver);
 

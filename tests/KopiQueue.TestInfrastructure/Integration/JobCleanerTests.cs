@@ -15,7 +15,7 @@ public abstract class JobCleanerTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_follower_deletes_nothing_and_the_leader_deletes_expired_jobs_as_soon_as_it_wins()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         await schema.SetLeaderAsync("someone-else", TimeSpan.FromHours(1), Ct);
 
@@ -62,7 +62,7 @@ public abstract class JobCleanerTests<TFixture>(TFixture db)
     [Fact]
     public async Task An_insert_only_client_deletes_nothing()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var executor = driver.GetExecutor();
         var expired = await FinalizedAsync(executor, JobState.Completed, TimeSpan.FromDays(2));
@@ -85,7 +85,7 @@ public abstract class JobCleanerTests<TFixture>(TFixture db)
     [Fact]
     public async Task With_no_retention_the_leader_keeps_every_finalised_job()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var executor = driver.GetExecutor();
         long[] ancient =
@@ -112,7 +112,7 @@ public abstract class JobCleanerTests<TFixture>(TFixture db)
     [Fact]
     public async Task Deleting_a_completed_unique_job_frees_its_slot_for_a_duplicate()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var executor = driver.GetExecutor();
 

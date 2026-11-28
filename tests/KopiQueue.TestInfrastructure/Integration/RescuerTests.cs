@@ -22,7 +22,7 @@ public abstract class RescuerTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_leader_rescues_a_job_a_dead_client_left_running_and_runs_it_again()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var left = await StartAsync(driver.GetExecutor(), "rescue_work", "dead-client", kind: "rescued_job");
         await Task.Delay(TimeSpan.FromSeconds(2.5), Ct); // older than the 2 s threshold before the client starts

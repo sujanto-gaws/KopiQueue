@@ -12,7 +12,7 @@ public abstract class ClientLifecycleTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_job_inserted_by_another_client_is_picked_up_through_listen_long_before_the_next_poll()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         Assert.SkipUnless(db.HasNotifications, "The driver has no notifications.");
         var driver = schema.Driver;
         var client = Client(driver, new Work(), o => o with { FetchPollInterval = TimeSpan.FromMinutes(5) });
@@ -35,7 +35,7 @@ public abstract class ClientLifecycleTests<TFixture>(TFixture db)
     [Fact]
     public async Task Poll_only_picks_up_jobs_on_the_next_poll()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var client = Client(driver, new Work(), o => o with { NotificationMode = NotificationMode.PollOnly, FetchPollInterval = TimeSpan.FromMilliseconds(200) });
         await client.StartAsync(Ct);
@@ -54,7 +54,7 @@ public abstract class ClientLifecycleTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_soft_stop_waits_for_running_jobs_and_stores_their_outcome()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var work = new Work();
         var client = Client(driver, work);
@@ -76,7 +76,7 @@ public abstract class ClientLifecycleTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_hard_stop_cancels_running_jobs_which_are_stored_available_to_run_again()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var work = new Work();
         var client = Client(driver, work);
@@ -93,7 +93,7 @@ public abstract class ClientLifecycleTests<TFixture>(TFixture db)
     [Fact]
     public async Task The_soft_stop_timeout_turns_a_stop_into_a_hard_stop()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var work = new Work();
         var client = Client(driver, work, o => o with { SoftStopTimeout = TimeSpan.FromMilliseconds(300) });

@@ -19,7 +19,7 @@ public abstract class PeriodicTests<TFixture>(TFixture db)
         // vacant, which a loaded machine can stretch past a second, so this test checks what holds under any load: no
         // tick twice, and ticks from both leaders. The catch-up of a skipped tick is checked by the next test and the
         // enqueuer's unit tests.
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var started = DateTimeOffset.UtcNow;
 
@@ -64,7 +64,7 @@ public abstract class PeriodicTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_new_leader_skips_a_tick_the_previous_leader_inserted()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
 
         // Every 10 minutes, with a catch-up window (the lease plus the election interval) over 10 minutes: the latest

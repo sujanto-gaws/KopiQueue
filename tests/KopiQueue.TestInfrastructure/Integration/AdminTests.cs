@@ -20,7 +20,7 @@ public abstract class AdminTests<TFixture>(TFixture db)
     [Fact]
     public async Task Cursors_page_through_every_matching_job_once_in_each_order()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var client = new KopiClient(driver);
         var now = DateTimeOffset.UtcNow;
@@ -65,7 +65,7 @@ public abstract class AdminTests<TFixture>(TFixture db)
     {
         // Plan task 4.6: 300 jobs whose times tie often and are often missing (never attempted, not finalised), paged in
         // every order, both ways, by 1, 7 and 64, against the same jobs sorted in memory (a missing time last ascending).
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var client = new KopiClient(driver);
         var executor = driver.GetExecutor();
@@ -123,7 +123,7 @@ public abstract class AdminTests<TFixture>(TFixture db)
     [Fact]
     public async Task Paging_by_id_while_jobs_are_inserted_and_deleted_returns_no_job_twice_and_every_job_that_stays()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var client = new KopiClient(driver);
         var kept = (await client.InsertManyAsync([.. Enumerable.Range(0, 200).Select(i => new InsertRequest(new AdminArgs(i)))], cancellationToken: Ct))
@@ -164,7 +164,7 @@ public abstract class AdminTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_retried_discarded_job_runs_again_on_a_working_client_with_one_more_attempt()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var worker = new AdminWorker();
         var working = await StartedAsync(driver, worker);
@@ -191,7 +191,7 @@ public abstract class AdminTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_running_job_cannot_be_deleted_until_it_has_stopped()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var worker = new AdminWorker();
         var working = await StartedAsync(driver, worker);
@@ -220,7 +220,7 @@ public abstract class AdminTests<TFixture>(TFixture db)
     [InlineData(true)]
     public async Task Every_transaction_variant_commits_or_rolls_back_with_the_callers_transaction(bool commit)
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var client = new KopiClient(driver);
         var scheduled = DateTimeOffset.UtcNow.AddHours(1);
@@ -261,7 +261,7 @@ public abstract class AdminTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_unique_job_whose_key_a_newer_job_holds_cannot_be_retried()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var worker = new AdminWorker();
         var working = await StartedAsync(driver, worker);

@@ -7,7 +7,8 @@ namespace KopiQueue.TestInfrastructure.Integration;
 
 /// <summary>
 /// A database for the shared client integration suites (plan task 5.8: FR-DB-06): working clients, end to end, on any
-/// driver. Each test takes a fresh, migrated schema with <see cref="CreateSchemaAsync"/>.
+/// driver. Each test takes a fresh, migrated schema with <see cref="CreateSchemaAsync"/> and disposes it when done
+/// (<c>await using</c>), which releases its connections.
 /// </summary>
 /// <remarks>
 /// A driver's test project derives one fixture from this and one class from each suite. The suites use the driver's
@@ -63,7 +64,10 @@ public abstract class IntegrationFixture : IAsyncLifetime
     protected abstract Task<IntegrationSchema> CreateSchemaCoreAsync(CancellationToken cancellationToken);
 }
 
-/// <summary>One test's schema: its driver, and the typed helpers the suites need beyond the driver's executor.</summary>
+/// <summary>
+/// One test's schema: its driver, and the typed helpers the suites need beyond the driver's executor. Disposing it
+/// releases its connections; the fixture disposes any left at its end. Disposing twice is harmless.
+/// </summary>
 public abstract class IntegrationSchema : IAsyncDisposable
 {
     /// <summary>The driver for this schema.</summary>

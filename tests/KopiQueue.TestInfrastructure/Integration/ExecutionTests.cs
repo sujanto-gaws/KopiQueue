@@ -18,7 +18,7 @@ public abstract class ExecutionTests<TFixture>(TFixture db)
     [Fact]
     public async Task Jobs_run_and_every_outcome_is_stored()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var client = new KopiClient(driver);
         var ids = new Dictionary<string, long>();
@@ -66,7 +66,7 @@ public abstract class ExecutionTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_job_cancelled_from_outside_while_running_ends_cancelled_even_though_its_worker_failed()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -90,7 +90,7 @@ public abstract class ExecutionTests<TFixture>(TFixture db)
     [Fact]
     public async Task Many_jobs_complete_through_batched_writes()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         const int Jobs = 500;
         await driver.GetExecutor().JobInsertFastAsync(

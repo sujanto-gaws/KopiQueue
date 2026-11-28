@@ -20,7 +20,7 @@ public abstract class CancelTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_cancel_reaches_a_job_running_on_another_client_through_the_notification_and_cancels_it()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         Assert.SkipUnless(db.HasNotifications, "The driver has no notifications: the poll-only test covers it.");
         var driver = schema.Driver;
         var worker = new CancelWorker();
@@ -53,7 +53,7 @@ public abstract class CancelTests<TFixture>(TFixture db)
     [Fact]
     public async Task Without_notifications_a_cancel_reaches_a_job_on_another_client_within_the_poll_interval()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var worker = new CancelWorker();
         var working = await StartedAsync(driver, worker, NotificationMode.PollOnly, TimeSpan.FromSeconds(1));
@@ -79,7 +79,7 @@ public abstract class CancelTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_client_cancelling_a_job_it_runs_itself_cancels_it_at_once_even_without_notifications()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var worker = new CancelWorker();
         var working = await StartedAsync(driver, worker, NotificationMode.PollOnly, TimeSpan.FromSeconds(10));
@@ -103,7 +103,7 @@ public abstract class CancelTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_cancel_in_a_transaction_has_no_effect_until_it_commits_and_none_after_a_rollback()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var worker = new CancelWorker();
         var working = await StartedAsync(driver, worker, NotificationMode.Auto, TimeSpan.FromSeconds(1));
@@ -147,7 +147,7 @@ public abstract class CancelTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_worker_that_ignores_the_cancel_and_succeeds_completes_its_job()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var worker = new CancelWorker();
         var working = await StartedAsync(driver, worker, NotificationMode.Auto, TimeSpan.FromSeconds(1));
@@ -174,7 +174,7 @@ public abstract class CancelTests<TFixture>(TFixture db)
     [Fact]
     public async Task Cancelling_jobs_that_have_not_started_finished_or_do_not_exist()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var admin = new KopiClient(driver);
         var waiting = (await admin.InsertAsync(new CancelArgs("wait"), new InsertOptions { Queue = Queue }, Ct)).Job;

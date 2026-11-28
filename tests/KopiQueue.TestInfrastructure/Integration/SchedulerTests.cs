@@ -22,7 +22,7 @@ public abstract class SchedulerTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_follower_does_not_schedule_and_the_leader_does_as_soon_as_it_wins()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         await schema.SetLeaderAsync("someone-else", TimeSpan.FromHours(1), Ct);
 
@@ -50,7 +50,7 @@ public abstract class SchedulerTests<TFixture>(TFixture db)
     [Fact]
     public async Task An_insert_only_client_does_not_schedule()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var client = new KopiClient(driver, new KopiClientOptions { SchedulerInterval = TimeSpan.FromMilliseconds(100) });
         await client.StartAsync(Ct);
@@ -73,7 +73,7 @@ public abstract class SchedulerTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_job_scheduled_a_few_seconds_ahead_runs_within_the_scheduler_interval_of_its_due_time()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var interval = TimeSpan.FromSeconds(1);
         var worker = new RecordingWorker();

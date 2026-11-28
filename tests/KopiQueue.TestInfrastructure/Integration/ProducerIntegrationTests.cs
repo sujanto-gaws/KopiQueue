@@ -23,7 +23,7 @@ public abstract class ProducerIntegrationTests<TFixture>(TFixture db)
     [Fact]
     public async Task An_insert_notification_from_another_client_wakes_the_producer()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         Assert.SkipUnless(db.HasNotifications, "The driver has no notifications.");
         var driver = schema.Driver;
         var started = new ConcurrentQueue<JobRow>();
@@ -47,7 +47,7 @@ public abstract class ProducerIntegrationTests<TFixture>(TFixture db)
     [Fact]
     public async Task An_insert_by_its_own_client_wakes_the_producer_without_notifications()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var client = new KopiClient(driver);
         var started = new ConcurrentQueue<JobRow>();
@@ -64,7 +64,7 @@ public abstract class ProducerIntegrationTests<TFixture>(TFixture db)
     [Fact]
     public async Task Poll_only_producers_pick_up_jobs_at_the_poll_interval()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var started = new ConcurrentQueue<JobRow>();
         await using var producer = new Producer(driver, Options("email", TimeSpan.FromMilliseconds(200)), Record(started));
@@ -82,7 +82,7 @@ public abstract class ProducerIntegrationTests<TFixture>(TFixture db)
     [Fact]
     public async Task Producers_of_several_clients_share_a_queue_without_running_a_job_twice()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         const int Jobs = 400;
         var started = new ConcurrentQueue<JobRow>();

@@ -6,7 +6,11 @@ using Npgsql;
 
 namespace KopiQueue.Npgsql.Tests;
 
-/// <summary>PostgreSQL for the shared client integration suites (plan task 5.8): a fresh database per test class.</summary>
+/// <summary>
+/// PostgreSQL for the shared client integration suites (plan task 5.8): a fresh database per test class, and a data
+/// source per test, so a test's connections close when it disposes its schema rather than idling in a pool shared by
+/// the class (parallel classes would otherwise exhaust <c>max_connections</c>).
+/// </summary>
 public sealed class NpgsqlIntegrationFixture : IntegrationFixture
 {
     private readonly PostgresFixture _database = new();
@@ -55,7 +59,7 @@ public sealed class NpgsqlIntegrationFixture : IntegrationFixture
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        return new Schema(DataSource, name);
+        return new Schema(_database.CreateDataSource(), name);
     }
 
     private sealed class Schema(NpgsqlDataSource dataSource, string name) : IntegrationSchema
@@ -129,7 +133,7 @@ public sealed class NpgsqlIntegrationFixture : IntegrationFixture
         public override Task MarkCancelAttemptedAsync(long id, CancellationToken cancellationToken) => ExecuteAsync(
             $"UPDATE {name}.river_job SET metadata = metadata || jsonb_build_object('cancel_attempted_at', now()) WHERE id = $1", cancellationToken, id);
 
-        public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public override ValueTask DisposeAsync() => dataSource.DisposeAsync();
 
         private async Task ExecuteAsync(string sql, CancellationToken cancellationToken, params object[] values)
         {

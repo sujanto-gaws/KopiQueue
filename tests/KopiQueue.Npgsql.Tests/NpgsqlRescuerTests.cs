@@ -20,7 +20,7 @@ public sealed class NpgsqlRescuerTests(NpgsqlIntegrationFixture db)
     [Fact]
     public async Task A_rescue_notifies_each_queue_that_got_an_available_job_once_and_only_when_it_commits()
     {
-        var schema = await Fixture.CreateSchemaAsync(Ct);
+        await using var schema = await Fixture.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var executor = driver.GetExecutor();
         var jobs = new List<(JobRow Job, JobState To)>();

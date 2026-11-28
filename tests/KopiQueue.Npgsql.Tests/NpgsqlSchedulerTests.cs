@@ -20,7 +20,7 @@ public sealed class NpgsqlSchedulerTests(NpgsqlIntegrationFixture db)
     [Fact]
     public async Task A_batch_notifies_each_queue_that_got_jobs_once_and_only_when_it_commits()
     {
-        var schema = await Fixture.CreateSchemaAsync(Ct);
+        await using var schema = await Fixture.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var past = DateTimeOffset.UtcNow.AddMinutes(-5);
         var jobs = await driver.GetExecutor().JobInsertManyAsync(

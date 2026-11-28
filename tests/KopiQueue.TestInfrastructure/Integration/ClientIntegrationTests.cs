@@ -16,7 +16,7 @@ public abstract class ClientIntegrationTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_job_that_outlives_its_timeout_fails_with_a_timeout_error_and_is_retried()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var worker = new ScriptedWorker { TimeoutAfter = TimeSpan.FromMilliseconds(200), RetryIn = TimeSpan.FromMinutes(10) };
         var id = await InsertAsync(driver, "hang");
@@ -34,7 +34,7 @@ public abstract class ClientIntegrationTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_failing_job_is_retried_until_it_succeeds_with_each_error_recorded()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var id = await InsertAsync(driver, "fail-twice");
 
@@ -51,7 +51,7 @@ public abstract class ClientIntegrationTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_job_that_keeps_failing_is_discarded_after_its_last_attempt()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var id = await InsertAsync(driver, "fail", maxAttempts: 3);
 
@@ -67,7 +67,7 @@ public abstract class ClientIntegrationTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_short_snooze_runs_the_job_again_without_using_an_attempt()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var id = await InsertAsync(driver, "snooze-once");
 
@@ -85,7 +85,7 @@ public abstract class ClientIntegrationTests<TFixture>(TFixture db)
     [Fact]
     public async Task Several_clients_share_a_queue_run_each_job_once_and_respect_their_concurrency()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         const int Jobs = 300;
         var workers = Enumerable.Range(0, 3).Select(_ => new ScriptedWorker { WorkFor = (2, 6) }).ToArray();
@@ -121,7 +121,7 @@ public abstract class ClientIntegrationTests<TFixture>(TFixture db)
     [Fact]
     public async Task Stopping_under_load_loses_no_job_and_leaves_none_running()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         const int Jobs = 200;
         await driver.GetExecutor().JobInsertFastAsync([.. Enumerable.Range(0, Jobs).Select(_ => Params("ok"))], Ct);
@@ -143,7 +143,7 @@ public abstract class ClientIntegrationTests<TFixture>(TFixture db)
     [Fact]
     public async Task During_a_rolling_deploy_a_job_of_an_unknown_kind_is_retried_until_a_client_with_its_worker_takes_it()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var id = (await new KopiClient(driver).InsertAsync(new NewKindArgs(), new InsertOptions { Queue = "it" }, Ct)).Job.Id;
 

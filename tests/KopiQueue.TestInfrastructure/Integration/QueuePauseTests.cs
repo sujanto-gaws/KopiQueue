@@ -19,7 +19,7 @@ public abstract class QueuePauseTests<TFixture>(TFixture db)
     [Fact]
     public async Task The_queue_api_reads_lists_and_updates_the_queues_clients_create()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var worker = new PauseWorker();
         var client = await StartedAsync(driver, worker, "lister", NotificationMode.Auto, queues: ["q_a", "q_b", "q_c"]);
@@ -57,7 +57,7 @@ public abstract class QueuePauseTests<TFixture>(TFixture db)
     [InlineData(NotificationMode.PollOnly)]
     public async Task A_pause_reaches_every_client_within_the_poll_interval_and_running_jobs_finish(NotificationMode mode)
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var worker = new PauseWorker();
         var one = await StartedAsync(driver, worker, "one", mode);
@@ -97,7 +97,7 @@ public abstract class QueuePauseTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_queue_paused_before_a_client_starts_is_never_fetched()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         await schema.InsertQueueAsync(Queue, TimeSpan.Zero, paused: true, Ct);
 
@@ -121,7 +121,7 @@ public abstract class QueuePauseTests<TFixture>(TFixture db)
     [Fact]
     public async Task A_local_pause_stops_only_its_own_client()
     {
-        var schema = await db.CreateSchemaAsync(Ct);
+        await using var schema = await db.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         var worker = new PauseWorker();
         var one = await StartedAsync(driver, worker, "one", NotificationMode.Auto);

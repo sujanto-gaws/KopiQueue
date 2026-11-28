@@ -13,7 +13,7 @@ public sealed class NpgsqlUniqueTests(NpgsqlIntegrationFixture db)
     [Fact]
     public async Task A_job_a_River_producer_inserted_is_a_duplicate_of_the_same_job_from_KopiQueue()
     {
-        var schema = await Fixture.CreateSchemaAsync(Ct);
+        await using var schema = await Fixture.CreateSchemaAsync(Ct);
         var driver = schema.Driver;
         long riverJob;
         await using (var cmd = Fixture.DataSource.CreateCommand(
