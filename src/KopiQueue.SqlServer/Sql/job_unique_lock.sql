@@ -5,6 +5,8 @@
 -- Every inserter takes its keys in the same order, so batches that share keys queue behind each other instead of
 -- deadlocking (plan task 4.6). Locks are re-entrant: taking a key twice in one transaction is cheap.
 -- The wait has no lock timeout of its own; the command timeout bounds it, as statement_timeout does on PostgreSQL.
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
 DECLARE @unique_keys TABLE (k char(64) COLLATE Latin1_General_100_BIN2 PRIMARY KEY);
 
 INSERT INTO @unique_keys (k)

@@ -1309,11 +1309,18 @@ The Postgres SQL in §5 has these SQL Server equivalents. Fetch, complete, uniqu
 
 **Rules for every SQL Server statement** (from spike 0.9):
 
-1. A statement that uses `READPAST` starts with `SET TRANSACTION ISOLATION LEVEL READ COMMITTED;`. SNAPSHOT isolation **leaks through the SqlClient connection pool** and makes `READPAST` fail with error 650. The SET is scoped to the `sp_executesql` batch, so it never changes a session shared with application code.
+1. **Every** statement starts with `SET TRANSACTION ISOLATION LEVEL READ COMMITTED;`. SNAPSHOT isolation **leaks through the SqlClient connection pool**, and under it `READPAST` fails with error 650 and concurrent writes to one row abort with update conflicts (error 3960). The SET is scoped to the `sp_executesql` batch, so it never changes a session shared with application code. (Spike 0.9 asked this of `READPAST` statements only; task 5.8 found leader election and queue creation aborting with error 3960 on SNAPSHOT sessions, so it now covers every statement, and a unit test checks each file.)
 2. The driver adds `Application Name=KopiQueue` to its connection string by default. KQ then has its own pool, and its sessions can be identified in DMVs.
 3. Locking statements pin their access path with `FORCESEEK` (or an `INDEX` hint). Without it the fetch plan flips to a clustered scan at larger limits, and the scan escalates to a table X lock.
-4. No statement touches more than **2,000 rows**. Each touched row takes one key lock per maintained index, and escalation fires once an index passes about 5,000 locks in a single statement.
+4. No statement touches more than **1,000 rows** (the driver's `MaxRowsPerStatement`; spike 0.9 allowed 2,000). Each touched row takes one key lock per maintained index, and escalation fires once an index passes about 5,000 locks in a single statement.
 5. Each such statement has a plan-shape test (seek, no escalation) in `KopiQueue.SqlServer.Tests`.
+
+As built in plan task 5.8:
+
+- **Plan shape** (`SqlServerPlanShapeTests`). Every statement on the job table runs at 10 and at 1,000 rows on a table of about 6,000 jobs, with Query Store capturing every plan, `OPTION (RECOMPILE)` ones included. No plan may scan the job table, and `sys.dm_db_index_operational_stats` must show no lock promotion. Two kinds of statement are allowed to scan: the admin list and delete-many's first step. They take arbitrary filters, are compiled per call, and read with `READPAST` or plain READ COMMITTED, so they lock nothing they don't delete. The queue cleaner reads the queue table in name order with `UPDLOCK`; that table holds one row per queue, far below escalation.
+- **The test found two scans.** The `DELETE` steps of the job cleaner and delete-many joined a table variable of found ids. SQL Server 2019 and later compile a table variable with its real row count, and at 1,000 ids they chose a locking scan and a hash join. Both now use `FORCESEEK`.
+- **Isolation** (NFR-REL-06). The conformance suite runs three times on SQL Server: with READ_COMMITTED_SNAPSHOT off, with it on, and with SNAPSHOT everywhere application code can put it (SNAPSHOT caller transactions, and the driver's pooled sessions left in SNAPSHOT). `SqlServerSnapshotSessionTests` calls every executor operation on a pooled session left in SNAPSHOT before each call, and inside a caller's SNAPSHOT transaction. It also runs concurrent electors, queue creators, unique inserters and fetchers on SNAPSHOT sessions. The driver's own transactions set READ COMMITTED on the session they run on; that pool is KopiQueue's own (rule 2).
+
 
 **Fetch** (`SKIP LOCKED` → `UPDLOCK, READPAST, ROWLOCK, FORCESEEK` on an updatable CTE):
 

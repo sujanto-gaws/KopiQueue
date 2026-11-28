@@ -8,6 +8,8 @@
 -- then id, with a null time as the latest possible time, so it sorts last ascending and first descending.
 -- Under locking READ COMMITTED a row a writer holds is waited for, as any read on SQL Server; with RCSI it is not.
 -- OPTION (RECOMPILE) lets each call's plan drop the filters it does not use.
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
 SELECT TOP (@max)
     j.id, j.kind, j.queue, j.state, j.priority, j.args, j.metadata, j.tags, j.attempt, j.max_attempts,
     j.attempted_at, j.attempted_by, j.errors, j.created_at, j.scheduled_at, j.finalized_at

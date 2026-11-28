@@ -42,6 +42,9 @@ All notable changes to KopiQueue are documented here. The format follows [Keep a
 - SQL Server control paths and the EF Core commit interceptor (FR-DB-04, FR-DB-05, [#53](https://github.com/sujanto-gaws/KopiQueue/issues/53)):
   - **External cancel on SQL Server:** a cancel reaches a job running on another client within its `FetchPollInterval`, as pauses and resumes already did. The SQL Server driver now supports every operation.
   - **`AddKopiQueueCommitInterceptor()`** on `DbContextOptionsBuilder` (`KopiQueue.EntityFrameworkCore`): when a context's transaction with jobs commits through EF Core, the inserting client's producers fetch them at once instead of at their next poll. Inserts, bulk inserts and retries in the transaction count; a rollback wakes nothing. It's the fast path on SQL Server and saves a round trip on PostgreSQL.
+- The SQL Server driver passes the driver conformance suite with READ_COMMITTED_SNAPSHOT off and on, and with SNAPSHOT isolation on callers' transactions and on pooled sessions (FR-DB-06, NFR-REL-06, [#54](https://github.com/sujanto-gaws/KopiQueue/issues/54)):
+  - **Fixed: update conflicts under SNAPSHOT.** Leader election, queue creation and the other statements that don't use `READPAST` could abort with error 3960 when a pooled session carried SNAPSHOT isolation, which survives SqlClient's pool reset. Every statement now runs at READ COMMITTED for its own batch.
+  - **Fixed: locking scans in two deletes.** The job cleaner and `JobDeleteManyAsync` could scan the job table under locks when deleting 1,000 jobs. They now seek.
 
 ## [0.4.0-beta.1] - 2026-11-27
 

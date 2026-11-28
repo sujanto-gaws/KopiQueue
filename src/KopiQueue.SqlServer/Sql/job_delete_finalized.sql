@@ -37,7 +37,9 @@ ORDER BY e.finalized_at, e.id;
 
 DELETE j
 OUTPUT deleted.id
-FROM {{schema}}{{prefix}}job AS j WITH (READPAST, ROWLOCK)
+-- FORCESEEK: the table variable is compiled with its real row count (SQL Server 2019 and later), and at 1,000 ids the
+-- optimiser would rather scan the job table and hash-join, a locking scan of every row (design §8.1 rule 3).
+FROM {{schema}}{{prefix}}job AS j WITH (READPAST, ROWLOCK, FORCESEEK)
 JOIN @expired AS e ON e.id = j.id
 WHERE (j.state = 'completed' AND j.finalized_at < @completed_cutoff)
    OR (j.state = 'cancelled' AND j.finalized_at < @cancelled_cutoff)

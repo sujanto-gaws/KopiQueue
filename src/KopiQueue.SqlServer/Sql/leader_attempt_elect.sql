@@ -4,6 +4,8 @@
 -- @leader_id; the lease length as @ttl_s seconds plus @ttl_us microseconds.
 -- The insert's UPDLOCK, HOLDLOCK range lock makes two clients that both found no row take turns, so one inserts and
 -- the other sees its row. The times are read once, at the columns' precision (design §8.1).
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
 DECLARE @now datetime2(6) = SYSUTCDATETIME();
 DECLARE @expires_at datetime2(6) = DATEADD(microsecond, @ttl_us, DATEADD(second, @ttl_s, @now));
 DECLARE @won int;

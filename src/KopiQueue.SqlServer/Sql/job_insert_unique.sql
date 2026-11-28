@@ -9,6 +9,8 @@
 -- keeps the reads on the unique index, so they never wait on unrelated rows.
 -- Ids follow the ORDER BY, so inserted jobs keep their input order. Returns the job columns, then whether the row was
 -- skipped, then its unique key, to match rows to the input: the inserted rows, then the holders.
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
 DECLARE @now datetime2(6) = SYSUTCDATETIME();
 DECLARE @holders TABLE (unique_key varbinary(32) PRIMARY KEY, id bigint NOT NULL);
 

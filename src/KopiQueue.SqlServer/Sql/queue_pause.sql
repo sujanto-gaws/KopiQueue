@@ -2,6 +2,8 @@
 -- gets paused_at and updated_at set to now, one already paused keeps both. @name, the queue or '*'.
 -- Nothing is announced, since SQL Server has no LISTEN/NOTIFY: clients see the pause when they next poll their queues'
 -- state (FR-QUE-04). Returns a row if the queue exists ('*' always), none otherwise.
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
 DECLARE @now datetime2(6) = SYSUTCDATETIME();
 
 UPDATE {{schema}}{{prefix}}queue

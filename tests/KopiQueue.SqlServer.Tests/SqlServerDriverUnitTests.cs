@@ -23,6 +23,23 @@ public sealed partial class SqlServerDriverUnitTests
     }
 
     [Fact]
+    public void Every_statement_first_sets_read_committed_for_its_own_batch()
+    {
+        // Design §8.1 rule 1 (plan task 5.8, NFR-REL-06): SNAPSHOT survives SqlClient's pool reset, and under it READPAST
+        // fails (error 650) and concurrent writes abort on update conflicts (error 3960). The SET lasts for its batch only.
+        var assembly = typeof(SqlServerDriver).Assembly;
+        var statements = assembly.GetManifestResourceNames().Where(n => n.StartsWith("kopi-sql/", StringComparison.Ordinal)).ToList();
+
+        Assert.NotEmpty(statements);
+        Assert.All(statements, name =>
+        {
+            using var reader = new StreamReader(assembly.GetManifestResourceStream(name)!);
+            var first = reader.ReadToEnd().Split('\n').Select(l => l.Trim()).First(l => l.Length > 0 && !l.StartsWith("--", StringComparison.Ordinal));
+            Assert.True(first == "SET TRANSACTION ISOLATION LEVEL READ COMMITTED;", $"{name} starts with: {first}");
+        });
+    }
+
+    [Fact]
     public void Every_name_the_main_line_creates_carries_the_prefix()
     {
         // Constraint names are scoped to the schema, so an unprefixed one would stop two prefixes sharing a schema.

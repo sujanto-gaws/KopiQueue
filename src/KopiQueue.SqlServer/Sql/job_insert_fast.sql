@@ -2,6 +2,8 @@
 -- only their count. The @jobs array, the ordering and the clock are the same. Unique jobs are rejected by the driver
 -- before this runs, as on PostgreSQL. SqlBulkCopy is not used: its page locks would stall every producer until the
 -- caller commits (spike 0.10).
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
 DECLARE @now datetime2(6) = SYSUTCDATETIME();
 
 INSERT INTO {{schema}}{{prefix}}job (args, created_at, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags)

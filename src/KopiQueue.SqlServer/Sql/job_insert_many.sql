@@ -4,6 +4,8 @@
 -- Ids follow the ORDER BY, which SQL Server guarantees for INSERT ... SELECT, so a batch runs first in, first out. OUTPUT
 -- has no order, and the driver sorts the rows by id. created_at and a missing scheduled_at share one clock reading.
 -- Unique jobs take another path (plan task 5.4).
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
 DECLARE @now datetime2(6) = SYSUTCDATETIME();
 
 INSERT INTO {{schema}}{{prefix}}job (args, created_at, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags)

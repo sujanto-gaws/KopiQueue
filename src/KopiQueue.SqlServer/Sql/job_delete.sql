@@ -1,6 +1,8 @@
 -- Deletes a job for the admin API (FR-ADM-03), unless it is running. @id the job.
 -- Returns the job and whether it was deleted, or no row for an unknown id. The delete checks the state as it holds the
 -- row, so a job that started running meanwhile is kept and returned as it is now.
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
 DELETE FROM {{schema}}{{prefix}}job
 OUTPUT
     deleted.id, deleted.kind, deleted.queue, deleted.state, deleted.priority, deleted.args, deleted.metadata,

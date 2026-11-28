@@ -156,7 +156,10 @@ public abstract partial class DriverConformanceTests<TFixture>
             var whileHeld = await executor.JobScheduleAsync(new JobScheduleParams { Max = 100 }, Ct).WaitAsync(TimeSpan.FromSeconds(10), Ct);
 
             Assert.Equal([ids[1]], whileHeld.Select(r => r.Id));
-            Assert.Equal(JobState.Scheduled, (await executor.JobGetByIdAsync(ids[0], Ct))!.State);
+
+            // Read through the holder: on a database whose reads take locks (SQL Server without READ_COMMITTED_SNAPSHOT),
+            // any other session would wait for it.
+            Assert.Equal(JobState.Scheduled, (await schema.Driver.GetExecutor(holder.Transaction).JobGetByIdAsync(ids[0], Ct))!.State);
         }
 
         var afterwards = await executor.JobScheduleAsync(new JobScheduleParams { Max = 100 }, Ct);

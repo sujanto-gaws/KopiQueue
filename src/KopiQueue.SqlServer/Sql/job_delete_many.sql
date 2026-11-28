@@ -26,6 +26,8 @@ OUTPUT
     deleted.id, deleted.kind, deleted.queue, deleted.state, deleted.priority, deleted.args, deleted.metadata,
     deleted.tags, deleted.attempt, deleted.max_attempts, deleted.attempted_at, deleted.attempted_by,
     deleted.errors, deleted.created_at, deleted.scheduled_at, deleted.finalized_at
-FROM {{schema}}{{prefix}}job AS j WITH (READPAST, ROWLOCK)
+-- FORCESEEK: the table variable is compiled with its real row count (SQL Server 2019 and later), and at 1,000 ids the
+-- optimiser would rather scan the job table and hash-join, a locking scan of every row (design §8.1 rule 3).
+FROM {{schema}}{{prefix}}job AS j WITH (READPAST, ROWLOCK, FORCESEEK)
 JOIN @matched AS m ON m.id = j.id
 WHERE j.state <> 'running';

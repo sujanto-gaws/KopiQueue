@@ -4,6 +4,8 @@
 -- refreshing the same queues lock them in the same order. Two clients creating the same queue take turns on the
 -- insert's UPDLOCK, HOLDLOCK range lock, so the second finds the first's row instead of failing.
 -- Returns the rows with their pause state, in name order.
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
 DECLARE @now datetime2(6) = SYSUTCDATETIME();
 DECLARE @names_table TABLE (name nvarchar(128) COLLATE Latin1_General_100_BIN2 PRIMARY KEY);
 
