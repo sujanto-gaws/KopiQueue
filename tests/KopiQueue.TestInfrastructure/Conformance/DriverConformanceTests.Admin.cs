@@ -41,6 +41,56 @@ public abstract partial class DriverConformanceTests<TFixture>
         Assert.Equal((kind, queue, JobState.Scheduled, 2, Future), (job.Kind, job.Queue, job.State, job.Priority, job.ScheduledAt));
     }
 
+    /// <summary>
+    /// What <see cref="JobFilter.MetadataContains"/> matches, as PostgreSQL's <c>jsonb @&gt;</c> does (FR-ADM-02): drivers
+    /// without that operator must emulate it (task 5.6), so these are the edges where an emulation could differ.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"n": 1500}""", "0 1")]
+    [InlineData("""{"n": 1.5e3}""", "0 1")]
+    [InlineData("""{"n": 1500.0}""", "0 1")]
+    [InlineData("""{"n": "1500"}""", "4")]
+    [InlineData("""{"s": "a"}""", "0")]
+    [InlineData("""{"S": "a"}""", "3")]
+    [InlineData("""{"b": true}""", "0")]
+    [InlineData("""{"b": false}""", "")]
+    [InlineData("""{"z": null}""", "0")]
+    [InlineData("""{"o": {"x": [{"y": "q"}]}}""", "0")]
+    [InlineData("""{"o": {"x": [2, 1, 2]}}""", "0")]
+    [InlineData("""{"o": {"x": [[1]]}}""", "6")]
+    [InlineData("""{"o": {"e": {}}}""", "0")]
+    [InlineData("""{"o": {}}""", "0 6")]
+    [InlineData("""{"arr": ["p"]}""", "0")]
+    [InlineData("""{"arr": []}""", "0")]
+    [InlineData("""{"arr": ["p", 3, "r"]}""", "")]
+    [InlineData("""{"u": "é \" \\ 😀"}""", "2")]
+    [InlineData("{}", "0 1 2 3 4 5 6")]
+    public async Task A_metadata_filter_matches_by_containment_as_jsonb_does(string filter, string expected)
+    {
+        var executor = (await MigratedAsync()).Driver.GetExecutor();
+        var kind = UniqueKind();
+        string[] metadata =
+        [
+            """{"n": 1500, "s": "a", "b": true, "z": null, "o": {"x": [1, 2, {"y": "q"}], "e": {}}, "arr": ["p", "q", 3]}""",
+            """{"n": 1.5e3}""",
+            """{"s": "a ", "u": "é \" \\ 😀"}""",
+            """{"S": "a"}""",
+            """{"n": "1500"}""",
+            """{"arr": "p"}""",
+            """{"o": {"x": [[1, 2]]}}""",
+        ];
+        var ids = (await executor.JobInsertManyAsync(
+            [.. metadata.Select(m => At(kind, UniqueQueue(), JobState.Available, DateTimeOffset.UtcNow, metadata: m))], Ct))
+            .Select(r => r.Job.Id).ToArray();
+
+        var matched = await executor.JobListAsync(
+            new JobListQuery { Filter = new JobListParams { Kinds = [kind], MetadataContains = JsonNode.Parse(filter)!.AsObject() }, Max = 100 },
+            Ct);
+
+        var indexes = expected.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(int.Parse);
+        Assert.Equal(indexes.Select(i => ids[i]), matched.Select(j => j.Id));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

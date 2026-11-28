@@ -24,6 +24,18 @@ public sealed class SchedulerTests
     }
 
     [Fact]
+    public void A_driver_that_limits_rows_per_statement_gets_scheduler_batches_of_that_size()
+    {
+        var limited = new KopiClientLifecycleTests.IdleDriver { Capabilities = new() { ListenNotify = false, BulkCopy = false, MaxRowsPerStatement = 1_000 } };
+
+        var services = KopiClient.MaintenanceServices(limited, new KopiClientOptions());
+        var unlimited = KopiClient.MaintenanceServices(new KopiClientLifecycleTests.IdleDriver(), new KopiClientOptions());
+
+        Assert.Equal(1_000, services.Single(s => s.Name == "scheduler").BatchSize);
+        Assert.Equal(Scheduler.DefaultBatchSize, unlimited.Single(s => s.Name == "scheduler").BatchSize);
+    }
+
+    [Fact]
     public async Task A_batch_asks_for_the_batch_size_and_counts_promoted_and_discarded_jobs()
     {
         var driver = new KopiClientLifecycleTests.IdleDriver();

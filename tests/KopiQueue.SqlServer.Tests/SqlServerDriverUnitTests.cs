@@ -145,10 +145,37 @@ public sealed partial class SqlServerDriverUnitTests
         var executor = ((IKopiDriver)new SqlServerDriver("Server=unused")).GetExecutor();
 
         var ex = await Assert.ThrowsAsync<NotSupportedException>(
-            () => executor.JobScheduleAsync(new JobScheduleParams { Max = 1 }, TestContext.Current.CancellationToken));
+            () => executor.JobListCancelAttemptedAsync([1], TestContext.Current.CancellationToken));
 
-        Assert.Contains("JobScheduleAsync", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("plan task 5.6", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("JobListCancelAttemptedAsync", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("plan task 5.7", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Durations_travel_as_seconds_and_microseconds_so_weeks_fit_dateadd()
+    {
+        var parameters = SqlServerExecutor.Duration("retention", TimeSpan.FromDays(40) + TimeSpan.FromTicks(15), "p");
+        var none = SqlServerExecutor.Duration("retention", null, "p");
+
+        Assert.Equal(("@retention_s", 3_456_000, "@retention_us", 1), (parameters[0].ParameterName, parameters[0].Value, parameters[1].ParameterName, parameters[1].Value));
+        Assert.Equal([DBNull.Value, DBNull.Value], none.Select(p => p.Value));
+        Assert.Throws<ArgumentOutOfRangeException>(() => SqlServerExecutor.Duration("retention", TimeSpan.FromDays(365 * 70), "p"));
+    }
+
+    [Fact]
+    public void A_metadata_filter_compiles_to_parameters_and_never_to_its_text()
+    {
+        var filter = System.Text.Json.Nodes.JsonNode.Parse("""{"x'); DROP TABLE t; --": ["a'b", {"n": 1.5}], "t": true}""")!.AsObject();
+
+        var (sql, parameters) = SqlServerJsonContainment.Compile(filter, "j.metadata");
+
+        Assert.DoesNotContain("DROP", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("a'b", sql, StringComparison.Ordinal);
+        Assert.Contains(parameters, p => Equals(p.Value, "x'); DROP TABLE t; --"));
+        Assert.Contains(parameters, p => Equals(p.Value, "a'b"));
+        Assert.Equal(("1 = 1", 0), (SqlServerJsonContainment.Compile([], "j.metadata").Sql, SqlServerJsonContainment.Compile([], "j.metadata").Parameters.Count));
+        var huge = new System.Text.Json.Nodes.JsonObject(Enumerable.Range(0, 1_500).Select(i => KeyValuePair.Create($"k{i}", (System.Text.Json.Nodes.JsonNode?)i)));
+        Assert.Throws<ArgumentException>(() => SqlServerJsonContainment.Compile(huge, "j.metadata"));
     }
 
     [Fact]
