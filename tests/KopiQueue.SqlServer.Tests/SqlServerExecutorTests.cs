@@ -224,18 +224,27 @@ public sealed class SqlServerExecutorTests(SqlServerFixture db) : IClassFixture<
             ApplicationName = "kopi-reset-" + Guid.NewGuid().ToString("N")[..8],
             MaxPoolSize = 1,
         }.ConnectionString);
-        short spid;
-        await using (var first = await connections.OpenAsync(Ct))
+        // Another class's fixture may clear every pool between the two opens (SqlServerFixture.DropDatabaseAsync), and then
+        // the second open gets a new session. Only a reopen that gets the same session back shows anything, so retry.
+        for (var attempt = 0; attempt < 10; attempt++)
         {
-            await using var set = new SqlCommand("SET ANSI_WARNINGS OFF; SET NUMERIC_ROUNDABORT ON; SELECT @@SPID", first);
-            spid = (short)(await set.ExecuteScalarAsync(Ct))!;
+            short spid;
+            await using (var first = await connections.OpenAsync(Ct))
+            {
+                await using var set = new SqlCommand("SET ANSI_WARNINGS OFF; SET NUMERIC_ROUNDABORT ON; SELECT @@SPID", first);
+                spid = (short)(await set.ExecuteScalarAsync(Ct))!;
+            }
+
+            await using var reused = await connections.OpenAsync(Ct);
+            await using var read = new SqlCommand("SELECT @@SPID", reused);
+            if ((short)(await read.ExecuteScalarAsync(Ct))! == spid)
+            {
+                await SqlServerSessionCheck.EnsureAsync(reused, transaction: null, Ct);
+                return;
+            }
         }
 
-        await using var reused = await connections.OpenAsync(Ct);
-        await using var read = new SqlCommand("SELECT @@SPID", reused);
-
-        Assert.Equal(spid, (short)(await read.ExecuteScalarAsync(Ct))!);
-        await SqlServerSessionCheck.EnsureAsync(reused, transaction: null, Ct);
+        Assert.Fail("The pool never handed the same session back.");
     }
 
     [Fact]
