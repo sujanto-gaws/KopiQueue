@@ -29,6 +29,19 @@ Task 5.9 covers four things:
 - **Workers bound end-to-end throughput.** A producer waits `FetchCooldown` (100 ms) between fetches, so one queue fetches at most ten times a second. With 200 workers the ceiling is 2,000 jobs/s, and 1,800 was measured. 5,000 jobs/s needs at least 500 workers on the queue, or a shorter cooldown.
 - **Pickup latency needs many samples.** A job arrives at a random point of the poll cycle, so its wait is spread evenly over the interval. With 15 samples, the median's standard error is about an eighth of the interval: two such runs gave 418 and 546 ms at 1 s. The benchmark now takes 100 and 60 samples and also reports the mean, whose standard error is smaller.
 
+### On CI (GitHub runners)
+
+These numbers come from `bench.yml` on this task's pull request ([#157](https://github.com/sujanto-gaws/KopiQueue/pull/157)), with one run per version. The runners are shared machines, so their speeds are noisy. The logical reads are not: fetch and complete cost 545 and 554 reads per 25 jobs on every version.
+
+| | 2019 (15.0.4510) | 2022 (16.0.4325) | 2025 (17.0.5065) |
+|---|---|---|---|
+| Fast insert, `{"n":1}` args, jobs/s | 52,200 | 29,900 | 27,100 |
+| End to end, 1,000 workers, jobs/s | 9,000 | 7,300 | 7,000 |
+| Pickup, 100 ms poll: p50 / mean | 56 / 54 ms | 53 / 54 ms | 57 / 58 ms |
+| Pickup, 1 s poll: p50 / mean | 502 / 510 ms | 431 / 473 ms | 449 / 477 ms |
+| DQ-6, 1,000 jobs: OPENJSON / table-valued, jobs/s | 41,700 / 60,300 | 21,900 / 29,500 | 21,500 / 29,500 |
+| DQ-6, 100 jobs: OPENJSON / table-valued, jobs/s | 19,200 / 22,400 | 15,600 / 15,800 | 11,800 / 10,600 |
+
 ## Fetch and complete cost
 
 Spike 0.10 measured about 950 logical reads to fetch 25 jobs, on a simplified table of its own. Through the driver, before this task:
@@ -79,7 +92,7 @@ The driver's OPENJSON insert was compared against the same `INSERT ... SELECT` f
 
 A second run gave the same picture: 21,500 against 30,400 jobs/s at 1,000 jobs.
 
-- **Speed:** a table-valued parameter is about 1.4–1.5 times faster for large batches, at half the server CPU and less than half the reads. At 100 jobs a statement it is about 10% faster.
+- **Speed:** a table-valued parameter is about 1.4–1.5 times faster for large batches, at half the server CPU and less than half the reads. On CI the gain at 1,000 jobs was 1.35–1.45 times on all three versions. At 100 jobs a statement there's no clear winner: about 10% faster locally, and between 10% slower and 17% faster on CI.
 - **Cost of switching:** a user-defined table type in the schema, created by the migration under the schema's prefix. The application's login also needs `EXECUTE` on that type, which `db_datareader` and `db_datawriter` don't grant.
 - **Decision:** left to the owner. OPENJSON stays the default (ADR-014) until then. With realistic args, it is the reason batched insert misses NFR-PERF-07.
 
