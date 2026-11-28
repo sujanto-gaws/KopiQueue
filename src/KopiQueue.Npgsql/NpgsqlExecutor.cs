@@ -988,18 +988,3 @@ internal sealed class NpgsqlExecutor(NpgsqlStatements statements, NpgsqlDataSour
         FinalizedAt = reader.IsDBNull(15) ? null : reader.GetFieldValue<DateTimeOffset>(15),
     };
 }
-
-/// <summary>Compares unique keys by their bytes.</summary>
-internal sealed class UniqueKeyComparer : IEqualityComparer<byte[]>
-{
-    public static readonly UniqueKeyComparer Instance = new();
-
-    public bool Equals(byte[]? x, byte[]? y) => x.AsSpan().SequenceEqual(y);
-
-    public int GetHashCode(byte[] obj)
-    {
-        var hash = new HashCode();
-        hash.AddBytes(obj);
-        return hash.ToHashCode();
-    }
-}

@@ -1353,6 +1353,15 @@ IF @@ROWCOUNT = 0
 - `READCOMMITTEDLOCK` reads the latest committed row even for SNAPSHOT callers. Without it on the fallback `SELECT`, a SNAPSHOT caller got neither an insert nor the existing row (spike 0.10).
 - The `unique_slot` unique index remains the final guarantee.
 
+As built in plan task 5.4 (`job_unique_lock.sql`, `job_insert_unique.sql`). The sketch above shows one job; the driver handles a whole batch in one round trip per statement:
+
+- **Locks first, in key order.** The batch takes the lock of every distinct key, sorted, before it reads or inserts anything. Concurrent batches that share keys then queue behind each other instead of deadlocking, as task 4.6 required on PostgreSQL. A batch over 1,000 rows takes all its keys in one sorted pass first, and its chunks take them again re-entrantly.
+- **Lock name and wait:** the resource is `kopi_unique:<schema>.<prefix>:<key as 64 hex digits>`, so other schemas and prefixes never share a lock. The lock has no timeout of its own (`@LockTimeout = -1`); the command timeout bounds the wait, as `statement_timeout` does on PostgreSQL. A negative result, such as a deadlock victim, raises error 50001.
+- **Holders, then one insert.** The holders of the batch's keys (`unique_slot = 0`) are read with `READCOMMITTEDLOCK, FORCESEEK` on the unique index. Every other job, unique or not, goes in one `INSERT ... ORDER BY ordinal`, so inserted jobs keep their input order. The holders come back flagged as skipped, unchanged.
+- **Repeated keys:** a key the batch repeats is sent once, and results are matched to the input by key, as on PostgreSQL.
+- **Transactions:** a pooled insert with unique jobs runs in a READ COMMITTED transaction of the driver's own, because the locks belong to a transaction.
+- **The fast insert rejects unique jobs,** as on PostgreSQL.
+
 **Batch complete:** `UPDATE ... FROM kopi_job j JOIN OPENJSON(@batch) WITH (...) u ON j.id = u.id WHERE j.state = 'running'`, with `OUTPUT inserted.*`. `errors` is appended with `JSON_MODIFY(..., 'append $', JSON_QUERY(u.error))`. OPENJSON is the default over table-valued parameters because it needs no user-defined table type (DQ-6). As built in plan task 5.3 (`job_set_state_if_running_many.sql`):
 
 - **Semantics:** the same as the PostgreSQL statement. Only a running job changes, and metadata is merged either way. A job whose metadata has a `cancel_attempted_at` key, and whose outcome would run it again, is cancelled instead. Every given job that exists is returned: the changed ones from `OUTPUT`, the rest from a second `SELECT`.

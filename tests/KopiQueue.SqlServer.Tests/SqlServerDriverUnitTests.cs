@@ -161,8 +161,10 @@ public sealed partial class SqlServerDriverUnitTests
             new() { Kind = "k", ArgsJson = "{}", Queue = "q", State = JobState.Available, Priority = 1, MaxAttempts = 1, UniqueKey = new byte[32], UniqueStates = 1 },
         ];
 
-        var ex = await Assert.ThrowsAsync<NotSupportedException>(() => executor.JobInsertManyAsync(unique, ct));
-        Assert.Contains("plan task 5.4", ex.Message, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<ArgumentException>(() => executor.JobInsertManyAsync(
+            [new() { Kind = "k", ArgsJson = "{}", Queue = "q", State = JobState.Available, Priority = 1, MaxAttempts = 1, UniqueKey = new byte[31], UniqueStates = 1 }], ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => executor.JobInsertManyAsync(
+            [new() { Kind = "k", ArgsJson = "{}", Queue = "q", State = JobState.Available, Priority = 1, MaxAttempts = 1, UniqueKey = new byte[32] }], ct));
         await Assert.ThrowsAsync<NotSupportedException>(() => executor.JobInsertFastAsync(unique, ct));
         await Assert.ThrowsAsync<ArgumentException>(() => executor.JobInsertManyAsync([null!], ct));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
@@ -202,6 +204,24 @@ public sealed partial class SqlServerDriverUnitTests
     }
 
     [Fact]
+    public void A_unique_job_carries_its_key_as_hex_and_its_states()
+    {
+        var key = Enumerable.Range(0, 32).Select(i => (byte)(i * 8)).ToArray();
+        JobInsertParams[] jobs =
+        [
+            new() { Kind = "k", ArgsJson = "{}", Queue = "q", State = JobState.Available, Priority = 1, MaxAttempts = 1, UniqueKey = key, UniqueStates = 0b1111_0101 },
+            new() { Kind = "k", ArgsJson = "{}", Queue = "q", State = JobState.Available, Priority = 1, MaxAttempts = 1 },
+        ];
+
+        var rows = JsonElement.Parse(SqlServerExecutor.InsertBatch(jobs, 0, 2)).EnumerateArray().ToList();
+
+        Assert.Equal((Convert.ToHexString(key), 245), (rows[0].GetProperty("uk").GetString(), rows[0].GetProperty("us").GetInt32()));
+        Assert.Equal(64, rows[0].GetProperty("uk").GetString()!.Length);
+        Assert.False(rows[1].TryGetProperty("uk", out _));
+        Assert.Equal("queue.jobs_", new SqlServerStatements("queue", "jobs_").UniqueLockScope);
+    }
+
+    [Fact]
     public void Outcome_batches_leave_out_what_does_not_change()
     {
         var at = new DateTimeOffset(2026, 6, 1, 9, 30, 0, TimeSpan.FromHours(7));
@@ -226,7 +246,7 @@ public sealed partial class SqlServerDriverUnitTests
     [Fact]
     public void Statements_render_for_the_schema_and_prefix()
     {
-        var statements = new SqlServerStatements("[queue].", "jobs_");
+        var statements = new SqlServerStatements("queue", "jobs_");
 
         Assert.Contains("FROM [queue].jobs_job", statements.JobGetById, StringComparison.Ordinal);
         Assert.Contains("INSERT INTO [queue].jobs_job", statements.JobInsertMany, StringComparison.Ordinal);

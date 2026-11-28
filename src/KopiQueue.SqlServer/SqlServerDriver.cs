@@ -77,7 +77,7 @@ public sealed class SqlServerDriver : IKopiDriver
 
         Connections = new SqlServerConnectionFactory(connectionString);
         _migrationDriver = new SqlServerMigrationDriver(Connections, options.Schema, options.TablePrefix);
-        _statements = new SqlServerStatements(_migrationDriver.SchemaQualifier, _migrationDriver.TablePrefix);
+        _statements = new SqlServerStatements(_migrationDriver.Schema, _migrationDriver.TablePrefix);
         Schema = options.Schema;
         TablePrefix = options.TablePrefix;
     }
