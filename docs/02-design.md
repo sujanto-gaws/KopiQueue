@@ -1183,6 +1183,7 @@ As built in plan task 5.7:
 - **What it wakes.** Inserts, bulk inserts and retries in a caller's transaction record the queues that got available jobs against that transaction, for the client that made them; a client that works no queues records nothing. The interceptor's `TransactionCommitted` wakes them once, and `TransactionRolledBack` forgets them. The records are held weakly by the transaction, so a transaction no hook reports leaves nothing behind.
 - **What it doesn't see.** Commits made outside EF Core, such as a `DbTransaction` passed to `UseTransaction` and then committed directly, and other processes: those jobs wait for the poll. A savepoint rolled back after an insert costs one fetch that finds nothing.
 - **PostgreSQL.** The interceptor works there too and saves the notification's round trip, but isn't needed.
+- **Sample.** `samples/MinimalApi.EfCore` saves an order and inserts its job in one EF Core transaction, with the interceptor, on either database by configuration (`Sample:Database`). Its confirmation job starts about 20 ms after the commit, plus the worker's own 50 ms, on both.
 
 
 ### 6.4 Extensibility points

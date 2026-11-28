@@ -28,6 +28,7 @@
     <Project Path="bench/KopiQueue.Benchmarks/KopiQueue.Benchmarks.csproj" />
   </Folder>
   <Folder Name="/samples/">
+    <Project Path="samples/MinimalApi.EfCore/MinimalApi.EfCore.csproj" />
     <Project Path="samples/WorkerService/WorkerService.csproj" />
   </Folder>
 </Solution>
