@@ -26,7 +26,7 @@ The steps:
 | Step | What it measures |
 |------|------------------|
 | `fetch` | An empty poll, then fetching 25 jobs at a time from a busy queue and completing them, through the driver |
-| `insert` | `JobInsertFastAsync` and `JobInsertManyAsync`, 1,000 jobs a call |
+| `insert` | `JobInsertFastAsync` and `JobInsertManyAsync`, 1,000 jobs a call, args of about 60 bytes (NFR-PERF-07) |
 | `e2e` | One client working 50,000 pre-inserted no-op jobs, with 200 and with 1,000 workers |
 | `dq6` | Design question 6: the driver's OPENJSON insert against the same insert fed by a table-valued parameter |
 | `dq7` | Design question 7: `state` as `varchar(16)` or `tinyint`, on two tables that differ only in that column |

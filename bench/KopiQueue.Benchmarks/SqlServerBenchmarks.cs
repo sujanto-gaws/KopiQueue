@@ -112,7 +112,7 @@ internal sealed class SqlServerBenchmarks(BenchDatabase db, BenchSettings settin
             var watch = Stopwatch.StartNew();
             var times = await TimeAsync(calls, insert);
             watch.Stop();
-            Report.Line($"{Report.N(calls * batch.Length / watch.Elapsed.TotalSeconds)} jobs/s; call: {Report.Distribution(times)}\n");
+            Report.Line($"{Report.N(calls * batch.Length / watch.Elapsed.TotalSeconds)} jobs/s, args of about 60 bytes; target ≥ 20,000 jobs/s (NFR-PERF-07); call: {Report.Distribution(times)}\n");
             Statements((await db.SnapshotAsync()).Since(before), perRow: calls * batch.Length);
         }
     }
@@ -209,12 +209,15 @@ internal sealed class SqlServerBenchmarks(BenchDatabase db, BenchSettings settin
     private static JobInsertParams NoOp(string queue, int i) => new()
     {
         Kind = NoOpArgs.Kind,
-        ArgsJson = $$"""{"n":{{i}}}""",
+        ArgsJson = Args(i),
         Queue = queue,
         State = JobState.Available,
         Priority = 1,
         MaxAttempts = 25,
     };
+
+    /// <summary>Args of about 60 bytes, the size NFR-PERF-07's insert target is stated for.</summary>
+    public static string Args(int i) => $$"""{"n":{{i}},"to":"user{{i}}@example.com","template":"welcome"}""";
 
     private static async Task<List<double>> TimeAsync(int count, Func<Task> action)
     {

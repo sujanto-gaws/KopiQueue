@@ -36,7 +36,7 @@ internal sealed class SqlServerDesignQuestions(BenchDatabase db, BenchSettings s
             var jobs = Enumerable.Range(0, size).Select(i => new JobInsertParams
             {
                 Kind = NoOpArgs.Kind,
-                ArgsJson = $$"""{"n":{{i}},"to":"user{{i}}@example.com","template":"welcome"}""",
+                ArgsJson = SqlServerBenchmarks.Args(i),
                 Queue = "dq6",
                 State = JobState.Available,
                 Priority = 1,

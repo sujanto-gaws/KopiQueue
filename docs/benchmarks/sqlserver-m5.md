@@ -13,7 +13,7 @@ Task 5.9 covers four things:
 
 - **Server and client:** SQL Server 2019 Developer (15.0.2210.4) on the development laptop, 16 logical processors, with the client on the same machine.
 - **Database:** READ_COMMITTED_SNAPSHOT on, as on Azure SQL Database.
-- **Data:** 200,000 completed jobs and 50,000 available jobs in a throwaway database, migrated by the driver.
+- **Data:** 200,000 completed jobs and 50,000 available jobs in a throwaway database, migrated by the driver. The raw report's insert step used `{"n":1}` args. Since the NFR-PERF-07 revision, it uses the 60-byte args of DQ-6.
 - **Measurement:** every statement is the driver's own, called through `IKopiExecutor` or a working `KopiClient`. Server costs are plan-cache deltas over each step (`sys.dm_exec_query_stats`). The investigation below used `SET STATISTICS IO` on the same statements.
 - **Noise:** this is a laptop, so the numbers vary between runs by up to about 20% (bulk insert ran at 24,900 and 30,500 jobs/s in two runs of the same code). `bench.yml` runs the benchmarks weekly on SQL Server 2019, 2022 and 2025 on GitHub's runners. Its reports, in the job summaries, are the numbers to track from now on.
 
@@ -23,7 +23,7 @@ Task 5.9 covers four things:
 |--------|--------|---|
 | Empty poll ≤ 10 logical reads | 4 reads, about 0.1 ms of CPU; p50 round trip 0.4 ms | Met |
 | End-to-end no-op throughput ≥ 5,000 jobs/s per client | 7,900 jobs/s with 1,000 workers; 1,800 with 200 | Met with enough workers |
-| Batched insert ≥ 30,000 jobs/s | 25,000 to 30,500 jobs/s with `{"n":1}` args; about 20,000 with 60-byte args | **Not met** (see DQ-6) |
+| Batched insert ≥ 20,000 jobs/s, in 1,000-job statements with about 60-byte args (revised in this task; it was ≥ 30,000 with tiny args) | 18,100 to 21,900 jobs/s with 60-byte args, varying between runs; 25,000 to 30,500 with `{"n":1}` args | Around the line here; met on CI (below) |
 | Cross-process pickup p50 ≤ interval / 2 + 30 ms | 100 ms poll: p50 61 ms (target 80). 1 s poll: p50 497 ms, mean 505 ms (target 530) | Met |
 
 - **Workers bound end-to-end throughput.** A producer waits `FetchCooldown` (100 ms) between fetches, so one queue fetches at most ten times a second. With 200 workers the ceiling is 2,000 jobs/s, and 1,800 was measured. 5,000 jobs/s needs at least 500 workers on the queue, or a shorter cooldown.
@@ -94,7 +94,11 @@ A second run gave the same picture: 21,500 against 30,400 jobs/s at 1,000 jobs.
 
 - **Speed:** a table-valued parameter is about 1.4–1.5 times faster for large batches, at half the server CPU and less than half the reads. On CI the gain at 1,000 jobs was 1.35–1.45 times on all three versions. At 100 jobs a statement there's no clear winner: about 10% faster locally, and between 10% slower and 17% faster on CI.
 - **Cost of switching:** a user-defined table type in the schema, created by the migration under the schema's prefix. The application's login also needs `EXECUTE` on that type, which `db_datareader` and `db_datawriter` don't grant.
-- **Decision:** left to the owner. OPENJSON stays the default (ADR-014) until then. With realistic args, it is the reason batched insert misses NFR-PERF-07.
+- **Decision: OPENJSON** (the owner, 2026-11-28). ADR-014 stands, for three reasons:
+  - **The gain helps only one-off backfills.** One client works 7,000–9,000 jobs per second end to end, and OPENJSON inserts at about 20,000 or more.
+  - **The costs are real.** A missing `EXECUTE` grant would break only bulk insert, at run time, and a table type cannot be altered.
+  - **The safe version is complex.** Falling back to OPENJSON would mean two code paths to test.
+- **Follow-ups:** NFR-PERF-07's insert target became ≥ 20,000 jobs/s with such args, and the benchmark's insert step now uses them. A table-valued parameter as an opt-in is in the post-1.0 backlog. DQ-6 is closed.
 
 ## DQ-7: `state` as `varchar(16)` or `tinyint`
 
