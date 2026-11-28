@@ -1326,7 +1326,8 @@ OUTPUT inserted.*;
 ```
 
 - Verified (0.9): locked rows and rows from uncommitted inserts are skipped without waiting; 20,000 jobs × 16–64 concurrent fetchers ran each job exactly once, with no deadlocks, under RCSI off and on.
-- `attempted_by` is trimmed to the last 100 entries by the completer, not in the fetch statement, to keep fetch cheap.
+- `attempted_by` keeps the newest `MaxAttemptedBy` entries (100 by default), as on PostgreSQL. A first attempt writes a one-element array directly. A later attempt rebuilds the array from `OPENJSON` with `STRING_AGG`, because SQL Server 2019 has no array slicing (plan task 5.3).
+- The statement is `src/KopiQueue.SqlServer/Sql/job_get_available.sql`. `OUTPUT` returns the rows in no particular order, so the driver sorts them into fetch order.
 - Cost (0.10): an empty poll is 3 logical reads and about 70 µs of CPU. Fetching 25 jobs from a busy queue is about 950 logical reads, which M5 task 5.9 will optimise.
 
 **Unique insert** (no `ON CONFLICT`). A failed statement must not be used to detect duplicates, because with `XACT_ABORT ON` the error would doom the caller's transaction. Revised after spike 0.10 (ADR-011): an application lock on the exact key replaces `HOLDLOCK` key-range locks.
@@ -1352,7 +1353,12 @@ IF @@ROWCOUNT = 0
 - `READCOMMITTEDLOCK` reads the latest committed row even for SNAPSHOT callers. Without it on the fallback `SELECT`, a SNAPSHOT caller got neither an insert nor the existing row (spike 0.10).
 - The `unique_slot` unique index remains the final guarantee.
 
-**Batch complete:** `UPDATE ... FROM kopi_job j JOIN OPENJSON(@batch) WITH (...) u ON j.id = u.id WHERE j.state = 'running'`, with `OUTPUT inserted.*`. `errors` is appended with `JSON_MODIFY(..., 'append $', JSON_QUERY(u.error))`. Metadata patches touch only known internal keys (`snoozes`, `cancel_attempted_at`, `output`) through `JSON_MODIFY`. SQL Server has no generic JSON merge equivalent to `jsonb ||`. OPENJSON is the default over table-valued parameters because it needs no user-defined table type (DQ-6).
+**Batch complete:** `UPDATE ... FROM kopi_job j JOIN OPENJSON(@batch) WITH (...) u ON j.id = u.id WHERE j.state = 'running'`, with `OUTPUT inserted.*`. `errors` is appended with `JSON_MODIFY(..., 'append $', JSON_QUERY(u.error))`. OPENJSON is the default over table-valued parameters because it needs no user-defined table type (DQ-6). As built in plan task 5.3 (`job_set_state_if_running_many.sql`):
+
+- **Semantics:** the same as the PostgreSQL statement. Only a running job changes, and metadata is merged either way. A job whose metadata has a `cancel_attempted_at` key, and whose outcome would run it again, is cancelled instead. Every given job that exists is returned: the changed ones from `OUTPUT`, the rest from a second `SELECT`.
+- **Metadata merge:** SQL Server has no `jsonb ||`, so the statement rebuilds the object. It takes the update's keys, then the old keys the update doesn't replace, each value re-encoded from `OPENJSON`'s type. This is a generic top-level merge, as on PostgreSQL. `OPENJSON` keys have a binary collation, so `Case` and `case` are different keys.
+- **Key test:** SQL Server 2019 has no `JSON_PATH_EXISTS`, so `cancel_attempted_at` is found with `EXISTS (SELECT 1 FROM OPENJSON(metadata) WHERE [key] = ...)`, which matches `jsonb ?`.
+- **Batch encoding:** each outcome is a JSON object whose absent fields leave their column as it is. Errors and metadata updates travel as JSON strings, and times as UTC ISO 8601 without an offset, which `OPENJSON ... WITH (datetime2)` reads exactly.
 
 **Leader election:**
 
@@ -1368,7 +1374,11 @@ IF @@ROWCOUNT = 0
 SELECT CAST(IIF(leader_id = @id, 1, 0) AS bit) FROM kopi_leader WHERE name = 'default';
 ```
 
-**Bulk insert:** batched `INSERT ... OUTPUT inserted.* SELECT ... FROM OPENJSON(@rows) WITH (...)`, ≤ 1,000 rows per statement, inside the caller's transaction when one is given. Both `InsertManyAsync` and `InsertManyFastAsync` use it; the fast variant simply skips reading the returned rows. Spike 0.10 measured about 42,000 rows/s with row locks only. **SqlBulkCopy is not used** (ADR-014): it takes page and extent X locks, and READPAST does not skip page locks, so producers on *every* queue stalled until the caller committed. Unique jobs in a batch go through the applock path one by one.
+**Bulk insert:** batched `INSERT ... OUTPUT inserted.* SELECT ... FROM OPENJSON(@rows) WITH (...)`, ≤ 1,000 rows per statement, inside the caller's transaction when one is given. Both `InsertManyAsync` and `InsertManyFastAsync` use it; the fast variant simply skips reading the returned rows.
+
+- As built in plan task 5.3 (`job_insert_many.sql`): `args`, `metadata` and `tags` travel as JSON strings, so they are stored exactly as given. Ids follow `ORDER BY ordinal`, which SQL Server guarantees for `INSERT ... SELECT`, so they ascend with the input. `created_at` and a missing `scheduled_at` share one `SYSUTCDATETIME()` reading.
+- A batch larger than 1,000 rows runs as several statements. On a pooled connection they run in a READ COMMITTED transaction of the driver's own, so the batch stays all-or-nothing. In a caller's transaction they simply run in it.
+- Raw inserts that leave both times to their column defaults can get slightly different values, because each default reads the clock on its own. PostgreSQL's `now()` is the transaction's time. Spike 0.10 measured about 42,000 rows/s with row locks only. **SqlBulkCopy is not used** (ADR-014): it takes page and extent X locks, and READPAST does not skip page locks, so producers on *every* queue stalled until the caller committed. Unique jobs in a batch go through the applock path one by one.
 
 **Maintenance:** `DELETE TOP (@n) FROM kopi_job WITH (READPAST, FORCESEEK(...)) WHERE ...` (cleaner), and `UPDATE TOP (@n) ... WITH (READPAST, FORCESEEK(...))` with `OUTPUT inserted.queue` (scheduler), following the rules above.
 

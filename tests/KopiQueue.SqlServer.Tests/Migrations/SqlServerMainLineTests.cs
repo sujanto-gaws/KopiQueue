@@ -135,7 +135,9 @@ public sealed class SqlServerMainLineTests(SqlServerFixture db) : IClassFixture<
         Assert.Equal("{}", reader.GetString(5));
         Assert.Equal("[]", reader.GetString(6));
         Assert.InRange(reader.GetDateTime(7), before, DateTime.UtcNow.AddMinutes(1));
-        Assert.Equal(reader.GetDateTime(7), reader.GetDateTime(8));
+        // Each SYSUTCDATETIME() default reads the clock on its own, so the two can differ slightly. The driver's insert
+        // reads it once for both (job_insert_many.sql).
+        Assert.InRange(reader.GetDateTime(8) - reader.GetDateTime(7), TimeSpan.FromSeconds(-1), TimeSpan.FromSeconds(1));
         Assert.Equal(reader.GetInt64(10), reader.GetInt64(9)); // no unique key: the slot is the job's own ID
     }
 
