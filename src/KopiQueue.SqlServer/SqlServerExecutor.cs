@@ -1,6 +1,5 @@
 using System.Data;
 using System.Diagnostics.CodeAnalysis;
-using System.Runtime.CompilerServices;
 using System.Text;
 using KopiQueue.Drivers;
 using KopiQueue.Migrations;
@@ -41,6 +40,7 @@ internal sealed class SqlServerStatements
         JobRescueMany = Load("job_rescue_many.sql");
         JobDeleteFinalized = Load("job_delete_finalized.sql");
         JobCancel = Load("job_cancel.sql");
+        JobListCancelAttempted = Load("job_list_cancel_attempted.sql");
         JobDelete = Load("job_delete.sql");
         JobDeleteMany = Load("job_delete_many.sql");
         JobRetry = Load("job_retry.sql");
@@ -97,6 +97,8 @@ internal sealed class SqlServerStatements
     public string JobDeleteFinalized { get; }
 
     public string JobCancel { get; }
+
+    public string JobListCancelAttempted { get; }
 
     public string JobDelete { get; }
 
@@ -185,7 +187,7 @@ internal sealed class SqlServerStatements
 /// <para>
 /// Every session is checked before its first statement (<see cref="SqlServerSessionCheck"/>): pooled sessions once per
 /// driver (<see cref="SqlServerSessionGate"/>), a caller's session once per executor, since the caller's code may have
-/// changed its settings. The operations that later M5 tasks add throw <see cref="NotSupportedException"/> until then.
+/// changed its settings.
 /// </para>
 /// </remarks>
 [SuppressMessage("Security", "CA2100:Review SQL queries for security vulnerabilities",
@@ -502,8 +504,35 @@ internal sealed class SqlServerExecutor(
         return rows.Count == 0 ? null : rows[0];
     }
 
-    public Task<IReadOnlyList<long>> JobListCancelAttemptedAsync(IReadOnlyList<long> ids, CancellationToken cancellationToken) =>
-        NotYet<IReadOnlyList<long>>("5.7");
+    public async Task<IReadOnlyList<long>> JobListCancelAttemptedAsync(IReadOnlyList<long> ids, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
+        var found = await ChunkedAsync(
+            ids.Count,
+            (start, count) =>
+            [
+                new SqlParameter("@ids", SqlDbType.NVarChar, -1)
+                {
+                    Value = SqlServerValues.JsonArray(w =>
+                    {
+                        for (var i = start; i < start + count; i++)
+                        {
+                            w.WriteNumberValue(ids[i]);
+                        }
+                    }),
+                },
+            ],
+            statements.JobListCancelAttempted,
+            reader => reader.GetInt64(0),
+            cancellationToken).ConfigureAwait(false);
+        found.Sort();
+        return found;
+    }
 
     public async Task<IReadOnlyList<JobRow>> JobListAsync(JobListQuery query, CancellationToken cancellationToken)
     {
@@ -1096,8 +1125,4 @@ internal sealed class SqlServerExecutor(
 
         return (connection, false);
     }
-
-    private static Task<T> NotYet<T>(string task, [CallerMemberName] string operation = "") =>
-        Task.FromException<T>(new NotSupportedException(
-            $"The SQL Server driver does not support {operation} yet: it arrives with plan task {task} (milestone M5)."));
 }

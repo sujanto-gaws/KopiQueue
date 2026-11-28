@@ -6,11 +6,13 @@
 
   <ItemGroup>
     <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
     <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\KopiQueue.EntityFrameworkCore\KopiQueue.EntityFrameworkCore.csproj" />
     <ProjectReference Include="..\..\src\KopiQueue.SqlServer\KopiQueue.SqlServer.csproj" />
     <ProjectReference Include="..\KopiQueue.TestInfrastructure\KopiQueue.TestInfrastructure.csproj" />
   </ItemGroup>

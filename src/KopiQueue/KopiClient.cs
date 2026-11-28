@@ -608,7 +608,7 @@ public sealed partial class KopiClient : IKopiClient
 
     /// <summary>
     /// Wakes this client's producers after its own pooled inserts, whose commit it knows about (design §3, FR-DB-04).
-    /// Inserts in a caller's transaction are not announced here: the client cannot see their commit.
+    /// Inserts in a caller's transaction wake them only when a commit hook reports the commit (<see cref="TransactionWakes"/>).
     /// </summary>
     internal LocalWaker LocalWaker { get; } = new();
 
@@ -619,14 +619,14 @@ public sealed partial class KopiClient : IKopiClient
     /// <inheritdoc />
     public Task<InsertResult<TArgs>> InsertAsync<TArgs>(TArgs args, InsertOptions? options = null, CancellationToken cancellationToken = default)
         where TArgs : IJobArgs =>
-        InsertAsync(_driver.GetExecutor(), pooled: true, args, options, cancellationToken);
+        InsertAsync(_driver.GetExecutor(), transaction: null, args, options, cancellationToken);
 
     /// <inheritdoc />
     public Task<InsertResult<TArgs>> InsertAsync<TArgs>(TArgs args, DbTransaction transaction, InsertOptions? options = null, CancellationToken cancellationToken = default)
         where TArgs : IJobArgs
     {
         ArgumentNullException.ThrowIfNull(transaction);
-        return InsertAsync(_driver.GetExecutor(transaction), pooled: false, args, options, cancellationToken);
+        return InsertAsync(_driver.GetExecutor(transaction), transaction, args, options, cancellationToken);
     }
 #pragma warning restore RS0026
 
@@ -645,7 +645,7 @@ public sealed partial class KopiClient : IKopiClient
             throw new InvalidOperationException($"The driver returned {results.Count} rows for {inserts.Length} inserts.");
         }
 
-        WakeIfPooled(transaction, inserts);
+        WakeAfterCommit(transaction, results.Where(r => r.Job.State == JobState.Available && !r.UniqueSkippedAsDuplicate).Select(r => r.Job.Queue));
         return [.. results.Select(r => new InsertResult(r.Job, r.UniqueSkippedAsDuplicate))];
     }
 
@@ -666,7 +666,7 @@ public sealed partial class KopiClient : IKopiClient
         }
 
         var count = await Executor(transaction).JobInsertFastAsync(inserts, cancellationToken).ConfigureAwait(false);
-        WakeIfPooled(transaction, inserts);
+        WakeAfterCommit(transaction, inserts.Where(i => i.State == JobState.Available).Select(i => i.Queue));
         return count;
     }
 
@@ -762,10 +762,16 @@ public sealed partial class KopiClient : IKopiClient
     }
 
     /// <inheritdoc/>
-    public Task<JobRow> JobRetryAsync(long id, DbTransaction transaction, CancellationToken cancellationToken = default)
+    public async Task<JobRow> JobRetryAsync(long id, DbTransaction transaction, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(transaction);
-        return RetryAsync(_driver.GetExecutor(transaction), id, cancellationToken);
+        var job = await RetryAsync(_driver.GetExecutor(transaction), id, cancellationToken).ConfigureAwait(false);
+        if (job.State == JobState.Available)
+        {
+            TransactionWakes.Add(transaction, LocalWaker, [job.Queue]);
+        }
+
+        return job;
     }
 
     /// <inheritdoc/>
@@ -909,11 +915,19 @@ public sealed partial class KopiClient : IKopiClient
     private JobValidation.UniqueContext Unique(Type argsType) =>
         new(() => _uniqueMembers.GetOrAdd(argsType, _serializer.GetUniqueMemberNames), _options.UniqueArgsEncoding);
 
-    private void WakeIfPooled(DbTransaction? transaction, IEnumerable<JobInsertParams> inserts)
+    /// <summary>
+    /// Wakes this client's producers of the queues that got available jobs: now after a pooled insert, or when a commit
+    /// hook reports that the caller's transaction committed.
+    /// </summary>
+    private void WakeAfterCommit(DbTransaction? transaction, IEnumerable<string> queues)
     {
         if (transaction is null)
         {
-            LocalWaker.Wake(inserts.Where(i => i.State == JobState.Available).Select(i => i.Queue));
+            LocalWaker.Wake(queues);
+        }
+        else
+        {
+            TransactionWakes.Add(transaction, LocalWaker, queues);
         }
     }
 
@@ -949,7 +963,7 @@ public sealed partial class KopiClient : IKopiClient
         return inserts;
     }
 
-    private async Task<InsertResult<TArgs>> InsertAsync<TArgs>(IKopiExecutor executor, bool pooled, TArgs args, InsertOptions? options, CancellationToken cancellationToken)
+    private async Task<InsertResult<TArgs>> InsertAsync<TArgs>(IKopiExecutor executor, DbTransaction? transaction, TArgs args, InsertOptions? options, CancellationToken cancellationToken)
         where TArgs : IJobArgs
     {
         ArgumentNullException.ThrowIfNull(args);
@@ -961,9 +975,9 @@ public sealed partial class KopiClient : IKopiClient
         var result = results.Count == 1
             ? results[0]
             : throw new InvalidOperationException($"The driver returned {results.Count} rows for one insert.");
-        if (pooled && result.Job.State == JobState.Available && !result.UniqueSkippedAsDuplicate)
+        if (result.Job.State == JobState.Available && !result.UniqueSkippedAsDuplicate)
         {
-            LocalWaker.Wake([result.Job.Queue]);
+            WakeAfterCommit(transaction, [result.Job.Queue]);
         }
 
         return new InsertResult<TArgs>(result.Job, result.UniqueSkippedAsDuplicate, args);

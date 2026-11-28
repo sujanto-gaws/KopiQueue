@@ -315,7 +315,7 @@ public sealed partial class KopiClient
             PeriodicJobs,
             Prepare,
             new PeriodicEnqueuerOptions { CatchUpWindow = _options.LeaderTtl + _options.ElectInterval },
-            inserted => WakeIfPooled(null, inserted),
+            inserted => LocalWaker.Wake(inserted.Where(i => i.State == JobState.Available).Select(i => i.Queue)),
             _timeProvider,
             loggers.CreateLogger<PeriodicEnqueuer>());
         var maintenance = new MaintenanceHost(

@@ -7,7 +7,9 @@ namespace KopiQueue.EntityFrameworkCore;
 /// <summary>
 /// Inserts jobs inside a <see cref="DbContext"/>'s current transaction, so they commit or roll back with the context's
 /// own changes (FR-INS-03). Works with any relational EF Core provider whose transaction type the configured KopiQueue
-/// driver accepts: Npgsql's for <c>KopiQueue.Npgsql</c>.
+/// driver accepts: Npgsql's for <c>KopiQueue.Npgsql</c>, SQL Server's for <c>KopiQueue.SqlServer</c>. Add
+/// <see cref="KopiDbContextOptionsExtensions.AddKopiQueueCommitInterceptor(DbContextOptionsBuilder)"/> so the jobs are picked up
+/// as soon as the transaction commits.
 /// </summary>
 /// <example>
 /// <code>

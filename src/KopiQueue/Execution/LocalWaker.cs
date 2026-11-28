@@ -11,6 +11,9 @@ internal sealed class LocalWaker
     private readonly Lock _lock = new();
     private Dictionary<string, Action[]> _handlers = new(StringComparer.Ordinal);
 
+    /// <summary>Whether any producer listens, so an insert-only client can skip recording wake-ups.</summary>
+    public bool HasSubscribers => Volatile.Read(ref _handlers).Count > 0;
+
     /// <summary>Calls <paramref name="wake"/> whenever jobs become available on <paramref name="queue"/>.</summary>
     /// <returns>Dispose to stop the calls.</returns>
     public IDisposable Subscribe(string queue, Action wake)
