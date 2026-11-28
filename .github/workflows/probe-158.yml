@@ -1,0 +1,36 @@
+# Issue #158 probe: SQL Server's clock between statements on 2022 and 2025. Temporary; removed before merging.
+name: probe-158
+
+on:
+  push:
+    branches: [m5/158-sqlserver-2025-clock]
+
+permissions:
+  contents: read
+
+jobs:
+  clock:
+    name: clock ${{ matrix.mssql }} (${{ matrix.run }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mssql: ["2022-latest", "2025-latest"]
+        run: [1, 2]
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:${{ matrix.mssql }}
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: Kopi_Test_Passw0rd!
+        ports: ["1433:1433"]
+    env:
+      KOPI_TEST_MSSQL: Server=localhost,1433;User Id=sa;Password=Kopi_Test_Passw0rd!;TrustServerCertificate=true;Encrypt=true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          dotnet-version: 10.0.x
+      - run: nproc; cat /sys/devices/system/clocksource/clocksource0/current_clocksource; timedatectl 2>/dev/null | head -8 || true
+      - run: dotnet run .github/probe-158/probe.cs | tee -a "$GITHUB_STEP_SUMMARY"
